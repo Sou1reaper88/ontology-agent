@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ontology-agent-config
+  namespace: ontology
+data:
+  ENV: "prod"
+  DATABASE__HOST: "postgres"
+  DATABASE__PORT: "5432"
+  DATABASE__NAME: "ontology_agent"
+  REDIS__HOST: "redis"
+  REDIS__PORT: "6379"
+  REDIS__DB: "0"
+  HIVE__HOST: "hive-server"
+  HIVE__PORT: "10000"
+  LLM__BASE_URL: "https://api.deepseek.com"
+  LLM__MODEL: "deepseek-v4-flash"
+  LLM__TEMPERATURE: "0.0"
+  LLM__MAX_TOKENS: "4096"
+  ONTOLOGY__BASE_URL: "http://10.78.188.159:9080"

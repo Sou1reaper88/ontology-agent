@@ -1,0 +1,36 @@
+# 开发环境：PostgreSQL + Redis（商业 LLM 走外部 API 无需容器）
+# 用法：docker compose -f deploy/docker-compose.yml up -d
+services:
+  postgres:
+    image: postgres:16
+    container_name: ontology-postgres
+    environment:
+      POSTGRES_USER: ontology
+      POSTGRES_PASSWORD: ontology
+      POSTGRES_DB: ontology_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ontology"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: ontology-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:

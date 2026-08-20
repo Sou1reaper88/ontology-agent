@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ontology-migrate
+  namespace: ontology
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ontology-agent-backend:latest
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: ontology-agent-config
+            - secretRef:
+                name: ontology-agent-secret
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ontology-pg-backup
+  namespace: ontology
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:16
+              command:
+                - /bin/sh
+                - -c
+                - pg_dump -h postgres -U ontology ontology_agent | gzip > /backup/ontology_agent_$(date +%Y%m%d).sql.gz
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: ontology-agent-secret
+                      key: DATABASE__PASSWORD
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: ontology-backup-pvc

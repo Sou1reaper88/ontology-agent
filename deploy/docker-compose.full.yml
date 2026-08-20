@@ -1,0 +1,72 @@
+# 完整生产编排：PostgreSQL + Redis + 后端 + Worker + 前端
+# 用法：docker compose -f deploy/docker-compose.full.yml up -d
+# 注意：生产请设置 REDIS_AVAILABLE=True（executor/celery_app.py），使 worker 走异步队列
+services:
+  postgres:
+    image: postgres:16
+    container_name: ontology-postgres
+    environment:
+      POSTGRES_USER: ontology
+      POSTGRES_PASSWORD: ontology
+      POSTGRES_DB: ontology_agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ontology"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: ontology-redis
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: ontology-backend
+    environment:
+      ENV: prod
+      DATABASE__HOST: postgres
+      REDIS__HOST: redis
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: ontology-worker
+    command: celery -A executor.celery_app:celery_app worker -l info
+    environment:
+      ENV: prod
+      DATABASE__HOST: postgres
+      REDIS__HOST: redis
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: ontology-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  redisdata:

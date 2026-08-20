@@ -1,0 +1,61 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ontology-agent
+  namespace: ontology
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  rules:
+    - host: ontology.example.com
+      http:
+        paths:
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: ontology-backend
+                port:
+                  number: 8000
+          - path: /query
+            pathType: Prefix
+            backend:
+              service:
+                name: ontology-backend
+                port:
+                  number: 8000
+          - path: /execute
+            pathType: Prefix
+            backend:
+              service:
+                name: ontology-backend
+                port:
+                  number: 8000
+          - path: /users
+            pathType: Prefix
+            backend:
+              service:
+                name: ontology-backend
+                port:
+                  number: 8000
+          - path: /roles
+            pathType: Prefix
+            backend:
+              service:
+                name: ontology-backend
+                port:
+                  number: 8000
+          - path: /permissions
+            pathType: Prefix
+            backend:
+              service:
+                name: ontology-backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ontology-frontend
+                port:
+                  number: 80

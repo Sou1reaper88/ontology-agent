@@ -1,0 +1,350 @@
+"""对话接口：多轮取数会话。
+
+- POST /conversations            创建对话（可选标题/上下文）
+- GET  /conversations            当前用户对话列表
+- GET  /conversations/{id}       对话详情（含消息列表）
+- PATCH /conversations/{id}      更新标题/上下文
+- DELETE /conversations/{id}     删除对话（级联消息）
+- POST /conversations/{id}/messages  发送消息：异步生成 SQL（202，轮询状态）
+- GET  /conversations/messages/{id}/status  生成进度轮询（链路步骤实时返回）
+"""
+
+from __future__ import annotations
+
+import threading
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from agent.orchestrator import run_agent
+from agent.trace_store import (
+    append_step,
+    clear_trace,
+    get_trace,
+    new_trace,
+    set_failed,
+    set_output,
+)
+from auth.jwt import get_current_user
+from auth.permission import require_table_permissions
+from models import Conversation, ConversationMessage, QueryHistory, User
+from models.base import SessionLocal, get_db
+
+router = APIRouter(prefix="/conversations", tags=["conversation"])
+
+
+class ConversationCreate(BaseModel):
+    title: str | None = None
+    context: str | None = None
+
+
+class ConversationUpdate(BaseModel):
+    title: str | None = None
+    context: str | None = None
+
+
+class MessageSend(BaseModel):
+    content: str
+    system_time: str | None = None
+    ontology_id: str | None = None
+
+
+class MessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    sql: str | None = None
+    query_id: int | None = None
+    trace: list[dict] | None = None
+    created_at: str
+
+
+class ConversationOut(BaseModel):
+    id: int
+    title: str
+    context: str | None = None
+    created_at: str
+    updated_at: str
+    messages: list[MessageOut] = []
+
+
+def _own_conversation(conv_id: int, user: User, db: Session) -> Conversation:
+    conv = db.get(Conversation, conv_id)
+    if not conv or conv.user_id != user.id:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return conv
+
+
+@router.post("", status_code=201)
+def create_conversation(
+    payload: ConversationCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    conv = Conversation(
+        user_id=user.id,
+        title=(payload.title or "新对话").strip() or "新对话",
+        context=payload.context,
+    )
+    db.add(conv)
+    db.commit()
+    return {"id": conv.id, "title": conv.title, "context": conv.context}
+
+
+@router.get("")
+def list_conversations(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    convs = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user.id, Conversation.status == 1)
+        .order_by(Conversation.updated_at.desc())
+        .all()
+    )
+    out = []
+    for c in convs:
+        last = (
+            db.query(ConversationMessage)
+            .filter(ConversationMessage.conversation_id == c.id)
+            .order_by(ConversationMessage.id.desc())
+            .first()
+        )
+        out.append(
+            {
+                "id": c.id,
+                "title": c.title,
+                "context": c.context,
+                "last_message": last.content if last else None,
+                "created_at": c.created_at.isoformat(),
+                "updated_at": c.updated_at.isoformat(),
+            }
+        )
+    return out
+
+
+@router.get("/{conv_id}")
+def get_conversation(
+    conv_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ConversationOut:
+    conv = _own_conversation(conv_id, user, db)
+    messages = [
+        MessageOut(
+            id=m.id,
+            role=m.role,
+            content=m.content,
+            sql=m.sql,
+            query_id=m.query_id,
+            trace=m.trace,
+            created_at=m.created_at.isoformat(),
+        )
+        for m in conv.messages
+    ]
+    return ConversationOut(
+        id=conv.id,
+        title=conv.title,
+        context=conv.context,
+        created_at=conv.created_at.isoformat(),
+        updated_at=conv.updated_at.isoformat(),
+        messages=messages,
+    )
+
+
+@router.patch("/{conv_id}")
+def update_conversation(
+    conv_id: int,
+    payload: ConversationUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    conv = _own_conversation(conv_id, user, db)
+    if payload.title is not None:
+        conv.title = payload.title.strip() or conv.title
+    if payload.context is not None:
+        conv.context = payload.context
+    db.commit()
+    return {"id": conv.id, "title": conv.title, "context": conv.context}
+
+
+@router.delete("/{conv_id}", status_code=204)
+def delete_conversation(
+    conv_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    conv = _own_conversation(conv_id, user, db)
+    db.delete(conv)  # cascade 删除消息
+    db.commit()
+
+
+@router.get("/messages/{msg_id}/status")
+def message_status(
+    msg_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """生成进度轮询：返回状态 + 已完成的链路步骤（实时可视化）。"""
+    msg = db.get(ConversationMessage, msg_id)
+    if not msg:
+        raise HTTPException(status_code=404, detail="消息不存在")
+    conv = db.get(Conversation, msg.conversation_id)
+    if not conv or conv.user_id != user.id:
+        raise HTTPException(status_code=404, detail="消息不存在")
+
+    tr = get_trace(msg_id)
+    if tr is not None:
+        return {
+            "message_id": msg_id,
+            "status": tr["status"],
+            "steps": tr["steps"],
+            "error": tr["error"],
+        }
+    # 进程重启后内存 trace 丢失：从 DB 读最终态
+    if msg.sql or msg.trace:
+        # 有 SQL 或完整链路 trace → 生成流程已完成（含无关问题提示等无 SQL 场景）
+        return {
+            "message_id": msg_id,
+            "status": "success",
+            "steps": msg.trace or [],
+            "error": None,
+        }
+    if msg.content and msg.content != "生成中…":
+        return {"message_id": msg_id, "status": "failed", "steps": msg.trace or [], "error": msg.content}
+    return {"message_id": msg_id, "status": "failed", "steps": [], "error": "服务重启，生成中断"}
+
+
+def _generate_async(
+    conv_id: int,
+    msg_id: int,
+    user_msg_id: int,
+    user_id: int,
+    content: str,
+    ontology_id: str | None,
+    system_time: str | None,
+    conversation_context: str | None,
+) -> None:
+    """后台线程：执行编排 → trace 逐步写入 store → 完成后落库消息/审计/取数记录。"""
+    db = SessionLocal()
+    try:
+        conv = db.get(Conversation, conv_id)
+        if conv is None:
+            set_failed(msg_id, "对话不存在")
+            return
+        history = [
+            {"role": m.role, "content": m.content, "sql": m.sql}
+            for m in conv.messages
+            if m.role in ("user", "assistant") and m.id not in (msg_id, user_msg_id)
+        ]
+        output = run_agent(
+            content,
+            ontology_id=ontology_id,
+            system_time=system_time,
+            history=history,
+            conversation_context=conversation_context,
+            on_step=lambda s: append_step(msg_id, s),
+        )
+
+        sql = output.get("sql") if output.get("success") else None
+        query_id: int | None = None
+        if sql:
+            user = db.get(User, user_id)
+            if user is not None:
+                require_table_permissions(user, sql, db)
+            record = QueryHistory(
+                user_id=user_id,
+                request_text=content,
+                ontology_id=ontology_id,
+                generated_sql=sql,
+                execution_status="pending",
+            )
+            db.add(record)
+            db.flush()
+            query_id = record.id
+
+        from audit.utils import write_audit_log
+
+        write_audit_log(
+            user_id=user_id,
+            action="query_request",
+            detail={
+                "request_text": content,
+                "conversation_id": conv_id,
+                "success": bool(output.get("success")),
+                "sql": sql if output.get("success") else None,
+            },
+            status="success" if output.get("success") else "failed",
+        )
+
+        reply_text = output.get("markdown") or (
+            "生成失败：" + "；".join(output.get("errors") or ["未知错误"])
+        )
+        msg = db.get(ConversationMessage, msg_id)
+        if msg is not None:
+            msg.content = reply_text
+            msg.sql = sql
+            msg.query_id = query_id
+            msg.trace = output.get("trace") or []
+        db.commit()
+        set_output(msg_id, output)
+    except Exception as exc:
+        db.rollback()
+        set_failed(msg_id, str(exc))
+        msg = db.get(ConversationMessage, msg_id)
+        if msg is not None:
+            msg.content = f"生成失败：{exc}"
+            db.commit()
+    finally:
+        db.close()
+        clear_trace(msg_id)  # 生成结束，内存态清理（历史走 DB）
+
+
+@router.post("/{conv_id}/messages", status_code=202)
+def send_message(
+    conv_id: int,
+    payload: MessageSend,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """发送一条提问：立即返回（202），后台异步生成 SQL，前端轮询消息状态。"""
+    conv = _own_conversation(conv_id, user, db)
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="消息内容不能为空")
+
+    # 用户消息落库
+    user_msg = ConversationMessage(
+        conversation_id=conv.id, role="user", content=content
+    )
+    db.add(user_msg)
+
+    # 预创建 assistant 消息（生成中占位）
+    assistant_msg = ConversationMessage(
+        conversation_id=conv.id, role="assistant", content="生成中…"
+    )
+    db.add(assistant_msg)
+    conv.title = conv.title if conv.title != "新对话" else content[:20]
+    db.commit()
+    db.refresh(user_msg)
+    db.refresh(assistant_msg)
+    msg_id = assistant_msg.id
+
+    new_trace(msg_id)
+    thread = threading.Thread(
+        target=_generate_async,
+        args=(
+            conv.id,
+            msg_id,
+            user_msg.id,
+            user.id,
+            content,
+            payload.ontology_id,
+            payload.system_time,
+            conv.context,
+        ),
+        daemon=True,
+    )
+    thread.start()
+    return {"message_id": msg_id, "status": "generating"}

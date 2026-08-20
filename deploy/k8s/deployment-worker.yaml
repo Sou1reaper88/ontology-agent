@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ontology-worker
+  namespace: ontology
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ontology-worker
+  template:
+    metadata:
+      labels:
+        app: ontology-worker
+    spec:
+      containers:
+        - name: worker
+          image: ontology-agent-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["celery", "-A", "executor.celery_app:celery_app", "worker", "-l", "info"]
+          envFrom:
+            - configMapRef:
+                name: ontology-agent-config
+            - secretRef:
+                name: ontology-agent-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

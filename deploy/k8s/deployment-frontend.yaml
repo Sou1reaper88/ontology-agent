@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ontology-frontend
+  namespace: ontology
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ontology-frontend
+  template:
+    metadata:
+      labels:
+        app: ontology-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ontology-agent-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ontology-frontend
+  namespace: ontology
+spec:
+  selector:
+    app: ontology-frontend
+  ports:
+    - port: 80
+      targetPort: 80
