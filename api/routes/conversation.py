@@ -50,6 +50,10 @@ class MessageSend(BaseModel):
     ontology_id: str | None = None
 
 
+class BatchDeleteRequest(BaseModel):
+    ids: list[int]
+
+
 class MessageOut(BaseModel):
     id: int
     role: str
@@ -178,6 +182,46 @@ def delete_conversation(
     conv = _own_conversation(conv_id, user, db)
     db.delete(conv)  # cascade 删除消息
     db.commit()
+
+
+@router.post("/batch-delete")
+def batch_delete_conversations(
+    payload: BatchDeleteRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """批量删除对话（仅限当前用户，级联删除消息）。"""
+    ids = list(dict.fromkeys(payload.ids))  # 去重保序
+    if not ids:
+        return {"deleted": 0, "ids": []}
+    convs = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user.id, Conversation.id.in_(ids))
+        .all()
+    )
+    deleted_ids = [c.id for c in convs]
+    for c in convs:
+        db.delete(c)  # cascade 删除消息
+    db.commit()
+    return {"deleted": len(deleted_ids), "ids": deleted_ids}
+
+
+@router.post("/clear-all")
+def clear_all_conversations(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """清空当前用户全部对话（级联删除消息）。"""
+    convs = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user.id)
+        .all()
+    )
+    count = len(convs)
+    for c in convs:
+        db.delete(c)  # cascade 删除消息
+    db.commit()
+    return {"deleted": count}
 
 
 @router.get("/messages/{msg_id}/status")

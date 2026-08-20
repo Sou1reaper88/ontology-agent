@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Button,
+  Checkbox,
   Empty,
   Input,
   Layout,
@@ -22,6 +23,7 @@ import {
   PlayCircleOutlined,
   CopyOutlined,
   EditOutlined,
+  ClearOutlined,
 } from "@ant-design/icons";
 import client from "../api/client";
 
@@ -114,6 +116,10 @@ export default function Chat() {
   const [ctxDraft, setCtxDraft] = useState("");
   const [editing, setEditing] = useState<{ msgId: number; sql: string } | null>(null); // SQL 编辑态
   const [executingId, setExecutingId] = useState<number | null>(null); // 正在执行的消息 id
+  const [selectMode, setSelectMode] = useState(false); // 批量选择模式
+  const [selectedIds, setSelectedIds] = useState<number[]>([]); // 批量选中的对话 id
+  const [clearing, setClearing] = useState(false); // 清空中
+  const [batchDeleting, setBatchDeleting] = useState(false); // 批量删除中
   const listRef = useRef<HTMLDivElement>(null);
 
   const loadConvs = useCallback(async () => {
@@ -286,6 +292,86 @@ export default function Chat() {
     }
   };
 
+  const enterSelectMode = () => {
+    setSelectMode(true);
+    setSelectedIds([]);
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds([]);
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const selectAll = () => {
+    setSelectedIds((prev) =>
+      prev.length === convs.length ? [] : convs.map((c) => c.id)
+    );
+  };
+
+  // 删除选中对话后，若当前打开的对话被删则清空主区域
+  const afterDeleted = (ids: number[]) => {
+    if (activeId != null && ids.includes(activeId)) {
+      setActiveId(null);
+      setMessages([]);
+      setContext("");
+    }
+  };
+
+  const batchRemove = async () => {
+    if (!selectedIds.length || batchDeleting) return;
+    setBatchDeleting(true);
+    try {
+      const { data } = await client.post("/conversations/batch-delete", {
+        ids: selectedIds,
+      });
+      message.success(`已删除 ${data.deleted} 个对话`);
+      afterDeleted(data.ids || []);
+      setSelectedIds([]);
+      setSelectMode(false);
+      loadConvs();
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || "批量删除失败");
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
+
+  const clearAll = async () => {
+    if (clearing) return;
+    setClearing(true);
+    try {
+      const { data } = await client.post("/conversations/clear-all");
+      message.success(`已清空 ${data.deleted} 个对话`);
+      setActiveId(null);
+      setMessages([]);
+      setContext("");
+      setSelectedIds([]);
+      setSelectMode(false);
+      loadConvs();
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || "清空失败");
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const confirmClearAll = () => {
+    Modal.confirm({
+      title: "清空全部对话？",
+      content: `将删除全部 ${convs.length} 个对话及其消息记录，此操作不可恢复。`,
+      okText: "清空",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: clearAll,
+    });
+  };
+
   const copySql = (sql: string) => {
     navigator.clipboard?.writeText(sql);
     message.success("SQL 已复制");
@@ -334,10 +420,60 @@ export default function Chat() {
         <Button type="primary" icon={<PlusOutlined />} block onClick={newConv}>
           新建对话
         </Button>
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          {selectMode ? (
+            <>
+              <Button
+                size="small"
+                block
+                onClick={selectAll}
+                disabled={!convs.length}
+              >
+                {selectedIds.length === convs.length && convs.length > 0 ? "取消全选" : "全选"}
+              </Button>
+              <Button
+                size="small"
+                block
+                danger
+                icon={<DeleteOutlined />}
+                disabled={!selectedIds.length}
+                loading={batchDeleting}
+                onClick={batchRemove}
+              >
+                删除({selectedIds.length})
+              </Button>
+              <Button size="small" block onClick={exitSelectMode}>
+                完成
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                size="small"
+                block
+                icon={<DeleteOutlined />}
+                disabled={!convs.length}
+                onClick={enterSelectMode}
+              >
+                批量删除
+              </Button>
+              <Button
+                size="small"
+                block
+                danger
+                icon={<ClearOutlined />}
+                disabled={!convs.length}
+                onClick={confirmClearAll}
+              >
+                清空全部
+              </Button>
+            </>
+          )}
+        </div>
         <div
           style={{
             position: "absolute",
-            top: 56,
+            top: 100,
             bottom: 8,
             left: 12,
             right: 12,
@@ -351,24 +487,47 @@ export default function Chat() {
               renderItem={(c) => (
                 <List.Item
                   key={c.id}
-                  onClick={() => openConv(c.id)}
+                  onClick={() => (selectMode ? toggleSelect(c.id) : openConv(c.id))}
                   style={{
                     cursor: "pointer",
                     padding: "8px 10px",
                     borderRadius: 6,
-                    background: c.id === activeId ? "#e6f4ff" : "transparent",
+                    background:
+                      selectMode
+                        ? selectedIds.includes(c.id)
+                          ? "#fff1f0"
+                          : "transparent"
+                        : c.id === activeId
+                          ? "#e6f4ff"
+                          : "transparent",
                     display: "block",
                   }}
-                  actions={[
-                    <Popconfirm key="del" title="删除该对话？" onConfirm={() => removeConv(c.id)}>
-                      <DeleteOutlined style={{ color: "#999" }} />
-                    </Popconfirm>,
-                  ]}
+                  actions={
+                    selectMode
+                      ? []
+                      : [
+                          <Popconfirm key="del" title="删除该对话？" onConfirm={() => removeConv(c.id)}>
+                            <DeleteOutlined style={{ color: "#999" }} />
+                          </Popconfirm>,
+                        ]
+                  }
                 >
-                  <div style={{ fontWeight: 500, fontSize: 13 }}>{c.title}</div>
-                  <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
-                    {c.last_message || "（空）"}
-                  </Text>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    {selectMode && (
+                      <Checkbox
+                        checked={selectedIds.includes(c.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleSelect(c.id)}
+                        style={{ marginTop: 2 }}
+                      />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>{c.title}</div>
+                      <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
+                        {c.last_message || "（空）"}
+                      </Text>
+                    </div>
+                  </div>
                 </List.Item>
               )}
             />
