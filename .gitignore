@@ -32,3 +32,6 @@ frontend/dist/
 
 # WorkBuddy 本地项目数据（自动化执行记录等，勿提交）
 .workbuddy/
+
+# Codex 隔离开发 worktree
+.worktrees/
