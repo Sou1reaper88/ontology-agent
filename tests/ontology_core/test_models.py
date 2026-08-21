@@ -22,6 +22,19 @@ def test_manifest_requires_all_package_roles() -> None:
         )
 
 
+def test_manifest_files_cannot_be_mutated_in_place() -> None:
+    manifest = PackageManifest(
+        package_id="example.neutral",
+        version="1.0.0",
+        files={role: f"{role.value}.ttl" for role in PackageFileRole},
+    )
+
+    with pytest.raises(TypeError):
+        manifest.files[PackageFileRole.CORE] = "changed.ttl"
+
+    assert manifest.files[PackageFileRole.CORE] == "core.ttl"
+
+
 def test_package_info_is_immutable() -> None:
     info = PackageInfo(
         package_id="example.neutral",
