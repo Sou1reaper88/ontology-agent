@@ -44,12 +44,37 @@ def test_manifest_rejects_parent_path(tmp_path: Path) -> None:
     assert caught.value.details["role"] == "core"
 
 
+def test_manifest_rejects_parent_segment_even_when_target_stays_inside(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    package.joinpath("core.ttl").write_text("", encoding="utf-8")
+    _write_manifest(package, "nested/../core.ttl")
+
+    manifest = load_manifest(package)
+    with pytest.raises(OntologyParseError) as caught:
+        resolve_package_files(package, manifest)
+    assert caught.value.details["role"] == "core"
+
+
 def test_manifest_rejects_absolute_path(tmp_path: Path) -> None:
     outside = tmp_path / "outside.ttl"
     outside.write_text("", encoding="utf-8")
     package = tmp_path / "package"
     package.mkdir()
     _write_manifest(package, outside.as_posix())
+
+    manifest = load_manifest(package)
+    with pytest.raises(OntologyParseError) as caught:
+        resolve_package_files(package, manifest)
+    assert caught.value.details["role"] == "core"
+
+
+def test_manifest_rejects_absolute_path_even_when_target_is_inside(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    inside = package / "core.ttl"
+    inside.write_text("", encoding="utf-8")
+    _write_manifest(package, inside.as_posix())
 
     manifest = load_manifest(package)
     with pytest.raises(OntologyParseError) as caught:

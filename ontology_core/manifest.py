@@ -31,7 +31,13 @@ def resolve_package_files(
     root = Path(package_dir).resolve()
     resolved: dict[PackageFileRole, Path] = {}
     for role in PackageFileRole:
-        candidate = (root / manifest.files[role]).resolve()
+        relative = Path(manifest.files[role])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise OntologyParseError(
+                "本体包文件路径不安全",
+                details={"role": role.value, "path": str(relative)},
+            )
+        candidate = (root / relative).resolve()
         if not candidate.is_relative_to(root):
             raise OntologyParseError(
                 "本体包文件路径越界",
