@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,14 +14,33 @@ from ontology_core.errors import (
     OntologyValidationError,
     PackageNotFoundError,
 )
-from ontology_core.manifest import load_manifest, resolve_package_files
+from ontology_core.manifest import _load_manifest_with_bytes, resolve_package_files
 from ontology_core.models import PackageFileRole, PackageInfo
 from ontology_core.validator import OntologyValidator
 
 
-def _parse_turtle(path: Path) -> Graph:
+def _read_package_files(files: Mapping[PackageFileRole, Path]) -> dict[PackageFileRole, bytes]:
+    contents: dict[PackageFileRole, bytes] = {}
+    for role in PackageFileRole:
+        path = files[role]
+        try:
+            contents[role] = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise PackageNotFoundError(
+                "本体包文件不存在",
+                details={"role": role.value, "path": str(path)},
+            ) from exc
+        except OSError as exc:
+            raise OntologyParseError(
+                "本体包文件读取失败",
+                details={"role": role.value, "path": str(path), "reason": str(exc)},
+            ) from exc
+    return contents
+
+
+def _parse_turtle(content: bytes, path: Path) -> Graph:
     try:
-        return Graph().parse(path, format="turtle")
+        return Graph().parse(data=content.decode("utf-8"), format="turtle")
     except Exception as exc:
         raise OntologyParseError(
             "本体 Turtle 文件解析失败",
@@ -28,21 +48,30 @@ def _parse_turtle(path: Path) -> Graph:
         ) from exc
 
 
-def _digest(manifest_path: Path, files: dict[PackageFileRole, Path]) -> str:
+def _digest(
+    manifest: bytes,
+    files: Mapping[PackageFileRole, bytes],
+) -> str:
     digest = hashlib.sha256()
     digest.update(b"manifest\0")
-    digest.update(manifest_path.read_bytes())
+    digest.update(manifest)
     digest.update(b"\0")
     for role in PackageFileRole:
         digest.update(role.value.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(files[role].read_bytes())
+        digest.update(files[role])
         digest.update(b"\0")
     return digest.hexdigest()
 
 
-def _serialize(graph: Graph) -> str:
-    return graph.serialize(format="nt")
+def _serialize(graph: Graph, graph_name: str) -> str:
+    try:
+        return graph.serialize(format="nt")
+    except Exception as exc:
+        raise OntologyParseError(
+            "本体图序列化失败",
+            details={"graph": graph_name, "reason": str(exc)},
+        ) from exc
 
 
 def _copy_graph(serialized: str) -> Graph:
@@ -70,8 +99,9 @@ class OntologyRepository:
 
     def publish(self, package_dir: str | Path) -> PackageInfo:
         root = Path(package_dir).resolve()
-        manifest = load_manifest(root)
+        manifest, manifest_bytes = _load_manifest_with_bytes(root)
         files = resolve_package_files(root, manifest)
+        file_bytes = _read_package_files(files)
         data_graph = Graph()
         for role in (
             PackageFileRole.CORE,
@@ -79,8 +109,11 @@ class OntologyRepository:
             PackageFileRole.MAPPINGS,
             PackageFileRole.RULES,
         ):
-            data_graph += _parse_turtle(files[role])
-        shapes_graph = _parse_turtle(files[PackageFileRole.SHAPES])
+            data_graph += _parse_turtle(file_bytes[role], files[role])
+        shapes_graph = _parse_turtle(
+            file_bytes[PackageFileRole.SHAPES],
+            files[PackageFileRole.SHAPES],
+        )
         report = self._validator.validate(data_graph, shapes_graph)
         if not report.conforms:
             raise OntologyValidationError(
@@ -90,14 +123,14 @@ class OntologyRepository:
         info = PackageInfo(
             package_id=manifest.package_id,
             version=manifest.version,
-            sha256=_digest(root / "manifest.yaml", files),
+            sha256=_digest(manifest_bytes, file_bytes),
             loaded_at=datetime.now(UTC),
             source=str(root),
         )
         candidate = _OntologySnapshot(
             info=info,
-            _data_nt=_serialize(data_graph),
-            _shapes_nt=_serialize(shapes_graph),
+            _data_nt=_serialize(data_graph, "data"),
+            _shapes_nt=_serialize(shapes_graph, "shapes"),
         )
         with self._lock:
             self._current = candidate

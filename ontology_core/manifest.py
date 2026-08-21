@@ -9,19 +9,33 @@ from ontology_core.errors import OntologyParseError, PackageNotFoundError
 from ontology_core.models import PackageFileRole, PackageManifest
 
 
-def load_manifest(package_dir: str | Path) -> PackageManifest:
+def _load_manifest_with_bytes(package_dir: str | Path) -> tuple[PackageManifest, bytes]:
     root = Path(package_dir).resolve()
     path = root / "manifest.yaml"
     if not path.is_file():
         raise PackageNotFoundError("本体包清单不存在", details={"path": str(path)})
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        return PackageManifest.model_validate(raw)
-    except (OSError, yaml.YAMLError, ValidationError) as exc:
+        content = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise PackageNotFoundError("本体包清单不存在", details={"path": str(path)}) from exc
+    except OSError as exc:
+        raise OntologyParseError(
+            "本体包清单读取失败",
+            details={"path": str(path), "reason": str(exc)},
+        ) from exc
+    try:
+        raw = yaml.safe_load(content.decode("utf-8")) or {}
+        return PackageManifest.model_validate(raw), content
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as exc:
         raise OntologyParseError(
             "本体包清单解析失败",
             details={"path": str(path), "reason": str(exc)},
         ) from exc
+
+
+def load_manifest(package_dir: str | Path) -> PackageManifest:
+    manifest, _ = _load_manifest_with_bytes(package_dir)
+    return manifest
 
 
 def resolve_package_files(
