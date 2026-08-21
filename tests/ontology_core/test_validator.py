@@ -33,3 +33,20 @@ def test_missing_label_returns_structured_violation(valid_package_dir: Path) -> 
     assert len(report.violations) == 1
     assert report.violations[0].focus_node.endswith("Unlabelled")
     assert report.violations[0].message == "OWL class requires a label"
+
+
+def test_violation_report_is_stable_for_fresh_graphs(valid_package_dir: Path) -> None:
+    reports = []
+    for _ in range(2):
+        data = Graph().parse(
+            data=(
+                "@prefix ex: <https://example.invalid/ontology/> .\n"
+                "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+                "ex:Unlabelled a owl:Class .\n"
+            ),
+            format="turtle",
+        )
+        shapes = _graph(valid_package_dir / "shapes.ttl")
+        reports.append(OntologyValidator().validate(data, shapes))
+
+    assert reports[0].model_dump() == reports[1].model_dump()

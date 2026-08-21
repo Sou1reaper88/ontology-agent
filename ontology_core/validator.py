@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pyshacl import validate
-from rdflib import Graph
+from rdflib import BNode, Graph
+from rdflib.compare import to_canonical_graph
 from rdflib.namespace import RDF, SH
 
 from ontology_core.errors import OntologyParseError
@@ -10,6 +11,8 @@ from ontology_core.models import OntologyViolation, ValidationReport
 
 def _text(graph: Graph, subject, predicate) -> str | None:
     value = graph.value(subject, predicate)
+    if isinstance(value, BNode):
+        return f"_:{value}"
     return str(value) if value is not None else None
 
 
@@ -33,16 +36,17 @@ class OntologyValidator:
         if not isinstance(result_graph, Graph):
             raise OntologyParseError("SHACL 校验未返回 RDF 报告图")
 
+        canonical_graph = to_canonical_graph(result_graph)
         violations = []
-        for result in result_graph.subjects(RDF.type, SH.ValidationResult):
+        for result in canonical_graph.subjects(RDF.type, SH.ValidationResult):
             violations.append(
                 OntologyViolation(
-                    focus_node=_text(result_graph, result, SH.focusNode),
-                    path=_text(result_graph, result, SH.resultPath),
-                    message=_text(result_graph, result, SH.resultMessage)
+                    focus_node=_text(canonical_graph, result, SH.focusNode),
+                    path=_text(canonical_graph, result, SH.resultPath),
+                    message=_text(canonical_graph, result, SH.resultMessage)
                     or "Ontology constraint violation",
-                    severity=_text(result_graph, result, SH.resultSeverity),
-                    source_shape=_text(result_graph, result, SH.sourceShape),
+                    severity=_text(canonical_graph, result, SH.resultSeverity),
+                    source_shape=_text(canonical_graph, result, SH.sourceShape),
                 )
             )
         violations.sort(
@@ -50,6 +54,8 @@ class OntologyValidator:
                 item.focus_node or "",
                 item.path or "",
                 item.message,
+                item.severity or "",
+                item.source_shape or "",
             )
         )
         return ValidationReport(conforms=bool(conforms), violations=tuple(violations))
