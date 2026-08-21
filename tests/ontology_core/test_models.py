@@ -35,6 +35,20 @@ def test_manifest_files_cannot_be_mutated_in_place() -> None:
     assert manifest.files[PackageFileRole.CORE] == "core.ttl"
 
 
+def test_manifest_json_round_trip_preserves_read_only_files() -> None:
+    manifest = PackageManifest(
+        package_id="example.neutral",
+        version="1.0.0",
+        files={role: f"{role.value}.ttl" for role in PackageFileRole},
+    )
+
+    restored = PackageManifest.model_validate(manifest.model_dump(mode="json"))
+
+    assert restored == manifest
+    with pytest.raises(TypeError):
+        restored.files[PackageFileRole.CORE] = "changed.ttl"
+
+
 def test_package_info_is_immutable() -> None:
     info = PackageInfo(
         package_id="example.neutral",
