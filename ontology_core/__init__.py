@@ -12,11 +12,13 @@ from ontology_core.models import (
     PackageManifest,
     ValidationReport,
 )
+from ontology_core.validator import OntologyValidator
 
 __all__ = [
     "OntologyError",
     "OntologyParseError",
     "OntologyValidationError",
+    "OntologyValidator",
     "OntologyViolation",
     "PackageFileRole",
     "PackageInfo",
