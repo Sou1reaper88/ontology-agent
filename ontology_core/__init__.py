@@ -4,6 +4,7 @@ from ontology_core.errors import (
     OntologyValidationError,
     PackageNotFoundError,
 )
+from ontology_core.manifest import load_manifest, resolve_package_files
 from ontology_core.models import (
     OntologyViolation,
     PackageFileRole,
@@ -22,4 +23,6 @@ __all__ = [
     "PackageManifest",
     "PackageNotFoundError",
     "ValidationReport",
+    "load_manifest",
+    "resolve_package_files",
 ]

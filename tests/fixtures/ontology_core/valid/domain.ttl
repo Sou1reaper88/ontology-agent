@@ -1,0 +1,7 @@
+@prefix ex: <https://example.invalid/ontology/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:Record a owl:Class ;
+    rdfs:subClassOf ex:SemanticElement ;
+    rdfs:label "Record" .
