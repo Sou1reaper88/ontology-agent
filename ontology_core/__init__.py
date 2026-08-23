@@ -18,6 +18,7 @@ from ontology_core.models import (
     ValidationReport,
 )
 from ontology_core.repository import OntologyRepository
+from ontology_core.resolver import OntologyResolver
 from ontology_core.semantic_models import (
     BusinessRule,
     Concept,
@@ -46,6 +47,7 @@ __all__ = [
     "OntologyError",
     "OntologyParseError",
     "OntologyRepository",
+    "OntologyResolver",
     "OntologyValidationError",
     "OntologyValidator",
     "OntologyViolation",
