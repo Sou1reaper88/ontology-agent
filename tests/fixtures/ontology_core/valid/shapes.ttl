@@ -1,12 +1,56 @@
 @prefix ex: <https://example.invalid/ontology/> .
 @prefix oa: <urn:ontology-agent:core#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 
 ex:MarkedSemanticElementShape a sh:NodeShape ;
     sh:targetClass oa:Concept, oa:Property, oa:Relation, oa:BusinessRule, oa:DataSource, oa:PhysicalMapping ;
+    sh:nodeKind sh:IRI ;
+    sh:property [
+        sh:path oa:shortName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:Literal
+    ] ;
     sh:property [
         sh:path rdfs:label ;
         sh:minCount 1 ;
         sh:message "Marked semantic element requires a label"
     ] .
+
+ex:ConceptShape a sh:NodeShape ;
+    sh:targetClass oa:Concept ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:Class ] .
+
+ex:PropertyShape a sh:NodeShape ;
+    sh:targetClass oa:Property ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:DatatypeProperty ] ;
+    sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [
+        sh:path rdfs:range ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:pattern "^http://www\\.w3\\.org/2001/XMLSchema#.+$"
+    ] .
+
+ex:RelationShape a sh:NodeShape ;
+    sh:targetClass oa:Relation ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:ObjectProperty ] ;
+    sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+ex:BusinessRuleShape a sh:NodeShape ;
+    sh:targetClass oa:BusinessRule ;
+    sh:property [ sh:path oa:appliesTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+ex:DataSourceShape a sh:NodeShape ;
+    sh:targetClass oa:DataSource ;
+    sh:property [ sh:path oa:platformType ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:Literal ] .
+
+ex:PhysicalMappingShape a sh:NodeShape ;
+    sh:targetClass oa:PhysicalMapping ;
+    sh:property [ sh:path oa:semanticElement ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:dataSource ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .

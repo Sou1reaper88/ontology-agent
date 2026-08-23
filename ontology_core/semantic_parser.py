@@ -8,10 +8,11 @@ from urllib.parse import unquote, urlsplit
 
 from pydantic import ValidationError
 from rdflib import BNode, Graph, Literal, URIRef
-from rdflib.namespace import RDF, RDFS
+from rdflib.namespace import OWL, RDF, RDFS, XSD
 from rdflib.term import Identifier
 
 from ontology_core.errors import OntologyValidationError
+from ontology_core.normalization import normalize_text
 from ontology_core.semantic_models import (
     BusinessRule,
     Concept,
@@ -59,6 +60,11 @@ from ontology_core.vocabulary import (
 
 _Element = TypeVar("_Element")
 _MARKERS = (CONCEPT, PROPERTY, RELATION, BUSINESS_RULE, DATA_SOURCE, PHYSICAL_MAPPING)
+_STANDARD_TYPES = {
+    CONCEPT: OWL.Class,
+    PROPERTY: OWL.DatatypeProperty,
+    RELATION: OWL.ObjectProperty,
+}
 _OPERATOR_TYPES = {
     OA.AllOf: RuleOperator.ALL_OF,
     OA.AnyOf: RuleOperator.ANY_OF,
@@ -73,6 +79,10 @@ _OPERATOR_TYPES = {
     OA.Between: RuleOperator.BETWEEN,
     OA.IsNull: RuleOperator.IS_NULL,
 }
+_STRUCTURAL_PREDICATES = frozenset({ARGUMENT, LEFT_PROPERTY, VALUE, VALUES, PARAMETER})
+_LOGICAL_OPERATORS = frozenset({RuleOperator.ALL_OF, RuleOperator.ANY_OF, RuleOperator.NOT})
+_COLLECTION_OPERATORS = frozenset({RuleOperator.IN, RuleOperator.BETWEEN})
+_XSD_NAMESPACE = str(XSD)
 _CREDENTIAL_NAMES = {
     "host",
     "port",
@@ -84,19 +94,65 @@ _CREDENTIAL_NAMES = {
 }
 
 
-def _uris(graph: Graph, subject: Identifier, predicate: URIRef) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            {str(value) for value in graph.objects(subject, predicate) if isinstance(value, URIRef)}
+class _InvalidReferenceError(ValueError):
+    def __init__(self, message: str, path: URIRef) -> None:
+        super().__init__(message)
+        self.path = path
+
+
+class _InvalidReferencesError(ValueError):
+    def __init__(self, errors: tuple[_InvalidReferenceError, ...]) -> None:
+        super().__init__("Invalid semantic references")
+        self.errors = errors
+
+
+def _is_stable_semantic_uri(value: URIRef) -> bool:
+    scheme = urlsplit(str(value)).scheme.casefold()
+    return bool(scheme) and scheme != "file"
+
+
+def _reference_text(value: Identifier, predicate: URIRef) -> str:
+    if not isinstance(value, URIRef):
+        raise _InvalidReferenceError("Semantic reference object must be an IRI", predicate)
+    if not _is_stable_semantic_uri(value):
+        raise _InvalidReferenceError(
+            "Semantic reference must use an absolute non-file URI",
+            predicate,
         )
-    )
+    return str(value)
+
+
+def _uris(
+    graph: Graph,
+    subject: Identifier,
+    predicate: URIRef,
+    *,
+    uri: str,
+    violations: list[dict[str, str]],
+) -> tuple[str, ...]:
+    references: set[str] = set()
+    for value in graph.objects(subject, predicate):
+        try:
+            references.add(_reference_text(value, predicate))
+        except _InvalidReferenceError as exc:
+            violations.append(_violation("invalid_ontology_reference", uri, exc.path, str(exc)))
+    return tuple(sorted(references))
 
 
 def _single_uri(graph: Graph, subject: Identifier, predicate: URIRef, field: str) -> str:
     values = tuple(graph.objects(subject, predicate))
-    if len(values) != 1 or not isinstance(values[0], URIRef):
+    references: list[str] = []
+    errors: list[_InvalidReferenceError] = []
+    for value in values:
+        try:
+            references.append(_reference_text(value, predicate))
+        except _InvalidReferenceError as exc:
+            errors.append(exc)
+    if errors:
+        raise _InvalidReferencesError(tuple(errors))
+    if len(values) != 1:
         raise ValueError(f"Marked semantic element requires exactly one {field}")
-    return str(values[0])
+    return references[0]
 
 
 def _single_literal(graph: Graph, subject: Identifier, predicate: URIRef, field: str) -> Literal:
@@ -134,12 +190,17 @@ def _preferred_text(texts: tuple[LocalizedText, ...]) -> str:
     chinese = [
         text for text in texts if text.language and text.language.casefold().startswith("zh")
     ]
+
+    def stable_key(text: LocalizedText) -> tuple[str, str, str, str]:
+        language = text.language or ""
+        return normalize_text(text.value), text.value, normalize_text(language), language
+
     if chinese:
-        return min(chinese, key=lambda text: (text.value, text.language.casefold())).value
+        return min(chinese, key=stable_key).value
     untagged = [text for text in texts if text.language is None]
     if untagged:
-        return min(untagged, key=lambda text: (text.value, text.language or "")).value
-    return min(texts, key=lambda text: (text.value, (text.language or "").casefold())).value
+        return min(untagged, key=stable_key).value
+    return min(texts, key=stable_key).value
 
 
 def _single_short_name(graph: Graph, subject: Identifier) -> str:
@@ -173,6 +234,15 @@ def _invalid_subject_violations(graph: Graph) -> tuple[set[URIRef], list[dict[st
         for subject in graph.subjects(RDF.type, marker):
             if isinstance(subject, URIRef):
                 subjects.add(subject)
+                if not _is_stable_semantic_uri(subject):
+                    violations.append(
+                        _violation(
+                            "invalid_semantic_uri",
+                            str(subject),
+                            RDF.type,
+                            "Marked semantic element requires an absolute non-file URI",
+                        )
+                    )
             else:
                 violations.append(
                     _violation(
@@ -195,6 +265,13 @@ def _capture(
 ) -> _Element | None:
     try:
         return action()
+    except _InvalidReferencesError as exc:
+        for error in exc.errors:
+            violations.append(_violation("invalid_ontology_reference", uri, error.path, str(error)))
+        return None
+    except _InvalidReferenceError as exc:
+        violations.append(_violation("invalid_ontology_reference", uri, exc.path, str(exc)))
+        return None
     except ValueError as exc:
         violations.append(_violation(code, uri, path, str(exc)))
         return None
@@ -239,11 +316,28 @@ def _valid_short_names(graph: Graph, subjects: set[URIRef]) -> dict[str, list[st
         uri = str(subject)
         try:
             short_name = _single_short_name(graph, subject)
-            Concept(uri=uri, short_name=short_name, label="Valid", labels=())
-        except (ValidationError, ValueError):
+        except ValueError:
             continue
-        short_names[short_name].append(uri)
+        short_names[normalize_text(short_name)].append(uri)
     return short_names
+
+
+def _validate_standard_types(
+    graph: Graph,
+    by_marker: dict[URIRef, list[URIRef]],
+    violations: list[dict[str, str]],
+) -> None:
+    for marker, required_type in _STANDARD_TYPES.items():
+        for subject in by_marker[marker]:
+            if (subject, RDF.type, required_type) not in graph:
+                violations.append(
+                    _violation(
+                        "missing_standard_type",
+                        str(subject),
+                        RDF.type,
+                        f"Marked semantic element requires RDF type {required_type}",
+                    )
+                )
 
 
 def _parent_uris(
@@ -252,15 +346,15 @@ def _parent_uris(
     uri = str(subject)
     parents: list[str] = []
     for value in graph.objects(subject, RDFS.subClassOf):
-        if isinstance(value, URIRef):
-            parents.append(str(value))
-        else:
+        try:
+            parents.append(_reference_text(value, RDFS.subClassOf))
+        except _InvalidReferenceError as exc:
             violations.append(
                 _violation(
-                    "invalid_parent_reference",
+                    "invalid_ontology_reference",
                     uri,
-                    RDFS.subClassOf,
-                    f"Concept parent must be a URI: {value}",
+                    exc.path,
+                    str(exc),
                 )
             )
     return tuple(sorted(set(parents)))
@@ -318,7 +412,7 @@ def _raise_if_invalid(violations: list[dict[str, str]]) -> None:
 def _sort_key(
     item: Concept | Property | Relation | BusinessRule | DataSource | PhysicalMapping,
 ) -> tuple[str, str]:
-    return item.short_name.casefold(), item.uri
+    return normalize_text(item.short_name), item.uri
 
 
 def _collection_literals(
@@ -352,6 +446,47 @@ def _collection_literals(
     return tuple(values)
 
 
+def _validate_expression_structure(
+    graph: Graph,
+    node: Identifier,
+    operator: RuleOperator,
+) -> None:
+    if operator in _LOGICAL_OPERATORS:
+        allowed = {ARGUMENT}
+    elif operator is RuleOperator.IS_NULL:
+        allowed = {LEFT_PROPERTY}
+    elif operator in _COLLECTION_OPERATORS:
+        allowed = {LEFT_PROPERTY, VALUES}
+    else:
+        allowed = {LEFT_PROPERTY, VALUE, PARAMETER}
+    supplied = {
+        predicate for predicate in _STRUCTURAL_PREDICATES if any(graph.objects(node, predicate))
+    }
+    extras = sorted(str(predicate) for predicate in supplied - allowed)
+    if extras:
+        raise ValueError(
+            f"{operator.value} does not allow structural predicates: {', '.join(extras)}"
+        )
+
+
+def _expression_key(expression: RuleExpression) -> tuple[object, ...]:
+    literal_keys = tuple(
+        (
+            value.lexical_form,
+            value.datatype_uri or "",
+            value.language or "",
+        )
+        for value in expression.values
+    )
+    return (
+        expression.operator.value,
+        expression.property_uri or "",
+        literal_keys,
+        expression.parameter or "",
+        tuple(_expression_key(child) for child in expression.children),
+    )
+
+
 def _parse_expression(
     graph: Graph,
     node: Identifier,
@@ -368,6 +503,7 @@ def _parse_expression(
     if len(operators) != 1:
         raise ValueError("Rule expression requires exactly one operator type")
     operator = operators[0]
+    _validate_expression_structure(graph, node, operator)
     next_stack = stack | {node}
     if operator in (RuleOperator.ALL_OF, RuleOperator.ANY_OF, RuleOperator.NOT):
         arguments = tuple(graph.objects(node, ARGUMENT))
@@ -379,13 +515,12 @@ def _parse_expression(
             count_text = "at least two"
         if not valid_count:
             raise ValueError(f"{operator.value} requires {count_text} arguments")
-        return RuleExpression(
-            operator=operator,
-            children=tuple(
-                _parse_expression(graph, argument, property_uris, next_stack)
-                for argument in arguments
-            ),
+        children = tuple(
+            _parse_expression(graph, argument, property_uris, next_stack) for argument in arguments
         )
+        if operator is not RuleOperator.NOT:
+            children = tuple(sorted(children, key=_expression_key))
+        return RuleExpression(operator=operator, children=children)
 
     property_uri = _single_uri(graph, node, LEFT_PROPERTY, "left property")
     if property_uri not in property_uris:
@@ -466,6 +601,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
     rule_subjects = by_marker[BUSINESS_RULE]
     source_subjects = by_marker[DATA_SOURCE]
     mapping_subjects = by_marker[PHYSICAL_MAPPING]
+    _validate_standard_types(graph, by_marker, violations)
     marked_concept_uris = {str(subject) for subject in concept_subjects}
     marked_property_uris = {str(subject) for subject in property_subjects}
     marked_relation_uris = {str(subject) for subject in relation_subjects}
@@ -515,6 +651,17 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             marked_concept_uris=marked_concept_uris,
             violations=violations,
         )
+        if value_range is not None and not (
+            value_range.startswith(_XSD_NAMESPACE) and len(value_range) > len(_XSD_NAMESPACE)
+        ):
+            violations.append(
+                _violation(
+                    "invalid_datatype_range",
+                    uri,
+                    RDFS.range,
+                    "Property range must be an XSD datatype URI",
+                )
+            )
         if (
             fields
             and domain
@@ -636,8 +783,20 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             marked_concept_uris=marked_concept_uris,
             violations=violations,
         )
-        property_refs = _uris(graph, subject, USES_PROPERTY)
-        relation_refs = _uris(graph, subject, USES_RELATION)
+        property_refs = _uris(
+            graph,
+            subject,
+            USES_PROPERTY,
+            uri=uri,
+            violations=violations,
+        )
+        relation_refs = _uris(
+            graph,
+            subject,
+            USES_RELATION,
+            uri=uri,
+            violations=violations,
+        )
         for reference in property_refs:
             _validate_reference(
                 uri=uri,
@@ -668,6 +827,18 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         elif nodes:
             try:
                 condition = _parse_expression(graph, nodes[0], marked_property_uris, set())
+            except _InvalidReferencesError as exc:
+                for error in exc.errors:
+                    violations.append(
+                        _violation(
+                            "invalid_ontology_reference",
+                            uri,
+                            error.path,
+                            str(error),
+                        )
+                    )
+            except _InvalidReferenceError as exc:
+                violations.append(_violation("invalid_ontology_reference", uri, exc.path, str(exc)))
             except ValueError as exc:
                 violations.append(_violation("invalid_rule_expression", uri, CONDITION, str(exc)))
         status = _capture(

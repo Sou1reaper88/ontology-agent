@@ -114,6 +114,32 @@ def test_invalid_semantic_reload_keeps_previous_catalog(
     assert repository.current().catalog == previous.catalog
 
 
+def test_publish_rejects_relative_semantic_uri_resolved_from_package_path(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "relative-semantic-uri"
+    _copy_package(valid_package_dir, package_dir)
+    domain_path = package_dir / "domain.ttl"
+    domain_path.write_text(
+        domain_path.read_text(encoding="utf-8")
+        + (
+            '\n<Relative> a owl:Class, oa:Concept ; oa:shortName "Relative" ; '
+            'rdfs:label "Relative" .\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        OntologyRepository().publish(package_dir)
+
+    assert [
+        item["code"]
+        for item in caught.value.details["violations"]
+        if item["code"] == "invalid_semantic_uri"
+    ] == ["invalid_semantic_uri"]
+
+
 def test_publish_preserves_typed_literal_lexical_form_from_package_bytes(
     valid_package_dir: Path,
     tmp_path: Path,

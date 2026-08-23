@@ -13,7 +13,7 @@ _UNLABELLED_TTL = (
     "@prefix ex: <https://example.invalid/ontology/> .\n"
     "@prefix oa: <urn:ontology-agent:core#> .\n"
     "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
-    "ex:Unlabelled a owl:Class, oa:Concept .\n"
+    'ex:Unlabelled a owl:Class, oa:Concept ; oa:shortName "Unlabelled" .\n'
 )
 
 _MULTI_MESSAGE_SHAPES_TTL = (
@@ -36,6 +36,13 @@ def _graph(path: Path) -> Graph:
     return Graph().parse(path, format="turtle")
 
 
+def _shape_paths(valid_package_dir: Path) -> tuple[Path, Path]:
+    return (
+        valid_package_dir / "shapes.ttl",
+        Path(__file__).parents[2] / "ontology_core" / "resources" / "shapes.ttl",
+    )
+
+
 def test_valid_graph_conforms(valid_package_dir: Path) -> None:
     data = _graph(valid_package_dir / "core.ttl")
     data += _graph(valid_package_dir / "domain.ttl")
@@ -43,6 +50,53 @@ def test_valid_graph_conforms(valid_package_dir: Path) -> None:
     report = OntologyValidator().validate(data, shapes)
     assert report.conforms is True
     assert report.violations == ()
+
+
+def test_shacl_contract_requires_paired_standard_owl_types(
+    valid_package_dir: Path,
+) -> None:
+    data = Graph().parse(
+        data=(
+            "@prefix ex: <https://example.invalid/ontology/> .\n"
+            "@prefix oa: <urn:ontology-agent:core#> .\n"
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+            'ex:Marked a oa:Concept ; oa:shortName "Marked" ; rdfs:label "Marked" .\n'
+        ),
+        format="turtle",
+    )
+
+    for shapes_path in _shape_paths(valid_package_dir):
+        report = OntologyValidator().validate(data, _graph(shapes_path))
+        assert report.conforms is False
+        assert any(
+            violation.path == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+            for violation in report.violations
+        )
+
+
+def test_shacl_contract_requires_xsd_property_range(valid_package_dir: Path) -> None:
+    data = Graph().parse(
+        data=(
+            "@prefix ex: <https://example.invalid/ontology/> .\n"
+            "@prefix oa: <urn:ontology-agent:core#> .\n"
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+            'ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; '
+            'rdfs:label "Record" .\n'
+            'ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ; '
+            'rdfs:label "Metric" ; rdfs:domain ex:Record ; '
+            "rdfs:range ex:CustomDatatype .\n"
+        ),
+        format="turtle",
+    )
+
+    for shapes_path in _shape_paths(valid_package_dir):
+        report = OntologyValidator().validate(data, _graph(shapes_path))
+        assert report.conforms is False
+        assert any(
+            violation.path == "http://www.w3.org/2000/01/rdf-schema#range"
+            for violation in report.violations
+        )
 
 
 def test_missing_label_returns_structured_violation(valid_package_dir: Path) -> None:

@@ -1,4 +1,6 @@
 @prefix oa: <urn:ontology-agent:core#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 
@@ -17,13 +19,25 @@ oa:SemanticElementShape a sh:NodeShape ;
         sh:nodeKind sh:Literal
     ] .
 
+oa:ConceptShape a sh:NodeShape ;
+    sh:targetClass oa:Concept ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:Class ] .
+
 oa:PropertyShape a sh:NodeShape ;
     sh:targetClass oa:Property ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:DatatypeProperty ] ;
     sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
-    sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+    sh:property [
+        sh:path rdfs:range ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:pattern "^http://www\\.w3\\.org/2001/XMLSchema#.+$"
+    ] .
 
 oa:RelationShape a sh:NodeShape ;
     sh:targetClass oa:Relation ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:ObjectProperty ] ;
     sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
     sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
 

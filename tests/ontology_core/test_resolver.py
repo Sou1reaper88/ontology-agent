@@ -441,6 +441,56 @@ def test_get_concept_prefers_uri_then_short_name_over_label() -> None:
     assert resolver.get_concept("SharedName").short_name == "SharedName"
 
 
+def test_get_concept_rejects_normalized_short_name_ambiguity() -> None:
+    resolver = _catalog_resolver(
+        concepts=(
+            _concept("Alpha", uri="https://example.invalid/ontology/First"),
+            _concept("alpha", uri="https://example.invalid/ontology/Second"),
+        )
+    )
+
+    with pytest.raises(AmbiguousIdentifierError) as caught:
+        resolver.get_concept("ＡＬＰＨＡ")
+
+    assert caught.value.details["candidates"] == [
+        "https://example.invalid/ontology/First",
+        "https://example.invalid/ontology/Second",
+    ]
+
+
+def test_resolve_property_rejects_normalized_short_name_ambiguity() -> None:
+    owner = _concept("Owner")
+    resolver = _catalog_resolver(
+        concepts=(owner,),
+        properties=(
+            Property(
+                uri="https://example.invalid/ontology/FirstMetric",
+                short_name="Metric",
+                label="First metric",
+                labels=(LocalizedText(value="First metric", language="en"),),
+                concept_uri=owner.uri,
+                datatype_uri="http://www.w3.org/2001/XMLSchema#integer",
+            ),
+            Property(
+                uri="https://example.invalid/ontology/SecondMetric",
+                short_name="metric",
+                label="Second metric",
+                labels=(LocalizedText(value="Second metric", language="en"),),
+                concept_uri=owner.uri,
+                datatype_uri="http://www.w3.org/2001/XMLSchema#integer",
+            ),
+        ),
+    )
+
+    with pytest.raises(AmbiguousIdentifierError) as caught:
+        resolver.resolve_property("Owner", "ＭＥＴＲＩＣ")
+
+    assert caught.value.details["candidates"] == [
+        "https://example.invalid/ontology/FirstMetric",
+        "https://example.invalid/ontology/SecondMetric",
+    ]
+
+
 def test_child_does_not_inherit_parent_relations_or_rules_and_excludes_incoming() -> None:
     parent = _concept("Parent")
     child = _concept("Child", parent_uris=(parent.uri,))

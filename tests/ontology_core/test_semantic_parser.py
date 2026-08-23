@@ -1,11 +1,13 @@
 from pathlib import Path
 
 import pytest
-from rdflib import Graph
+from rdflib import Graph, Literal, URIRef
+from rdflib.namespace import RDF
 
 from ontology_core.errors import OntologyValidationError
 from ontology_core.semantic_models import LocalizedText, RuleOperator
 from ontology_core.semantic_parser import parse_catalog
+from ontology_core.vocabulary import ARGUMENT, CONDITION, LEFT_PROPERTY, OA, VALUE
 
 
 def _catalog_graph(valid_package_dir: Path) -> Graph:
@@ -77,6 +79,78 @@ def test_parse_catalog_ignores_unmarked_owl_elements(valid_package_dir: Path) ->
     catalog = parse_catalog(graph)
 
     assert [item.short_name for item in catalog.concepts] == ["Record", "RelatedRecord"]
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected_type"),
+    (
+        (
+            'ex:Marked a oa:Concept ; oa:shortName "Marked" ; rdfs:label "Marked" .',
+            "http://www.w3.org/2002/07/owl#Class",
+        ),
+        (
+            'ex:Marked a owl:ObjectProperty, oa:Property ; oa:shortName "Marked" ; '
+            'rdfs:label "Marked" ; rdfs:domain ex:Record ; rdfs:range xsd:string .',
+            "http://www.w3.org/2002/07/owl#DatatypeProperty",
+        ),
+        (
+            'ex:Marked a owl:DatatypeProperty, oa:Relation ; oa:shortName "Marked" ; '
+            'rdfs:label "Marked" ; rdfs:domain ex:Record ; rdfs:range ex:Record .',
+            "http://www.w3.org/2002/07/owl#ObjectProperty",
+        ),
+    ),
+)
+def test_parse_catalog_requires_paired_standard_owl_types(
+    declaration: str,
+    expected_type: str,
+) -> None:
+    graph = _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        {declaration}
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert caught.value.details["violations"] == [
+        {
+            "code": "missing_standard_type",
+            "uri": "https://example.invalid/ontology/Marked",
+            "path": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            "message": f"Marked semantic element requires RDF type {expected_type}",
+        }
+    ]
+
+
+def test_parse_catalog_requires_xsd_datatype_property_range() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range ex:CustomDatatype .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert caught.value.details["violations"] == [
+        {
+            "code": "invalid_datatype_range",
+            "uri": "https://example.invalid/ontology/Metric",
+            "path": "http://www.w3.org/2000/01/rdf-schema#range",
+            "message": "Property range must be an XSD datatype URI",
+        }
+    ]
 
 
 def test_parse_catalog_sorts_elements_and_uri_links_deterministically() -> None:
@@ -171,6 +245,35 @@ def test_parse_catalog_reports_duplicate_short_names_alongside_other_errors() ->
     ]
 
 
+@pytest.mark.parametrize("second_short_name", ("alpha", "Ａlpha"))
+def test_parse_catalog_rejects_normalized_short_name_collisions(
+    second_short_name: str,
+) -> None:
+    graph = _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:First a owl:Class, oa:Concept ; oa:shortName "Alpha" ; rdfs:label "First" .
+        ex:Second a owl:Class, oa:Concept ; oa:shortName "{second_short_name}" ;
+            rdfs:label "Second" .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    duplicate_uris = [
+        item["uri"]
+        for item in caught.value.details["violations"]
+        if item["code"] == "duplicate_short_name"
+    ]
+    assert duplicate_uris == [
+        "https://example.invalid/ontology/First",
+        "https://example.invalid/ontology/Second",
+    ]
+
+
 def test_parse_catalog_prefers_chinese_labels_by_value_before_language() -> None:
     catalog = parse_catalog(_graph("""
             @prefix ex: <https://example.invalid/ontology/> .
@@ -183,6 +286,20 @@ def test_parse_catalog_prefers_chinese_labels_by_value_before_language() -> None
             """))
 
     assert catalog.concepts[0].label == "Alpha"
+
+
+def test_parse_catalog_prefers_labels_by_normalized_value_within_tier() -> None:
+    catalog = parse_catalog(_graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ;
+            rdfs:label "Ａ"@zh-CN, "B"@zh .
+        """))
+
+    assert catalog.concepts[0].label == "Ａ"
 
 
 def test_parse_catalog_does_not_report_marked_invalid_concept_as_dangling() -> None:
@@ -263,7 +380,7 @@ def test_parse_catalog_reports_invalid_concept_parents_when_concept_is_invalid()
 
     assert [(item["code"], item["path"]) for item in caught.value.details["violations"]] == [
         ("dangling_concept_reference", "http://www.w3.org/2000/01/rdf-schema#subClassOf"),
-        ("invalid_parent_reference", "http://www.w3.org/2000/01/rdf-schema#subClassOf"),
+        ("invalid_ontology_reference", "http://www.w3.org/2000/01/rdf-schema#subClassOf"),
         ("missing_label", "http://www.w3.org/2000/01/rdf-schema#label"),
     ]
 
@@ -287,7 +404,7 @@ def test_parse_catalog_rejects_invalid_and_unknown_concept_parents() -> None:
             "dangling_concept_reference",
             "Referenced concept does not exist: https://example.invalid/ontology/Unknown",
         ),
-        ("invalid_parent_reference", "Concept parent must be a URI: not-a-uri"),
+        ("invalid_ontology_reference", "Semantic reference object must be an IRI"),
     ]
 
 
@@ -354,10 +471,11 @@ def test_parse_catalog_preserves_literal_language_in_rule_expressions() -> None:
         @prefix oa: <urn:ontology-agent:core#> .
         @prefix owl: <http://www.w3.org/2002/07/owl#> .
         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
         ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
         ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
-            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range ex:TextValue .
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range xsd:string .
         ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
             oa:appliesTo ex:Record ; oa:condition [
                 a oa:Eq ; oa:leftProperty ex:Metric ; oa:value "标记"@zh-CN
@@ -376,10 +494,11 @@ def test_parse_catalog_rejects_recursive_rule_conditions() -> None:
         @prefix oa: <urn:ontology-agent:core#> .
         @prefix owl: <http://www.w3.org/2002/07/owl#> .
         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
         ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
         ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
-            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range ex:TextValue .
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range xsd:string .
         ex:Loop a oa:AllOf ; oa:argument ex:Loop, [ a oa:IsNull ; oa:leftProperty ex:Metric ] .
         ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
             oa:appliesTo ex:Record ; oa:condition ex:Loop .
@@ -447,6 +566,169 @@ def test_parse_catalog_rejects_unknown_mapping_references(statement: str) -> Non
 
     assert [item["code"] for item in caught.value.details["violations"]] == [
         "invalid_ontology_reference"
+    ]
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        'a owl:Class, oa:Concept ; oa:shortName "Marked" ; rdfs:label "Marked"',
+        'a owl:DatatypeProperty, oa:Property ; oa:shortName "Marked" ; '
+        'rdfs:label "Marked" ; rdfs:domain ex:Record ; rdfs:range xsd:string',
+        'a owl:ObjectProperty, oa:Relation ; oa:shortName "Marked" ; '
+        'rdfs:label "Marked" ; rdfs:domain ex:Record ; rdfs:range ex:Record',
+        'a oa:BusinessRule ; oa:shortName "Marked" ; rdfs:label "Marked" ; '
+        "oa:appliesTo ex:Record",
+        'a oa:DataSource ; oa:shortName "Marked" ; rdfs:label "Marked" ; '
+        'oa:platformType "generic"',
+        'a oa:PhysicalMapping ; oa:shortName "Marked" ; rdfs:label "Marked" ; '
+        "oa:semanticElement ex:Record ; oa:dataSource ex:Source",
+    ),
+)
+def test_parse_catalog_rejects_file_derived_marked_subjects(declaration: str) -> None:
+    graph = Graph().parse(
+        data=f"""
+            @prefix ex: <https://example.invalid/ontology/> .
+            @prefix oa: <urn:ontology-agent:core#> .
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+            ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+            ex:Source a oa:DataSource ; oa:shortName "Source" ; rdfs:label "Source" ;
+                oa:platformType "generic" .
+            <Relative> {declaration} .
+            """,
+        format="turtle",
+        publicID="file://example.invalid/ontology/domain.ttl",
+    )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert any(
+        item["code"] == "invalid_semantic_uri" and item["uri"].startswith("file:")
+        for item in caught.value.details["violations"]
+    )
+
+
+def _reference_graph(case: str, object_term: str) -> Graph:
+    declarations = {
+        "parent": (
+            'ex:Subject a owl:Class, oa:Concept ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; rdfs:subClassOf {object_term} .'
+        ),
+        "property_domain": (
+            'ex:Subject a owl:DatatypeProperty, oa:Property ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; rdfs:domain {object_term} ; rdfs:range xsd:string .'
+        ),
+        "property_range": (
+            'ex:Subject a owl:DatatypeProperty, oa:Property ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; rdfs:domain ex:Record ; rdfs:range {object_term} .'
+        ),
+        "relation_domain": (
+            'ex:Subject a owl:ObjectProperty, oa:Relation ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; rdfs:domain {object_term} ; rdfs:range ex:Record .'
+        ),
+        "relation_range": (
+            'ex:Subject a owl:ObjectProperty, oa:Relation ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; rdfs:domain ex:Record ; rdfs:range {object_term} .'
+        ),
+        "applies_to": (
+            'ex:Subject a oa:BusinessRule ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; oa:appliesTo {object_term} .'
+        ),
+        "uses_property": (
+            'ex:Subject a oa:BusinessRule ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; oa:appliesTo ex:Record ; oa:usesProperty {object_term} .'
+        ),
+        "uses_relation": (
+            'ex:Subject a oa:BusinessRule ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; oa:appliesTo ex:Record ; oa:usesRelation {object_term} .'
+        ),
+        "semantic_element": (
+            'ex:Subject a oa:PhysicalMapping ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; oa:semanticElement {object_term} ; oa:dataSource ex:Source .'
+        ),
+        "data_source": (
+            'ex:Subject a oa:PhysicalMapping ; oa:shortName "Subject" ; '
+            f'rdfs:label "Subject" ; oa:semanticElement ex:Record ; oa:dataSource {object_term} .'
+        ),
+        "left_property": (
+            'ex:Subject a oa:BusinessRule ; oa:shortName "Subject" ; '
+            'rdfs:label "Subject" ; oa:appliesTo ex:Record ; oa:condition '
+            f'[ a oa:Eq ; oa:leftProperty {object_term} ; oa:value "value" ] .'
+        ),
+    }
+    return _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range xsd:string .
+        ex:relatesTo a owl:ObjectProperty, oa:Relation ; oa:shortName "relatesTo" ;
+            rdfs:label "Relates to" ; rdfs:domain ex:Record ; rdfs:range ex:Record .
+        ex:Source a oa:DataSource ; oa:shortName "Source" ; rdfs:label "Source" ;
+            oa:platformType "generic" .
+        {declarations[case]}
+        """)
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "parent",
+        "property_domain",
+        "property_range",
+        "relation_domain",
+        "relation_range",
+        "applies_to",
+        "uses_property",
+        "uses_relation",
+        "semantic_element",
+        "data_source",
+        "left_property",
+    ),
+)
+@pytest.mark.parametrize(
+    "object_term",
+    ('"not-an-iri"', "[]", "<file://example.invalid/ontology/Target>"),
+)
+def test_parse_catalog_rejects_non_iri_or_unstable_reference_objects(
+    case: str,
+    object_term: str,
+) -> None:
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_reference_graph(case, object_term))
+
+    assert "invalid_ontology_reference" in [
+        item["code"] for item in caught.value.details["violations"]
+    ]
+
+
+def test_parse_catalog_reports_every_invalid_object_on_single_reference_predicate() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain "not-an-iri", [] ; rdfs:range xsd:string .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_ontology_reference",
+        "invalid_ontology_reference",
     ]
 
 
@@ -543,10 +825,11 @@ def _rule_graph(condition: str) -> Graph:
         @prefix oa: <urn:ontology-agent:core#> .
         @prefix owl: <http://www.w3.org/2002/07/owl#> .
         @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
         ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
         ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
-            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range ex:TextValue .
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range xsd:string .
         ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
             oa:appliesTo ex:Record ; oa:condition {condition} .
         """)
@@ -615,3 +898,84 @@ def test_parse_catalog_rejects_rule_operator_cardinality_boundaries(condition: s
     assert [item["code"] for item in caught.value.details["violations"]] == [
         "invalid_rule_expression"
     ]
+
+
+@pytest.mark.parametrize(
+    "condition",
+    (
+        "[ a oa:AllOf ; oa:argument [ a oa:IsNull ; oa:leftProperty ex:Metric ], "
+        '[ a oa:IsNull ; oa:leftProperty ex:Metric ] ; oa:value "extra" ]',
+        "[ a oa:AnyOf ; oa:argument [ a oa:IsNull ; oa:leftProperty ex:Metric ], "
+        '[ a oa:IsNull ; oa:leftProperty ex:Metric ] ; oa:parameter "extra" ]',
+        "[ a oa:Not ; oa:argument [ a oa:IsNull ; oa:leftProperty ex:Metric ] ; "
+        'oa:values ("extra") ]',
+        "[ a oa:IsNull ; oa:leftProperty ex:Metric ; oa:argument "
+        "[ a oa:IsNull ; oa:leftProperty ex:Metric ] ]",
+        '[ a oa:In ; oa:leftProperty ex:Metric ; oa:values ("one") ; oa:value "extra" ]',
+        '[ a oa:Between ; oa:leftProperty ex:Metric ; oa:values ("one" "two") ; '
+        'oa:parameter "extra" ]',
+        '[ a oa:Eq ; oa:leftProperty ex:Metric ; oa:value "one" ; oa:values ("extra") ]',
+        '[ a oa:Ne ; oa:leftProperty ex:Metric ; oa:value "one" ; oa:argument '
+        "[ a oa:IsNull ; oa:leftProperty ex:Metric ] ]",
+        '[ a oa:Gt ; oa:leftProperty ex:Metric ; oa:value "one" ; oa:values ("extra") ]',
+        '[ a oa:Gte ; oa:leftProperty ex:Metric ; oa:value "one" ; oa:argument '
+        "[ a oa:IsNull ; oa:leftProperty ex:Metric ] ]",
+        '[ a oa:Lt ; oa:leftProperty ex:Metric ; oa:value "one" ; oa:values ("extra") ]',
+        '[ a oa:Lte ; oa:leftProperty ex:Metric ; oa:value "one" ; oa:argument '
+        "[ a oa:IsNull ; oa:leftProperty ex:Metric ] ]",
+    ),
+)
+def test_parse_catalog_rejects_extra_structural_predicates_for_every_operator(
+    condition: str,
+) -> None:
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_rule_graph(condition))
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_rule_expression"
+    ]
+
+
+def _logical_graph(argument_order: tuple[str, str]) -> Graph:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range xsd:string .
+        ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
+            oa:appliesTo ex:Record .
+        """)
+    namespace = "https://example.invalid/ontology/"
+    condition = URIRef(namespace + "Condition")
+    value_child = URIRef(namespace + "ValueChild")
+    null_child = URIRef(namespace + "NullChild")
+    metric = URIRef(namespace + "Metric")
+    graph.add((URIRef(namespace + "Rule"), CONDITION, condition))
+    graph.add((condition, RDF.type, OA.AllOf))
+    graph.add((value_child, RDF.type, OA.Eq))
+    graph.add((value_child, LEFT_PROPERTY, metric))
+    graph.add((value_child, VALUE, Literal("value")))
+    graph.add((null_child, RDF.type, OA.IsNull))
+    graph.add((null_child, LEFT_PROPERTY, metric))
+    children = {"value": value_child, "null": null_child}
+    for name in argument_order:
+        graph.add((condition, ARGUMENT, children[name]))
+    return graph
+
+
+def test_parse_catalog_canonicalizes_commutative_children_across_insertion_orders() -> None:
+    first = parse_catalog(_logical_graph(("value", "null")))
+    second = parse_catalog(_logical_graph(("null", "value")))
+
+    assert first == second
+    condition = first.rules[0].condition
+    assert condition is not None
+    assert tuple(child.operator for child in condition.children) == (
+        RuleOperator.EQ,
+        RuleOperator.IS_NULL,
+    )

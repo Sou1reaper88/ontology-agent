@@ -86,7 +86,7 @@ Protégé 的图形界面适合创建类、属性和个体；保存后请检查 
     rdfs:range <https://example.invalid/private/OtherConcept> .
 ```
 
-`oa:Property` 只能表示数据属性，range 在实现中要求恰好一个 IRI；通常推荐使用 XSD 数据类型，但自定义 datatype IRI 也允许。`oa:Relation` 表示对象关系，domain 与 range 必须指向已标记的概念。SHACL 同时要求每个标记元素有一个 IRI、一个 short name 和至少一个 label。
+`oa:Property` 只能表示数据属性，range 必须是 `http://www.w3.org/2001/XMLSchema#` 命名空间中的 XSD 数据类型 URI，不接受自定义 datatype IRI。`oa:Relation` 表示对象关系，domain 与 range 必须指向已标记的概念。SHACL 同时要求每个标记元素有一个 IRI、一个 short name 和至少一个 label。
 
 ## 6. 创建规则、数据源与映射个体
 
@@ -120,8 +120,8 @@ Protégé 的图形界面适合创建类、属性和个体；保存后请检查 
 
 ## 7. 稳定标识、短名、语言标签与版本规则
 
-- URI 必须是稳定绝对 URI；创建后不要因展示文案或物理实现变化而替换。推荐在私有包自己的 base URI 下创建，例如 `https://example.invalid/private/Concept`。
-- `oa:shortName` 是 API 与人工引用的稳定短名，必须在整个有效包内全局唯一，不能依赖 RDF 图的遍历顺序。
+- URI 必须是稳定绝对 URI；相对 URI 和 `file:` URI 会被拒绝，以免同一本体在不同本地路径下得到不同目录或泄露物理路径。创建后不要因展示文案或物理实现变化而替换。推荐在私有包自己的 base URI 下创建，例如 `https://example.invalid/private/Concept`。
+- `oa:shortName` 是 API 与人工引用的稳定短名，必须在整个有效包内按 Unicode NFKC、去除首尾空白和大小写折叠后的结果全局唯一，不能依赖 RDF 图的遍历顺序。
 - `rdfs:label` 用于显示；至少保留一个标签。Resolver 选择显示名时优先中文（`zh` / `zh-*`），其次无语言标签，再其次其他语言标签；同一层级按规范化文本稳定排序。
 - Resolver 对短名、标签和搜索文本执行 Unicode NFKC、去除首尾空白与大小写折叠；URI 查询保持精确匹配。搜索按精确 URI/短名、精确标签、短名前缀、标签包含、说明包含的等级排序。
 - `version` 是包清单元数据。每次经过评审的语义变更都应在私有仓库中更新版本并保留 Git 记录；当前初始化器只要求版本为非空字符串，不强制某一种版本号格式。

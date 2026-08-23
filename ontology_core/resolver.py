@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import unicodedata
 from collections.abc import Callable, Iterable
 from types import MappingProxyType
 from typing import TypeVar
@@ -10,6 +9,7 @@ from ontology_core.errors import (
     ConceptNotFoundError,
     PropertyNotFoundError,
 )
+from ontology_core.normalization import normalize_text
 from ontology_core.repository import OntologySnapshot
 from ontology_core.semantic_models import (
     BusinessRule,
@@ -22,12 +22,8 @@ from ontology_core.semantic_models import (
 _Element = TypeVar("_Element", bound=SemanticElement)
 
 
-def _normalize(value: str) -> str:
-    return unicodedata.normalize("NFKC", value).strip().casefold()
-
-
 def _sort_key(element: SemanticElement) -> tuple[str, str]:
-    return (_normalize(element.short_name), element.uri)
+    return (normalize_text(element.short_name), element.uri)
 
 
 def _index(
@@ -51,11 +47,11 @@ class OntologyResolver:
         self._concepts_by_uri = _index(self._concepts, lambda concept: concept.uri)
         self._concepts_by_short_name = _index(
             self._concepts,
-            lambda concept: _normalize(concept.short_name),
+            lambda concept: normalize_text(concept.short_name),
         )
         self._concepts_by_label = _index(
             self._concepts,
-            lambda concept: _normalize(concept.label),
+            lambda concept: normalize_text(concept.label),
         )
         self._properties_by_concept = _index(
             catalog.properties,
@@ -78,10 +74,18 @@ class OntologyResolver:
         if uri_matches:
             return uri_matches[0]
 
-        normalized = _normalize(identifier)
+        normalized = normalize_text(identifier)
         short_name_matches = self._concepts_by_short_name.get(normalized, ())
-        if short_name_matches:
+        if len(short_name_matches) == 1:
             return short_name_matches[0]
+        if short_name_matches:
+            raise AmbiguousIdentifierError(
+                "本体概念标识符存在歧义",
+                details={
+                    "identifier": identifier,
+                    "candidates": sorted(item.uri for item in short_name_matches),
+                },
+            )
 
         label_matches = self._concepts_by_label.get(normalized, ())
         if len(label_matches) == 1:
@@ -100,7 +104,7 @@ class OntologyResolver:
         )
 
     def search_concepts(self, text: str) -> tuple[Concept, ...]:
-        normalized = _normalize(text)
+        normalized = normalize_text(text)
         if not normalized:
             return ()
 
@@ -124,12 +128,22 @@ class OntologyResolver:
         if uri_matches:
             return uri_matches[0]
 
-        normalized = _normalize(property_id)
+        normalized = normalize_text(property_id)
         short_name_matches = tuple(
-            property_ for property_ in properties if _normalize(property_.short_name) == normalized
+            property_
+            for property_ in properties
+            if normalize_text(property_.short_name) == normalized
         )
-        if short_name_matches:
+        if len(short_name_matches) == 1:
             return short_name_matches[0]
+        if short_name_matches:
+            raise AmbiguousIdentifierError(
+                "本体属性标识符存在歧义",
+                details={
+                    "identifier": property_id,
+                    "candidates": sorted(item.uri for item in short_name_matches),
+                },
+            )
         raise PropertyNotFoundError(
             "未找到本体属性",
             details={
@@ -148,14 +162,14 @@ class OntologyResolver:
 
     @staticmethod
     def _concept_rank(concept: Concept, normalized: str) -> int | None:
-        if normalized in {_normalize(concept.uri), _normalize(concept.short_name)}:
+        if normalized in {normalize_text(concept.uri), normalize_text(concept.short_name)}:
             return 0
-        if normalized == _normalize(concept.label):
+        if normalized == normalize_text(concept.label):
             return 1
-        if _normalize(concept.short_name).startswith(normalized):
+        if normalize_text(concept.short_name).startswith(normalized):
             return 2
-        if normalized in _normalize(concept.label):
+        if normalized in normalize_text(concept.label):
             return 3
-        if concept.description is not None and normalized in _normalize(concept.description):
+        if concept.description is not None and normalized in normalize_text(concept.description):
             return 4
         return None
