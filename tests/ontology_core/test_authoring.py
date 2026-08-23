@@ -193,6 +193,50 @@ def test_initialize_package_rejects_invalid_identifiers(
     assert not _staging_directories(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "base_uri",
+    (
+        "https://alice:fictional-secret@example.invalid/private/",
+        "https://alice@example.invalid/private/",
+        "https://:fictional-secret@example.invalid/private/",
+        "https://example.invalid/private/?token=fictional-secret",
+        "https://example.invalid/private/?",
+    ),
+)
+def test_initialize_package_rejects_http_base_uri_credentials_and_query_without_writes(
+    tmp_path: Path,
+    base_uri: str,
+) -> None:
+    package_dir = tmp_path / "package"
+
+    with pytest.raises(OntologyParseError) as caught:
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri=base_uri,
+        )
+
+    assert caught.value.details == {"field": "base_uri"}
+    assert "fictional-secret" not in str(caught.value.details)
+    assert not package_dir.exists()
+    assert not _staging_directories(tmp_path)
+    assert not _empty_backups(tmp_path)
+
+
+def test_initialize_package_accepts_a_valid_http_base_uri(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+
+    initialize_package(
+        package_dir,
+        package_id="neutral.package",
+        base_uri="http://example.invalid/private/",
+    )
+
+    assert "<http://example.invalid/private/> a owl:Ontology ." in package_dir.joinpath(
+        "domain.ttl"
+    ).read_text(encoding="utf-8")
+
+
 def test_initialize_package_accepts_a_valid_urn_base_uri(tmp_path: Path) -> None:
     package_dir = tmp_path / "package"
 
@@ -766,41 +810,52 @@ def test_concurrent_initializers_allow_only_one_success_without_overwrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package_dir = tmp_path / "package"
-    core_path = package_dir / "core.ttl"
-    write_barrier = threading.Barrier(2)
+    commit_barrier = threading.Barrier(2)
     start_barrier = threading.Barrier(2)
-    original_write_text = Path.write_text
+    result_lock = threading.Lock()
+    original_commit = authoring._commit_staging
+    commit_stagings: list[Path] = []
 
-    def synchronized_write_text(path: Path, data: str, *args, **kwargs) -> int:
-        if path == core_path:
-            write_barrier.wait(timeout=5)
-        return original_write_text(path, data, *args, **kwargs)
+    def synchronized_commit(staging: Path, root: Path, captured_target: Path | None) -> None:
+        with result_lock:
+            commit_stagings.append(staging)
+        commit_barrier.wait(timeout=5)
+        original_commit(staging, root, captured_target)
 
-    monkeypatch.setattr(Path, "write_text", synchronized_write_text)
+    monkeypatch.setattr(authoring, "_commit_staging", synchronized_commit)
     outcomes: list[Exception | None] = []
 
     def initialize() -> None:
-        start_barrier.wait(timeout=5)
         try:
+            start_barrier.wait(timeout=5)
             initialize_package(
                 package_dir,
                 package_id="neutral.package",
                 base_uri="https://example.invalid/private/",
             )
         except Exception as exc:  # The contract is one successful exclusive initializer.
-            outcomes.append(exc)
+            outcome: Exception | None = exc
         else:
-            outcomes.append(None)
+            outcome = None
+        with result_lock:
+            outcomes.append(outcome)
 
-    first = threading.Thread(target=initialize)
-    second = threading.Thread(target=initialize)
-    first.start()
-    second.start()
-    first.join(timeout=10)
-    second.join(timeout=10)
+    threads = [threading.Thread(target=initialize) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    try:
+        for thread in threads:
+            thread.join(timeout=10)
+    finally:
+        start_barrier.abort()
+        commit_barrier.abort()
+        for thread in threads:
+            thread.join(timeout=2)
 
-    assert not first.is_alive()
-    assert not second.is_alive()
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(commit_stagings) == 2
+    assert len(set(commit_stagings)) == 2
+    assert all(staging.parent == tmp_path for staging in commit_stagings)
     assert outcomes.count(None) == 1
     assert len(outcomes) == 2
     assert all(error is None or isinstance(error, OntologyParseError) for error in outcomes)

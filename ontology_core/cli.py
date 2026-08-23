@@ -35,6 +35,24 @@ def _inspection_payload(inspection, *, include_identifiers: bool) -> dict[str, A
     return inspection.model_dump(mode="json", exclude_none=not include_identifiers)
 
 
+def _write_text_inspection(inspection, *, include_identifiers: bool) -> None:
+    lines = [
+        f"valid: {inspection.package.package_id}@{inspection.package.version}",
+        f"sha256: {inspection.package.sha256}",
+        "counts:",
+        f"  concepts: {inspection.counts.concepts}",
+        f"  properties: {inspection.counts.properties}",
+        f"  relations: {inspection.counts.relations}",
+        f"  rules: {inspection.counts.rules}",
+        f"  data_sources: {inspection.counts.data_sources}",
+        f"  mappings: {inspection.counts.mappings}",
+    ]
+    if include_identifiers:
+        lines.append("identifiers:")
+        lines.extend(f"  {identifier}" for identifier in inspection.identifiers or ())
+    print("\n".join(lines))
+
+
 def _handle_init(args: argparse.Namespace) -> int:
     manifest = initialize_package(
         Path(args.path),
@@ -73,7 +91,7 @@ def _handle_inspect(args: argparse.Namespace) -> int:
     if args.json:
         _write_json(_inspection_payload(inspection, include_identifiers=args.list_identifiers))
     else:
-        print(f"valid: {inspection.package.package_id}@{inspection.package.version}")
+        _write_text_inspection(inspection, include_identifiers=args.list_identifiers)
     return 0
 
 

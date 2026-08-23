@@ -210,6 +210,77 @@ def test_inspect_counts_excludes_identifiers_and_source_path(
     _assert_valid_payload(payload, package_path=package_dir)
 
 
+def test_inspect_text_prints_digest_and_counts_without_sensitive_details(
+    valid_package_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    package_dir = tmp_path / "text-package"
+    _copy_package(valid_package_dir, package_dir)
+    mappings_path = package_dir / "mappings.ttl"
+    mappings_path.write_text(
+        mappings_path.read_text(encoding="utf-8").replace(
+            "    oa:enabled true .",
+            '    oa:objectName "fictional_physical_table" ;\n'
+            '    oa:fieldName "fictional_physical_field" ;\n'
+            "    oa:enabled true .",
+        ),
+        encoding="utf-8",
+    )
+    inspection = inspect_package(package_dir)
+
+    assert main(["inspect", str(package_dir)]) == 0
+    output = capsys.readouterr().out
+
+    assert output == (
+        "valid: example.neutral@1.0.0\n"
+        f"sha256: {inspection.package.sha256}\n"
+        "counts:\n"
+        "  concepts: 2\n"
+        "  properties: 1\n"
+        "  relations: 1\n"
+        "  rules: 1\n"
+        "  data_sources: 1\n"
+        "  mappings: 1\n"
+    )
+    assert str(package_dir.resolve()) not in output
+    assert "https://example.invalid/ontology/Record" not in output
+    assert "Neutral record used only by tests." not in output
+    assert "42" not in output
+    assert "fictional_physical_table" not in output
+    assert "fictional_physical_field" not in output
+
+
+def test_inspect_text_lists_sorted_identifiers_only_when_requested(
+    valid_package_dir: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    inspection = inspect_package(valid_package_dir, list_identifiers=True)
+
+    assert main(["inspect", str(valid_package_dir), "--list-identifiers"]) == 0
+    output = capsys.readouterr().out
+
+    assert output == (
+        "valid: example.neutral@1.0.0\n"
+        f"sha256: {inspection.package.sha256}\n"
+        "counts:\n"
+        "  concepts: 2\n"
+        "  properties: 1\n"
+        "  relations: 1\n"
+        "  rules: 1\n"
+        "  data_sources: 1\n"
+        "  mappings: 1\n"
+        "identifiers:\n"
+        "  https://example.invalid/ontology/Metric\n"
+        "  https://example.invalid/ontology/MetricMapping\n"
+        "  https://example.invalid/ontology/NeutralSource\n"
+        "  https://example.invalid/ontology/Record\n"
+        "  https://example.invalid/ontology/RecordRule\n"
+        "  https://example.invalid/ontology/RelatedRecord\n"
+        "  https://example.invalid/ontology/relatesTo\n"
+    )
+
+
 def test_inspect_lists_sorted_identifiers(
     valid_package_dir: Path,
     capsys: pytest.CaptureFixture[str],

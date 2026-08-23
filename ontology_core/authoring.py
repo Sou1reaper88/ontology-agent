@@ -42,6 +42,7 @@ def _invalid_base_uri() -> OntologyParseError:
 
 def _validate_base_uri(base_uri: str) -> str:
     value = _require_text(base_uri, field="base_uri")
+    query_is_present = "?" in value.partition("#")[0]
     if any(
         character.isspace() or ord(character) < 0x20 or character in '<>"{}' for character in value
     ):
@@ -53,7 +54,13 @@ def _validate_base_uri(base_uri: str) -> str:
     except ValueError as exc:
         raise _invalid_base_uri() from exc
     if parts.scheme in {"http", "https"}:
-        if parts.netloc and hostname:
+        if (
+            parts.netloc
+            and hostname
+            and parts.username is None
+            and parts.password is None
+            and not query_is_present
+        ):
             return value
         raise _invalid_base_uri()
     if parts.scheme == "urn" and _URN_NID_AND_NSS.fullmatch(parts.path):
