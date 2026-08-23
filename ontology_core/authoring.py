@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import tempfile
 from importlib.resources import files
 from pathlib import Path
@@ -93,6 +94,40 @@ def _initialization_error(path: Path, error: OSError) -> OntologyParseError:
     )
 
 
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise _initialization_error(path, exc) from exc
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+    except OSError as exc:
+        raise _initialization_error(path, exc) from exc
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    return bool(attributes & reparse_attribute)
+
+
+def _require_real_directory(path: Path, *, allow_absent: bool) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        if allow_absent:
+            return False
+        raise _integrity_error(path) from None
+    except OSError as exc:
+        raise _initialization_error(path, exc) from exc
+    if _is_reparse_point(path) or not stat.S_ISDIR(metadata.st_mode):
+        raise OntologyParseError("本体包目录不能是链接或重解析点", details={"path": str(path)})
+    return True
+
+
 def _staging_directory(root: Path) -> Path:
     try:
         return Path(tempfile.mkdtemp(prefix=f".{root.name}{_STAGING_SUFFIX}-", dir=root.parent))
@@ -105,7 +140,7 @@ def _target_is_empty_directory(root: Path) -> bool:
 
 
 def _prepare_empty_target_for_commit(root: Path) -> None:
-    if not root.exists():
+    if not _require_real_directory(root, allow_absent=True):
         return
     if not _target_is_empty_directory(root):
         raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
@@ -125,8 +160,9 @@ def _restore_empty_target(root: Path) -> None:
 
 
 def _commit_staging(staging: Path, root: Path) -> None:
-    if root.exists():
+    if _require_real_directory(root, allow_absent=True):
         raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
+    _require_real_directory(staging, allow_absent=False)
     try:
         staging.rename(root)
     except OSError as exc:
@@ -139,6 +175,7 @@ def _integrity_error(path: Path) -> OntologyParseError:
 
 
 def _verify_package_contents(directory: Path, expected_files: dict[str, bytes]) -> None:
+    _require_real_directory(directory, allow_absent=False)
     try:
         entries = {path.name: path for path in directory.iterdir()}
     except OSError as exc:
@@ -189,10 +226,11 @@ def initialize_package(
         root.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise _initialization_error(root.parent, exc) from exc
-    if root.exists() and not _target_is_empty_directory(root):
+    if _require_real_directory(root, allow_absent=True) and not _target_is_empty_directory(root):
         raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
 
     staging = _staging_directory(root)
+    _require_real_directory(staging, allow_absent=False)
     created: list[Path] = []
     manifest = PackageManifest(package_id=package_id, version=version, files=_PACKAGE_FILES)
     expected_files = _expected_package_files(base_uri, manifest)
@@ -218,6 +256,7 @@ def initialize_package(
         _prepare_empty_target_for_commit(root)
         _commit_staging(staging, root)
         _verify_package_contents(root, expected_files)
+        _require_real_directory(root, allow_absent=False)
         if load_manifest(root) != manifest:
             raise _integrity_error(root)
     except OSError as exc:

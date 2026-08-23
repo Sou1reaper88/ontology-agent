@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
+import stat
+import subprocess
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +20,46 @@ from ontology_core.semantic_models import SemanticCatalog
 
 def _staging_directories(parent: Path) -> tuple[Path, ...]:
     return tuple(path for path in parent.iterdir() if path.name.startswith(".package.staging"))
+
+
+def _make_directory_symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+
+
+def _make_directory_junction_or_skip(link: Path, target: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junctions are unavailable on this platform")
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0 or not link.is_junction():
+        pytest.skip(f"directory junctions are unavailable: {result.stderr.strip()}")
+
+
+def test_reparse_helper_recognizes_windows_file_attribute(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    directory = tmp_path / "package"
+    directory.mkdir()
+    attributes = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    monkeypatch.setattr(
+        Path,
+        "lstat",
+        lambda _path: SimpleNamespace(st_file_attributes=attributes),
+    )
+    monkeypatch.setattr(Path, "is_symlink", lambda _path: False)
+    monkeypatch.setattr(Path, "is_junction", lambda _path: False)
+
+    detected = getattr(authoring, "_is_reparse_point", lambda _path: False)(directory)
+
+    assert detected
 
 
 def test_initialize_package_creates_stable_blank_publishable_package(tmp_path: Path) -> None:
@@ -176,6 +220,46 @@ def test_initialize_package_refuses_non_empty_directory_without_modification(
     assert caught.value.code == "ontology_parse_error"
     assert tuple(path.name for path in package_dir.iterdir()) == ("keep.txt",)
     assert sentinel.read_bytes() == before
+    assert not _staging_directories(tmp_path)
+
+
+def test_initialize_package_rejects_existing_empty_symlink_without_staging(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    package_dir = tmp_path / "package"
+    _make_directory_symlink_or_skip(package_dir, target)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert package_dir.is_symlink()
+    assert tuple(target.iterdir()) == ()
+    assert not _staging_directories(tmp_path)
+
+
+def test_initialize_package_rejects_existing_empty_junction_without_staging(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    package_dir = tmp_path / "package"
+    _make_directory_junction_or_skip(package_dir, target)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert package_dir.is_junction()
+    assert tuple(target.iterdir()) == ()
     assert not _staging_directories(tmp_path)
 
 
@@ -371,6 +455,42 @@ def test_initialize_package_rejects_a_valid_staging_replacement_before_commit(
     assert not replacement_dir.exists()
 
 
+def test_initialize_package_rejects_same_content_junction_staging_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    replacement_dir = tmp_path / "replacement"
+    initialize_package(
+        replacement_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+    original_write = authoring._write_exclusive
+    original_rename = Path.rename
+    replaced = False
+
+    def replace_staging_after_manifest(path: Path, content: bytes, created) -> None:
+        nonlocal replaced
+        original_write(path, content, created)
+        if path.name == "manifest.yaml" and not replaced:
+            replaced = True
+            original_rename(path.parent, tmp_path / "quarantined-original")
+            _make_directory_junction_or_skip(path.parent, replacement_dir)
+
+    monkeypatch.setattr(authoring, "_write_exclusive", replace_staging_after_manifest)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert replaced
+    assert not package_dir.exists()
+
+
 def test_initialize_package_rejects_a_valid_replacement_committed_after_precheck(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -405,6 +525,43 @@ def test_initialize_package_rejects_a_valid_replacement_committed_after_precheck
     assert replaced
     assert load_manifest(package_dir).package_id == "replacement.package"
     assert not replacement_dir.exists()
+
+
+def test_initialize_package_rejects_same_content_junction_final_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    replacement_dir = tmp_path / "replacement"
+    initialize_package(
+        replacement_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+    original_rename = Path.rename
+    replaced = False
+
+    def replace_during_commit(path: Path, target: Path):
+        nonlocal replaced
+        if target == package_dir and not replaced:
+            replaced = True
+            original_rename(path, tmp_path / "quarantined-original")
+            _make_directory_junction_or_skip(target, replacement_dir)
+            return target
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", replace_during_commit)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert replaced
+    assert package_dir.is_junction()
+    assert load_manifest(package_dir).package_id == "neutral.package"
 
 
 def test_initialize_package_rejects_post_rename_byte_tampering(
