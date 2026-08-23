@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
-import tempfile
-import uuid
 from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -13,7 +10,7 @@ from ontology_core.errors import OntologyParseError
 from ontology_core.models import PackageFileRole, PackageManifest
 
 _RESOURCE_PACKAGE = "ontology_core.resources"
-_LOCK_SUFFIX = ".ontology-agent-init.lock"
+_STAGING_SUFFIX = ".staging"
 _URN_NID_AND_NSS = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{1,31}:.+")
 _MODULE_PREFIXES = """@prefix oa: <urn:ontology-agent:core#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
@@ -87,34 +84,23 @@ def _initialization_error(path: Path, error: OSError) -> OntologyParseError:
     )
 
 
-def _lock_path(root: Path) -> Path:
-    return root.parent / f".{root.name}{_LOCK_SUFFIX}"
-
-
-def _acquire_lock(path: Path, token: str) -> None:
-    try:
-        with path.open("x", encoding="ascii", newline="\n") as output:
-            output.write(token)
-    except FileExistsError as exc:
-        raise OntologyParseError("本体包正在初始化", details={"path": str(path)}) from exc
-    except OSError as exc:
-        raise _initialization_error(path, exc) from exc
-
-
-def _release_owned_lock(path: Path, token: str) -> None:
-    try:
-        if path.read_text(encoding="ascii") == token:
-            path.unlink()
-    except OSError:
-        return
-
-
-def _staging_directory(root: Path) -> Path:
-    return Path(tempfile.mkdtemp(prefix=f".{root.name}.staging-", dir=root.parent))
+def _staging_path(root: Path) -> Path:
+    return root.parent / f".{root.name}{_STAGING_SUFFIX}"
 
 
 def _target_is_empty_directory(root: Path) -> bool:
     return root.is_dir() and not any(root.iterdir())
+
+
+def _create_staging(staging: Path) -> None:
+    try:
+        staging.mkdir()
+    except FileExistsError as exc:
+        raise OntologyParseError(
+            "发现未清理的本体包初始化隔离目录", details={"path": str(staging)}
+        ) from exc
+    except OSError as exc:
+        raise _initialization_error(staging, exc) from exc
 
 
 def _prepare_empty_target_for_commit(root: Path) -> None:
@@ -128,12 +114,22 @@ def _prepare_empty_target_for_commit(root: Path) -> None:
         raise _initialization_error(root, exc) from exc
 
 
+def _restore_empty_target(root: Path) -> None:
+    if root.exists():
+        return
+    try:
+        root.mkdir()
+    except OSError:
+        return
+
+
 def _commit_staging(staging: Path, root: Path) -> None:
     if root.exists():
         raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
     try:
         staging.rename(root)
     except OSError as exc:
+        _restore_empty_target(root)
         raise _initialization_error(root, exc) from exc
 
 
@@ -144,7 +140,7 @@ def initialize_package(
     base_uri: str,
     version: str = "0.1.0",
 ) -> PackageManifest:
-    """Create a blank external RDF ontology package without domain instances."""
+    """Create a blank external RDF ontology package without automatic failure cleanup."""
     package_id = _require_text(package_id, field="package_id")
     version = _require_text(version, field="version")
     base_uri = _validate_base_uri(base_uri)
@@ -153,21 +149,15 @@ def initialize_package(
         root.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise _initialization_error(root.parent, exc) from exc
-    lock_path = _lock_path(root)
-    token = f"{uuid.uuid4().hex}\n"
-    staging: Path | None = None
-    lock_acquired = False
-    completed = False
-    try:
-        _acquire_lock(lock_path, token)
-        lock_acquired = True
-        if root.exists() and not _target_is_empty_directory(root):
-            raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
+    if root.exists() and not _target_is_empty_directory(root):
+        raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
 
-        staging = _staging_directory(root)
-        created: list[Path] = []
-        manifest = PackageManifest(package_id=package_id, version=version, files=_PACKAGE_FILES)
-        resources = files(_RESOURCE_PACKAGE)
+    staging = _staging_path(root)
+    _create_staging(staging)
+    created: list[Path] = []
+    manifest = PackageManifest(package_id=package_id, version=version, files=_PACKAGE_FILES)
+    resources = files(_RESOURCE_PACKAGE)
+    try:
         _write_exclusive(
             staging / _PACKAGE_FILES[PackageFileRole.CORE],
             resources.joinpath("core.ttl").read_text(encoding="utf-8"),
@@ -183,12 +173,6 @@ def initialize_package(
         _write_exclusive(staging / "manifest.yaml", _manifest_content(manifest), created)
         _prepare_empty_target_for_commit(root)
         _commit_staging(staging, root)
-        completed = True
-        return manifest
     except OSError as exc:
         raise _initialization_error(root, exc) from exc
-    finally:
-        if not completed and staging is not None:
-            shutil.rmtree(staging, ignore_errors=True)
-        if lock_acquired:
-            _release_owned_lock(lock_path, token)
+    return manifest

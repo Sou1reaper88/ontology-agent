@@ -136,6 +136,7 @@ def test_initialize_package_rejects_invalid_identifiers(
 
     assert caught.value.code == "ontology_parse_error"
     assert not package_dir.exists()
+    assert not tmp_path.joinpath(".package.staging").exists()
 
 
 def test_initialize_package_accepts_a_valid_urn_base_uri(tmp_path: Path) -> None:
@@ -171,36 +172,29 @@ def test_initialize_package_refuses_non_empty_directory_without_modification(
     assert caught.value.code == "ontology_parse_error"
     assert tuple(path.name for path in package_dir.iterdir()) == ("keep.txt",)
     assert sentinel.read_bytes() == before
+    assert not tmp_path.joinpath(".package.staging").exists()
 
 
-def test_failed_initialization_never_deletes_a_rebound_final_file(
+def test_failed_initialization_never_deletes_a_rebound_staging_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package_dir = tmp_path / "package"
-    core_path = package_dir / "core.ttl"
-    user_bytes = b"user-owned-after-rebind\n"
+    staging_dir = tmp_path / ".package.staging"
+    user_file = staging_dir / "user.txt"
     original_write = authoring._write_exclusive
-    original_unlink = Path.unlink
-    rebound = False
+    original_rename = Path.rename
 
     def fail_after_core(path: Path, content: str, created) -> None:
         if path.name == "domain.ttl":
-            package_dir.mkdir(parents=True, exist_ok=True)
-            core_path.write_bytes(user_bytes)
+            moved_staging = tmp_path / "moved-staging"
+            original_rename(path.parent, moved_staging)
+            staging_dir.mkdir()
+            user_file.write_text("user-owned\n", encoding="utf-8", newline="\n")
             raise OSError("simulated staged write failure")
         original_write(path, content, created)
 
-    def rebind_before_unlink(path: Path, *args, **kwargs) -> None:
-        nonlocal rebound
-        if path == core_path and not rebound:
-            rebound = True
-            original_unlink(path)
-            path.write_bytes(user_bytes)
-        original_unlink(path, *args, **kwargs)
-
     monkeypatch.setattr(authoring, "_write_exclusive", fail_after_core)
-    monkeypatch.setattr(Path, "unlink", rebind_before_unlink)
 
     with pytest.raises(OntologyParseError):
         initialize_package(
@@ -209,7 +203,7 @@ def test_failed_initialization_never_deletes_a_rebound_final_file(
             base_uri="https://example.invalid/private/",
         )
 
-    assert core_path.read_bytes() == user_bytes
+    assert user_file.read_text(encoding="utf-8") == "user-owned\n"
     assert not package_dir.joinpath("manifest.yaml").exists()
 
 
@@ -218,8 +212,8 @@ def test_commit_preserves_user_file_inserted_before_directory_rename(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package_dir = tmp_path / "package"
-    core_path = package_dir / "core.ttl"
-    user_bytes = b"user-owned-before-commit\n"
+    user_file = package_dir / "user.txt"
+    staging_dir = tmp_path / ".package.staging"
     original_rename = Path.rename
     inserted = False
 
@@ -228,7 +222,7 @@ def test_commit_preserves_user_file_inserted_before_directory_rename(
         if target == package_dir and not inserted:
             inserted = True
             package_dir.mkdir()
-            core_path.write_bytes(user_bytes)
+            user_file.write_text("user-owned\n", encoding="utf-8", newline="\n")
         return original_rename(path, target)
 
     monkeypatch.setattr(Path, "rename", competing_rename)
@@ -240,10 +234,9 @@ def test_commit_preserves_user_file_inserted_before_directory_rename(
             base_uri="https://example.invalid/private/",
         )
 
-    assert core_path.read_bytes() == user_bytes
+    assert user_file.read_text(encoding="utf-8") == "user-owned\n"
     assert not package_dir.joinpath("manifest.yaml").exists()
-    assert not any(path.name.startswith(".package.staging-") for path in tmp_path.iterdir())
-    assert not tmp_path.joinpath(".package.ontology-agent-init.lock").exists()
+    assert staging_dir.joinpath("manifest.yaml").is_file()
 
 
 @pytest.mark.parametrize("create_target", [False, True])
@@ -262,8 +255,44 @@ def test_initialize_package_commits_from_staging_for_absent_or_empty_targets(
     )
 
     assert load_manifest(package_dir).package_id == "neutral.package"
-    assert not any(path.name.startswith(".package.staging-") for path in tmp_path.iterdir())
-    assert not tmp_path.joinpath(".package.ontology-agent-init.lock").exists()
+    assert not tmp_path.joinpath(".package.staging").exists()
+
+
+def test_stale_staging_blocks_automatic_retry_after_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    staging_dir = tmp_path / ".package.staging"
+    original_write = authoring._write_exclusive
+    failed = False
+
+    def fail_once(path: Path, content: str, created) -> None:
+        nonlocal failed
+        if path.name == "domain.ttl" and not failed:
+            failed = True
+            raise OSError("simulated staged write failure")
+        original_write(path, content, created)
+
+    monkeypatch.setattr(authoring, "_write_exclusive", fail_once)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+    before = tuple(path.name for path in staging_dir.iterdir())
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert tuple(path.name for path in staging_dir.iterdir()) == before
+    assert not package_dir.joinpath("manifest.yaml").exists()
 
 
 def test_concurrent_initializers_allow_only_one_success_without_overwrite(
