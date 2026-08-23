@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable
 from typing import TypeVar
+from unicodedata import normalize
+from urllib.parse import unquote, urlsplit
 
 from pydantic import ValidationError
 from rdflib import BNode, Graph, Literal, URIRef
@@ -423,14 +425,7 @@ def _parse_expression(
 
 def _forbidden_predicates(graph: Graph, subject: URIRef, violations: list[dict[str, str]]) -> None:
     for predicate in graph.predicates(subject):
-        local_name = (
-            str(predicate)
-            .replace("#", "/")
-            .rsplit("/", 1)[-1]
-            .replace("_", "")
-            .replace("-", "")
-            .casefold()
-        )
+        local_name = _normalized_predicate_local_name(predicate)
         if local_name in _CREDENTIAL_NAMES:
             violations.append(
                 _violation(
@@ -440,6 +435,20 @@ def _forbidden_predicates(graph: Graph, subject: URIRef, violations: list[dict[s
                     "Credential-like predicates are prohibited",
                 )
             )
+
+
+def _normalized_predicate_local_name(predicate: URIRef) -> str:
+    """Return a normalized final predicate segment for URL and URN identifiers."""
+    parsed = urlsplit(str(predicate))
+    if parsed.fragment:
+        local_name = parsed.fragment
+    elif parsed.scheme.casefold() == "urn":
+        local_name = parsed.path.rsplit(":", 1)[-1]
+    elif parsed.path:
+        local_name = parsed.path.rsplit("/", 1)[-1]
+    else:
+        local_name = str(predicate).rsplit(":", 1)[-1]
+    return normalize("NFKC", unquote(local_name)).replace("-", "").replace("_", "").casefold()
 
 
 def parse_catalog(graph: Graph) -> SemanticCatalog:

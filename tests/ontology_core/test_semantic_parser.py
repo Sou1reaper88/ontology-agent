@@ -478,3 +478,140 @@ def test_parse_catalog_rejects_credential_predicates(marker: str) -> None:
     assert [item["code"] for item in caught.value.details["violations"]] == [
         "forbidden_credential_predicate"
     ]
+
+
+def _marker_graph(marker: str, predicate: str) -> Graph:
+    if marker == "oa:DataSource":
+        support = ""
+        values = 'oa:platformType "generic" ;'
+    else:
+        support = """
+            ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+            ex:Source a oa:DataSource ; oa:shortName "Source" ; rdfs:label "Source" ;
+                oa:platformType "generic" .
+        """
+        values = "oa:semanticElement ex:Record ; oa:dataSource ex:Source ;"
+    return _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        {support}
+        ex:Marked a {marker} ; oa:shortName "Marked" ; rdfs:label "Marked" ;
+            {values} <{predicate}> "not-permitted" .
+        """)
+
+
+@pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
+@pytest.mark.parametrize(
+    "predicate",
+    (
+        "https://example.invalid/vocabulary#CONNECTION-string",
+        "https://example.invalid/vocabulary/USER_name",
+        "urn:example:connection-string",
+        "urn:example:SeCrEt",
+    ),
+)
+def test_parse_catalog_rejects_credential_predicate_uri_variants(
+    marker: str,
+    predicate: str,
+) -> None:
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_marker_graph(marker, predicate))
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "forbidden_credential_predicate"
+    ]
+
+
+@pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
+def test_parse_catalog_allows_non_credential_predicate_with_similar_name(marker: str) -> None:
+    catalog = parse_catalog(_marker_graph(marker, "urn:example:tokenized"))
+
+    if marker == "oa:DataSource":
+        assert len(catalog.data_sources) == 1
+        assert not catalog.mappings
+    else:
+        assert len(catalog.data_sources) == 1
+        assert len(catalog.mappings) == 1
+
+
+def _rule_graph(condition: str) -> Graph:
+    return _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range ex:TextValue .
+        ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
+            oa:appliesTo ex:Record ; oa:condition {condition} .
+        """)
+
+
+@pytest.mark.parametrize(
+    ("operator", "values", "expected"),
+    (
+        ("oa:In", '("first" "second")', ("first", "second")),
+        ("oa:Between", '("lower" "upper")', ("lower", "upper")),
+    ),
+)
+def test_parse_catalog_preserves_rdf_collection_order(
+    operator: str,
+    values: str,
+    expected: tuple[str, ...],
+) -> None:
+    catalog = parse_catalog(
+        _rule_graph(f"[ a {operator} ; oa:leftProperty ex:Metric ; oa:values {values} ]")
+    )
+
+    condition = catalog.rules[0].condition
+    assert condition is not None
+    assert tuple(value.lexical_form for value in condition.values) == expected
+
+
+@pytest.mark.parametrize(
+    "collection",
+    (
+        '_:items rdf:first "only" ; rdf:rest "not-a-list" .',
+        '_:items rdf:first "only" ; rdf:rest _:items .',
+    ),
+)
+def test_parse_catalog_rejects_malformed_or_cyclic_rdf_collection(collection: str) -> None:
+    graph = _rule_graph("[ a oa:In ; oa:leftProperty ex:Metric ; oa:values _:items ]")
+    graph.parse(
+        data="@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n" + collection,
+        format="turtle",
+    )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_rule_expression"
+    ]
+
+
+@pytest.mark.parametrize(
+    "condition",
+    (
+        "[ a oa:AllOf ; oa:argument [ a oa:IsNull ; oa:leftProperty ex:Metric ] ]",
+        "[ a oa:AnyOf ; oa:argument [ a oa:IsNull ; oa:leftProperty ex:Metric ] ]",
+        "[ a oa:Not ; oa:argument [ a oa:IsNull ; oa:leftProperty ex:Metric ], "
+        "[ a oa:IsNull ; oa:leftProperty ex:Metric ] ]",
+        "[ a oa:Eq ; oa:leftProperty ex:Metric ]",
+        '[ a oa:IsNull ; oa:leftProperty ex:Metric ; oa:value "unexpected" ]',
+        "[ a oa:In ; oa:leftProperty ex:Metric ; oa:values () ]",
+        '[ a oa:Between ; oa:leftProperty ex:Metric ; oa:values ("one" "two" "three") ]',
+    ),
+)
+def test_parse_catalog_rejects_rule_operator_cardinality_boundaries(condition: str) -> None:
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_rule_graph(condition))
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_rule_expression"
+    ]

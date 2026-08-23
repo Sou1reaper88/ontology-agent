@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rdflib import Graph
+from rdflib import Graph, Literal
+from rdflib.plugins.parsers.notation3 import RDFSink, SinkParser
 
 from ontology_core.errors import (
     OntologyParseError,
@@ -40,9 +41,27 @@ def _read_package_files(files: Mapping[PackageFileRole, Path]) -> dict[PackageFi
     return contents
 
 
+class _LexicalTurtleSink(RDFSink):
+    """Create literals without consulting RDFLib's process-wide normalization flag."""
+
+    def newLiteral(self, s: str, dt, lang):  # noqa: N802
+        if dt:
+            return Literal(s, datatype=dt, normalize=False)
+        return Literal(s, lang=lang, normalize=False)
+
+
 def _parse_turtle(content: bytes, path: Path) -> Graph:
     try:
-        return Graph().parse(data=content.decode("utf-8"), format="turtle")
+        graph = Graph()
+        parser = SinkParser(
+            _LexicalTurtleSink(graph),
+            baseURI=graph.absolutize(path.resolve().as_uri()),
+            turtle=True,
+        )
+        parser.loadBuf(content.decode("utf-8"))
+        for prefix, namespace in parser._bindings.items():
+            graph.bind(prefix, namespace)
+        return graph
     except Exception as exc:
         raise OntologyParseError(
             "本体 Turtle 文件解析失败",

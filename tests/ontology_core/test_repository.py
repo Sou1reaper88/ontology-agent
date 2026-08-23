@@ -112,6 +112,29 @@ def test_invalid_semantic_reload_keeps_previous_catalog(
     assert repository.current().catalog == previous.catalog
 
 
+def test_publish_preserves_typed_literal_lexical_form_from_package_bytes(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "lexical-package"
+    _copy_package(valid_package_dir, package_dir)
+    rules_path = package_dir / "rules.ttl"
+    rules_path.write_text(
+        rules_path.read_text(encoding="utf-8").replace('"42"^^xsd:integer', '"001"^^xsd:integer'),
+        encoding="utf-8",
+    )
+
+    repository = OntologyRepository()
+    repository.publish(package_dir)
+    condition = repository.current().catalog.rules[0].condition
+    assert condition is not None
+    literal = next(child for child in condition.children if child.values).values[0]
+
+    assert literal.lexical_form == "001"
+    assert literal.datatype_uri == "http://www.w3.org/2001/XMLSchema#integer"
+    assert literal.language is None
+
+
 def test_same_bytes_produce_same_digest(valid_package_dir: Path) -> None:
     first = OntologyRepository().publish(valid_package_dir)
     second = OntologyRepository().publish(valid_package_dir)
