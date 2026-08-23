@@ -108,7 +108,7 @@ Resolver 对外将 `owl:DatatypeProperty` 转换为 `Property` DTO，将 `owl:Ob
 - `oa:condition`：可选结构化条件树根节点。
 - `oa:status` 和 `oa:priority`：状态与优先级。
 
-条件树首期只允许通用逻辑节点 `AllOf`、`AnyOf`、`Not`，以及比较节点 `Eq`、`Ne`、`Gt`、`Gte`、`Lt`、`Lte`、`In`、`Between`、`IsNull`。比较左值引用属性 URI，右值只能是 RDF 字面量或参数引用，不接受任意 SQL 文本。
+条件树首期只允许通用逻辑节点 `AllOf`、`AnyOf`、`Not`，以及比较节点 `Eq`、`Ne`、`Gt`、`Gte`、`Lt`、`Lte`、`In`、`Between`、`IsNull`。比较左值引用属性 URI，右值只能是 RDF 字面量或参数引用，不接受任意 SQL 文本。单值比较使用 `oa:value`；`In` 和 `Between` 使用 `oa:values` 指向 RDF Collection，其中 `Between` 的两项按下界、上界顺序保存。解析器不得依赖重复谓词的图遍历顺序。
 
 本阶段负责读取和验证条件结构，不执行规则，也不把规则编译成 SQL。
 
