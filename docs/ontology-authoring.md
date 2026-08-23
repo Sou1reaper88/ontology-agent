@@ -6,7 +6,7 @@
 
 ## 1. 前置条件：安装并打开 Protégé
 
-- 安装 [Protégé](https://protege.stanford.edu/) 后，使用其桌面应用打开 Turtle 文件。
+- 按 [Protégé 官方安装文档](https://protegeproject.github.io/protege/installation/) 安装桌面应用；需要项目入口时可访问 [Protégé 主页](https://protege.stanford.edu/)。
 - 使用项目 Python 虚拟环境运行命令；CLI 入口是 `python -m ontology_core`，包含 `init`、`validate` 和 `inspect`。
 - 先在外部私有工作目录创建本体包，再用 Protégé 打开该目录中的 `domain.ttl`。不要在应用代码仓库内创建真实领域包。
 
@@ -55,6 +55,10 @@ Protégé 的图形界面适合创建类、属性和个体；保存后请检查 
     rdfs:label "概念"@zh ;
     rdfs:label "Concept"@en ;
     rdfs:comment "Neutral documentation concept." .
+
+<https://example.invalid/private/OtherConcept> a owl:Class, oa:Concept ;
+    oa:shortName "OtherConcept" ;
+    rdfs:label "另一概念"@zh .
 ```
 
 `owl:Class` 保留标准 OWL 类语义；`oa:Concept` 是项目的领域元素标记，用于把领域概念与 `core.ttl` 中的通用元词汇区分开。父概念用 IRI `rdfs:subClassOf` 指向另一个已标记概念。
@@ -82,7 +86,7 @@ Protégé 的图形界面适合创建类、属性和个体；保存后请检查 
     rdfs:range <https://example.invalid/private/OtherConcept> .
 ```
 
-`oa:Property` 只能表示数据属性，range 必须是 IRI 形式的 XSD 数据类型；`oa:Relation` 表示对象关系，domain 与 range 必须指向已标记的概念。SHACL 同时要求每个标记元素有一个 IRI、一个 short name 和至少一个 label。
+`oa:Property` 只能表示数据属性，range 在实现中要求恰好一个 IRI；通常推荐使用 XSD 数据类型，但自定义 datatype IRI 也允许。`oa:Relation` 表示对象关系，domain 与 range 必须指向已标记的概念。SHACL 同时要求每个标记元素有一个 IRI、一个 short name 和至少一个 label。
 
 ## 6. 创建规则、数据源与映射个体
 
@@ -136,7 +140,7 @@ python -m ontology_core inspect D:\private\ontology-package --json --list-identi
 
 ## 9. Git 审查与部署流程
 
-1. 在私有本体包工作分支中编辑并保存六个模块。
+1. 包共六个文件：五个 TTL 模块和一个 `manifest.yaml`。日常编辑 `domain.ttl`、`rules.ttl`、`mappings.ttl`；`core.ttl`、`shapes.ttl` 与 manifest 作为受控变更保留并单独审查。
 2. 运行 `validate` 和 `inspect --json --list-identifiers`，将输出和退出码纳入 CI 或评审证据。
 3. 审查 Turtle 差异：确认 URI、short name、语言标签、引用和版本变更符合预期。
 4. 将通过评审的本体包提交到独立私有 Git 仓库；应用只通过显式文件系统路径读取已检出的版本。
