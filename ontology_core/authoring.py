@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from ontology_core.errors import OntologyParseError
+from ontology_core.manifest import load_manifest
 from ontology_core.models import PackageFileRole, PackageManifest
 
 _RESOURCE_PACKAGE = "ontology_core.resources"
@@ -71,10 +73,17 @@ def _manifest_content(manifest: PackageManifest) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write_exclusive(path: Path, content: str, created: list[Path]) -> None:
-    with path.open("x", encoding="utf-8", newline="\n") as output:
+def _utf8_lf_bytes(content: str) -> bytes:
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.endswith("\n"):
+        normalized += "\n"
+    return normalized.encode("utf-8")
+
+
+def _write_exclusive(path: Path, content: bytes, created: list[Path]) -> None:
+    with path.open("xb") as output:
         created.append(path)
-        output.write(content.replace("\r\n", "\n"))
+        output.write(content)
 
 
 def _initialization_error(path: Path, error: OSError) -> OntologyParseError:
@@ -84,23 +93,15 @@ def _initialization_error(path: Path, error: OSError) -> OntologyParseError:
     )
 
 
-def _staging_path(root: Path) -> Path:
-    return root.parent / f".{root.name}{_STAGING_SUFFIX}"
+def _staging_directory(root: Path) -> Path:
+    try:
+        return Path(tempfile.mkdtemp(prefix=f".{root.name}{_STAGING_SUFFIX}-", dir=root.parent))
+    except OSError as exc:
+        raise _initialization_error(root.parent, exc) from exc
 
 
 def _target_is_empty_directory(root: Path) -> bool:
     return root.is_dir() and not any(root.iterdir())
-
-
-def _create_staging(staging: Path) -> None:
-    try:
-        staging.mkdir()
-    except FileExistsError as exc:
-        raise OntologyParseError(
-            "发现未清理的本体包初始化隔离目录", details={"path": str(staging)}
-        ) from exc
-    except OSError as exc:
-        raise _initialization_error(staging, exc) from exc
 
 
 def _prepare_empty_target_for_commit(root: Path) -> None:
@@ -133,6 +134,45 @@ def _commit_staging(staging: Path, root: Path) -> None:
         raise _initialization_error(root, exc) from exc
 
 
+def _integrity_error(path: Path) -> OntologyParseError:
+    return OntologyParseError("本体包初始化完整性校验失败", details={"path": str(path)})
+
+
+def _verify_package_contents(directory: Path, expected_files: dict[str, bytes]) -> None:
+    try:
+        entries = {path.name: path for path in directory.iterdir()}
+    except OSError as exc:
+        raise _initialization_error(directory, exc) from exc
+    if set(entries) != set(expected_files):
+        raise _integrity_error(directory)
+    for name, expected in expected_files.items():
+        path = entries[name]
+        if not path.is_file() or path.is_symlink():
+            raise _integrity_error(path)
+        try:
+            actual = path.read_bytes()
+        except OSError as exc:
+            raise _initialization_error(path, exc) from exc
+        if actual != expected:
+            raise _integrity_error(path)
+
+
+def _expected_package_files(base_uri: str, manifest: PackageManifest) -> dict[str, bytes]:
+    resources = files(_RESOURCE_PACKAGE)
+    return {
+        _PACKAGE_FILES[PackageFileRole.CORE]: _utf8_lf_bytes(
+            resources.joinpath("core.ttl").read_text(encoding="utf-8")
+        ),
+        _PACKAGE_FILES[PackageFileRole.DOMAIN]: _utf8_lf_bytes(_module_content(base_uri)),
+        _PACKAGE_FILES[PackageFileRole.MAPPINGS]: _utf8_lf_bytes(_module_content(base_uri)),
+        _PACKAGE_FILES[PackageFileRole.RULES]: _utf8_lf_bytes(_module_content(base_uri)),
+        _PACKAGE_FILES[PackageFileRole.SHAPES]: _utf8_lf_bytes(
+            resources.joinpath("shapes.ttl").read_text(encoding="utf-8")
+        ),
+        "manifest.yaml": _utf8_lf_bytes(_manifest_content(manifest)),
+    }
+
+
 def initialize_package(
     package_dir: str | Path,
     *,
@@ -152,27 +192,34 @@ def initialize_package(
     if root.exists() and not _target_is_empty_directory(root):
         raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
 
-    staging = _staging_path(root)
-    _create_staging(staging)
+    staging = _staging_directory(root)
     created: list[Path] = []
     manifest = PackageManifest(package_id=package_id, version=version, files=_PACKAGE_FILES)
-    resources = files(_RESOURCE_PACKAGE)
+    expected_files = _expected_package_files(base_uri, manifest)
     try:
         _write_exclusive(
             staging / _PACKAGE_FILES[PackageFileRole.CORE],
-            resources.joinpath("core.ttl").read_text(encoding="utf-8"),
+            expected_files[_PACKAGE_FILES[PackageFileRole.CORE]],
             created,
         )
         for role in (PackageFileRole.DOMAIN, PackageFileRole.MAPPINGS, PackageFileRole.RULES):
-            _write_exclusive(staging / _PACKAGE_FILES[role], _module_content(base_uri), created)
+            _write_exclusive(
+                staging / _PACKAGE_FILES[role],
+                expected_files[_PACKAGE_FILES[role]],
+                created,
+            )
         _write_exclusive(
             staging / _PACKAGE_FILES[PackageFileRole.SHAPES],
-            resources.joinpath("shapes.ttl").read_text(encoding="utf-8"),
+            expected_files[_PACKAGE_FILES[PackageFileRole.SHAPES]],
             created,
         )
-        _write_exclusive(staging / "manifest.yaml", _manifest_content(manifest), created)
+        _write_exclusive(staging / "manifest.yaml", expected_files["manifest.yaml"], created)
+        _verify_package_contents(staging, expected_files)
         _prepare_empty_target_for_commit(root)
         _commit_staging(staging, root)
+        _verify_package_contents(root, expected_files)
+        if load_manifest(root) != manifest:
+            raise _integrity_error(root)
     except OSError as exc:
         raise _initialization_error(root, exc) from exc
     return manifest

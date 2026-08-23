@@ -14,6 +14,10 @@ from ontology_core.repository import OntologyRepository
 from ontology_core.semantic_models import SemanticCatalog
 
 
+def _staging_directories(parent: Path) -> tuple[Path, ...]:
+    return tuple(path for path in parent.iterdir() if path.name.startswith(".package.staging"))
+
+
 def test_initialize_package_creates_stable_blank_publishable_package(tmp_path: Path) -> None:
     package_dir = tmp_path / "package"
 
@@ -136,7 +140,7 @@ def test_initialize_package_rejects_invalid_identifiers(
 
     assert caught.value.code == "ontology_parse_error"
     assert not package_dir.exists()
-    assert not tmp_path.joinpath(".package.staging").exists()
+    assert not _staging_directories(tmp_path)
 
 
 def test_initialize_package_accepts_a_valid_urn_base_uri(tmp_path: Path) -> None:
@@ -172,7 +176,34 @@ def test_initialize_package_refuses_non_empty_directory_without_modification(
     assert caught.value.code == "ontology_parse_error"
     assert tuple(path.name for path in package_dir.iterdir()) == ("keep.txt",)
     assert sentinel.read_bytes() == before
-    assert not tmp_path.joinpath(".package.staging").exists()
+    assert not _staging_directories(tmp_path)
+
+
+def test_initialize_package_uses_unique_random_staging_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    observed: list[Path] = []
+    original_write = authoring._write_exclusive
+
+    def record_staging(path: Path, content: str, created) -> None:
+        observed.append(path.parent)
+        original_write(path, content, created)
+
+    monkeypatch.setattr(authoring, "_write_exclusive", record_staging)
+
+    initialize_package(
+        package_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+
+    assert len(set(observed)) == 1
+    assert observed[0].parent == tmp_path
+    assert observed[0].name.startswith(".package.staging-")
+    assert observed[0].name != ".package.staging"
+    assert not _staging_directories(tmp_path)
 
 
 def test_failed_initialization_never_deletes_a_rebound_staging_directory(
@@ -180,16 +211,19 @@ def test_failed_initialization_never_deletes_a_rebound_staging_directory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package_dir = tmp_path / "package"
-    staging_dir = tmp_path / ".package.staging"
-    user_file = staging_dir / "user.txt"
+    rebound_staging: Path | None = None
+    user_file: Path | None = None
     original_write = authoring._write_exclusive
     original_rename = Path.rename
 
     def fail_after_core(path: Path, content: str, created) -> None:
+        nonlocal rebound_staging, user_file
         if path.name == "domain.ttl":
             moved_staging = tmp_path / "moved-staging"
             original_rename(path.parent, moved_staging)
-            staging_dir.mkdir()
+            rebound_staging = path.parent
+            rebound_staging.mkdir()
+            user_file = rebound_staging / "user.txt"
             user_file.write_text("user-owned\n", encoding="utf-8", newline="\n")
             raise OSError("simulated staged write failure")
         original_write(path, content, created)
@@ -203,6 +237,8 @@ def test_failed_initialization_never_deletes_a_rebound_staging_directory(
             base_uri="https://example.invalid/private/",
         )
 
+    assert rebound_staging is not None
+    assert user_file is not None
     assert user_file.read_text(encoding="utf-8") == "user-owned\n"
     assert not package_dir.joinpath("manifest.yaml").exists()
 
@@ -213,7 +249,7 @@ def test_commit_preserves_user_file_inserted_before_directory_rename(
 ) -> None:
     package_dir = tmp_path / "package"
     user_file = package_dir / "user.txt"
-    staging_dir = tmp_path / ".package.staging"
+    staging_paths: list[Path] = []
     original_rename = Path.rename
     inserted = False
 
@@ -221,6 +257,7 @@ def test_commit_preserves_user_file_inserted_before_directory_rename(
         nonlocal inserted
         if target == package_dir and not inserted:
             inserted = True
+            staging_paths.append(path)
             package_dir.mkdir()
             user_file.write_text("user-owned\n", encoding="utf-8", newline="\n")
         return original_rename(path, target)
@@ -236,7 +273,7 @@ def test_commit_preserves_user_file_inserted_before_directory_rename(
 
     assert user_file.read_text(encoding="utf-8") == "user-owned\n"
     assert not package_dir.joinpath("manifest.yaml").exists()
-    assert staging_dir.joinpath("manifest.yaml").is_file()
+    assert staging_paths[0].joinpath("manifest.yaml").is_file()
 
 
 @pytest.mark.parametrize("create_target", [False, True])
@@ -255,15 +292,14 @@ def test_initialize_package_commits_from_staging_for_absent_or_empty_targets(
     )
 
     assert load_manifest(package_dir).package_id == "neutral.package"
-    assert not tmp_path.joinpath(".package.staging").exists()
+    assert not _staging_directories(tmp_path)
 
 
-def test_stale_staging_blocks_automatic_retry_after_write_failure(
+def test_quarantined_random_staging_does_not_block_retry_after_write_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package_dir = tmp_path / "package"
-    staging_dir = tmp_path / ".package.staging"
     original_write = authoring._write_exclusive
     failed = False
 
@@ -282,7 +318,45 @@ def test_stale_staging_blocks_automatic_retry_after_write_failure(
             package_id="neutral.package",
             base_uri="https://example.invalid/private/",
         )
-    before = tuple(path.name for path in staging_dir.iterdir())
+    quarantined = _staging_directories(tmp_path)
+    assert len(quarantined) == 1
+    before = tuple(path.name for path in quarantined[0].iterdir())
+
+    manifest = initialize_package(
+        package_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+
+    assert tuple(path.name for path in quarantined[0].iterdir()) == before
+    assert load_manifest(package_dir) == manifest
+
+
+def test_initialize_package_rejects_a_valid_staging_replacement_before_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    replacement_dir = tmp_path / "replacement"
+    initialize_package(
+        replacement_dir,
+        package_id="replacement.package",
+        base_uri="https://example.invalid/replacement/",
+    )
+    original_write = authoring._write_exclusive
+    original_rename = Path.rename
+    replaced = False
+
+    def replace_staging_after_manifest(path: Path, content: str, created) -> None:
+        nonlocal replaced
+        original_write(path, content, created)
+        if path.name == "manifest.yaml" and not replaced:
+            replaced = True
+            staging = path.parent
+            original_rename(staging, tmp_path / "quarantined-original")
+            original_rename(replacement_dir, staging)
+
+    monkeypatch.setattr(authoring, "_write_exclusive", replace_staging_after_manifest)
 
     with pytest.raises(OntologyParseError):
         initialize_package(
@@ -291,8 +365,74 @@ def test_stale_staging_blocks_automatic_retry_after_write_failure(
             base_uri="https://example.invalid/private/",
         )
 
-    assert tuple(path.name for path in staging_dir.iterdir()) == before
-    assert not package_dir.joinpath("manifest.yaml").exists()
+    if package_dir.exists():
+        assert load_manifest(package_dir).package_id == "replacement.package"
+    assert replaced
+    assert not replacement_dir.exists()
+
+
+def test_initialize_package_rejects_a_valid_replacement_committed_after_precheck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    replacement_dir = tmp_path / "replacement"
+    initialize_package(
+        replacement_dir,
+        package_id="replacement.package",
+        base_uri="https://example.invalid/replacement/",
+    )
+    original_rename = Path.rename
+    replaced = False
+
+    def replace_during_commit(path: Path, target: Path):
+        nonlocal replaced
+        if target == package_dir and not replaced:
+            replaced = True
+            original_rename(path, tmp_path / "quarantined-original")
+            return original_rename(replacement_dir, target)
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", replace_during_commit)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert replaced
+    assert load_manifest(package_dir).package_id == "replacement.package"
+    assert not replacement_dir.exists()
+
+
+def test_initialize_package_rejects_post_rename_byte_tampering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    original_rename = Path.rename
+    tampered = False
+
+    def tamper_after_rename(path: Path, target: Path):
+        nonlocal tampered
+        result = original_rename(path, target)
+        if target == package_dir and not tampered:
+            tampered = True
+            target.joinpath("domain.ttl").write_bytes(b"tampered\n")
+        return result
+
+    monkeypatch.setattr(Path, "rename", tamper_after_rename)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert package_dir.joinpath("domain.ttl").read_bytes() == b"tampered\n"
 
 
 def test_concurrent_initializers_allow_only_one_success_without_overwrite(
