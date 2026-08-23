@@ -4,7 +4,7 @@ import pytest
 from rdflib import Graph
 
 from ontology_core.errors import OntologyValidationError
-from ontology_core.semantic_models import LocalizedText
+from ontology_core.semantic_models import LocalizedText, RuleOperator
 from ontology_core.semantic_parser import parse_catalog
 
 
@@ -322,4 +322,159 @@ def test_parse_catalog_aggregates_sorted_missing_and_dangling_concept_references
             "path": "http://www.w3.org/2000/01/rdf-schema#domain",
             "message": "Marked semantic element requires exactly one domain",
         },
+    ]
+
+
+def test_parse_catalog_builds_recursive_rules_and_mappings(valid_package_dir: Path) -> None:
+    catalog = parse_catalog(_catalog_graph(valid_package_dir))
+
+    rule = catalog.rules[0]
+    mapping = catalog.mappings[0]
+    assert rule.applies_to_uri == "https://example.invalid/ontology/Record"
+    assert rule.property_uris == ("https://example.invalid/ontology/Metric",)
+    assert rule.relation_uris == ("https://example.invalid/ontology/relatesTo",)
+    assert rule.condition is not None
+    assert rule.condition.operator is RuleOperator.ALL_OF
+    assert tuple(child.operator for child in rule.condition.children) == (
+        RuleOperator.EQ,
+        RuleOperator.IS_NULL,
+    )
+    assert rule.condition.children[0].values[0].lexical_form == "42"
+    assert (
+        rule.condition.children[0].values[0].datatype_uri
+        == "http://www.w3.org/2001/XMLSchema#integer"
+    )
+    assert mapping.semantic_element_uri == "https://example.invalid/ontology/Metric"
+    assert mapping.data_source_uri == "https://example.invalid/ontology/NeutralSource"
+
+
+def test_parse_catalog_preserves_literal_language_in_rule_expressions() -> None:
+    catalog = parse_catalog(_graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range ex:TextValue .
+        ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
+            oa:appliesTo ex:Record ; oa:condition [
+                a oa:Eq ; oa:leftProperty ex:Metric ; oa:value "标记"@zh-CN
+            ] .
+        """))
+
+    literal = catalog.rules[0].condition.values[0]  # type: ignore[union-attr]
+    assert literal.lexical_form == "标记"
+    assert literal.datatype_uri is None
+    assert literal.language == "zh-CN"
+
+
+def test_parse_catalog_rejects_recursive_rule_conditions() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:Record ; rdfs:range ex:TextValue .
+        ex:Loop a oa:AllOf ; oa:argument ex:Loop, [ a oa:IsNull ; oa:leftProperty ex:Metric ] .
+        ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
+            oa:appliesTo ex:Record ; oa:condition ex:Loop .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_rule_expression"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected_code"),
+    [
+        ("oa:usesProperty ex:MissingProperty", "invalid_ontology_reference"),
+        ("oa:usesRelation ex:MissingRelation", "invalid_ontology_reference"),
+    ],
+)
+def test_parse_catalog_rejects_unknown_rule_references(
+    statement: str,
+    expected_code: str,
+) -> None:
+    graph = _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;
+            oa:appliesTo ex:Record ; {statement} .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [expected_code]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "oa:semanticElement ex:MissingElement ; oa:dataSource ex:Source",
+        "oa:semanticElement ex:Record ; oa:dataSource ex:MissingSource",
+    ],
+)
+def test_parse_catalog_rejects_unknown_mapping_references(statement: str) -> None:
+    graph = _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Source a oa:DataSource ; oa:shortName "Source" ; rdfs:label "Source" ;
+            oa:platformType "generic" .
+        ex:Mapping a oa:PhysicalMapping ; oa:shortName "Mapping" ; rdfs:label "Mapping" ;
+            {statement} .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_ontology_reference"
+    ]
+
+
+@pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
+def test_parse_catalog_rejects_credential_predicates(marker: str) -> None:
+    mapping_support = ""
+    mapping_references = ""
+    if marker == "oa:PhysicalMapping":
+        mapping_support = """
+            ex:Record a owl:Class, oa:Concept ; oa:shortName \"Record\" ; rdfs:label \"Record\" .
+            ex:Source a oa:DataSource ; oa:shortName \"Source\" ; rdfs:label \"Source\" ;
+                oa:platformType \"generic\" .
+        """
+        mapping_references = "oa:semanticElement ex:Record ; oa:dataSource ex:Source ;"
+    graph = _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        {mapping_support}
+        ex:Sensitive a {marker} ; oa:shortName "Sensitive" ; rdfs:label "Sensitive" ;
+            oa:platformType "generic" ; {mapping_references} oa:token "not-permitted" .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "forbidden_credential_predicate"
     ]

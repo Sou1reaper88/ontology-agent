@@ -16,6 +16,8 @@ from ontology_core.errors import (
 )
 from ontology_core.manifest import _load_manifest_with_bytes, resolve_package_files
 from ontology_core.models import PackageFileRole, PackageInfo
+from ontology_core.semantic_models import SemanticCatalog
+from ontology_core.semantic_parser import parse_catalog
 from ontology_core.validator import OntologyValidator
 
 
@@ -79,8 +81,9 @@ def _copy_graph(serialized: str) -> Graph:
 
 
 @dataclass(frozen=True)
-class _OntologySnapshot:
+class OntologySnapshot:
     info: PackageInfo
+    catalog: SemanticCatalog
     _data_nt: str
     _shapes_nt: str
 
@@ -95,7 +98,7 @@ class OntologyRepository:
     def __init__(self, validator: OntologyValidator | None = None) -> None:
         self._validator = validator or OntologyValidator()
         self._lock = threading.RLock()
-        self._current: _OntologySnapshot | None = None
+        self._current: OntologySnapshot | None = None
 
     def publish(self, package_dir: str | Path) -> PackageInfo:
         root = Path(package_dir).resolve()
@@ -120,6 +123,7 @@ class OntologyRepository:
                 "本体包未通过 SHACL 校验",
                 details={"violations": [item.model_dump() for item in report.violations]},
             )
+        catalog = parse_catalog(data_graph)
         info = PackageInfo(
             package_id=manifest.package_id,
             version=manifest.version,
@@ -127,8 +131,9 @@ class OntologyRepository:
             loaded_at=datetime.now(UTC),
             source=str(root),
         )
-        candidate = _OntologySnapshot(
+        candidate = OntologySnapshot(
             info=info,
+            catalog=catalog,
             _data_nt=_serialize(data_graph, "data"),
             _shapes_nt=_serialize(shapes_graph, "shapes"),
         )
@@ -136,7 +141,7 @@ class OntologyRepository:
             self._current = candidate
         return info
 
-    def current(self) -> _OntologySnapshot:
+    def current(self) -> OntologySnapshot:
         with self._lock:
             if self._current is None:
                 raise PackageNotFoundError("当前没有有效本体快照")

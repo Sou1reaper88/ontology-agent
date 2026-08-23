@@ -25,10 +25,7 @@ class _MutatingValidator:
     def validate(self, data_graph, shapes_graph):
         report = OntologyValidator().validate(data_graph, shapes_graph)
         self._target.write_text(
-            "@prefix ex: <https://example.invalid/ontology/> .\n"
-            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
-            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
-            'ex:Rewritten a owl:Class ; rdfs:label "Rewritten" .\n',
+            self._target.read_text(encoding="utf-8") + "\n# rewritten after validation\n",
             encoding="utf-8",
         )
         return report
@@ -47,6 +44,17 @@ def test_publish_valid_package_exposes_info_and_graph_copy(valid_package_dir: Pa
     assert len(info.sha256) == 64
     assert len(second) > 0
     assert any(second.triples((None, RDF.type, OWL.Class)))
+
+
+def test_publish_exposes_immutable_semantic_catalog(valid_package_dir: Path) -> None:
+    repository = OntologyRepository()
+    info = repository.publish(valid_package_dir)
+    snapshot = repository.current()
+
+    assert snapshot.info == info
+    assert snapshot.catalog.concepts
+    assert snapshot.catalog.rules[0].condition is not None
+    assert snapshot.catalog.data_sources[0].platform_type == "generic"
 
 
 def test_current_before_publish_raises_stable_error() -> None:
@@ -77,6 +85,31 @@ def test_failed_reload_keeps_previous_snapshot(
         repository.publish(broken)
 
     assert repository.current().info.sha256 == previous.sha256
+
+
+def test_invalid_semantic_reload_keeps_previous_catalog(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    repository = OntologyRepository()
+    repository.publish(valid_package_dir)
+    previous = repository.current()
+    broken = tmp_path / "broken-semantic"
+    _copy_package(valid_package_dir, broken)
+    broken.joinpath("rules.ttl").write_text(
+        "@prefix ex: <https://example.invalid/ontology/> .\n"
+        "@prefix oa: <urn:ontology-agent:core#> .\n"
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+        'ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;\n'
+        "    oa:appliesTo ex:Record ; oa:usesProperty ex:MissingProperty .\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OntologyValidationError):
+        repository.publish(broken)
+
+    assert repository.current() is previous
+    assert repository.current().catalog == previous.catalog
 
 
 def test_same_bytes_produce_same_digest(valid_package_dir: Path) -> None:
