@@ -12,13 +12,14 @@
 - 已识别“本体对象等同物理表”“职责集中于单一客户端”“规则与字段硬编码”等架构问题。
 - 已完成纯 Python 正式本体内核设计。
 - 已实现 RDFLib + pySHACL 本体包内核、不可变 DTO、安全清单加载、内容摘要和失败重载保护。
-- Python SDK、REST API、Resolver、MappingRegistry 和 QueryPlan 契约仍处于后续阶段，尚未实现。
+- 已交付本体包解析、不可变语义目录、快照绑定的 Python `OntologyResolver`，以及外部空白包 `init` / `validate` / `inspect` CLI。
+- `MappingRegistry`、`QueryPlan`、现有 Agent integration、REST API 和前端仍处于后续阶段，尚未实现或接入；现有 Agent 在本里程碑继续使用 legacy path。
 
 ## 可用于阶段汇报的表述
 
 主导本体驱动查询 Agent 的语义层重构设计，将业务概念、物理数据映射和查询编译拆分为独立边界；选型 Python RDFLib 与 pySHACL 构建 RDF/OWL 本体及约束验证体系，并设计统一 QueryPlan 契约，为后续多数据库、多 SQL 方言扩展奠定基础。
 
-实现纯 Python 本体包内核，支持版本化 RDF/OWL 加载、SHACL 约束校验、内容摘要和失败重载保护；通过不可变 DTO 与复制快照隔离 RDF 图内部状态，为后续多数据库查询编译器提供稳定语义基础。新增本体内核测试 28 项全部通过；全量后端回归为 111 passed、1 个既有乱码失败、1 skipped。
+实现纯 Python 本体包与语义解析边界，支持版本化 RDF/OWL 加载、SHACL 约束校验、内容摘要、失败重载保护、冻结 DTO 和确定性 Resolver；通过 `init` / `validate` / `inspect` 支持外部私有包的最小编辑闭环。Task 7 最终回归为 `228 passed, 2 skipped`；该数字是该阶段执行结果，不代表后续规划能力已完成。
 
 ## 面试故事草稿：从元数据增强到正式本体
 
@@ -35,15 +36,15 @@
 - 阅读 Agent 编排、本体客户端、权限、执行和测试代码，梳理真实边界。
 - 区分业务概念、关系、规则、数据源和物理映射。
 - 对比 Python RDF 工具、Java 本体服务、MySQL-first 和 GraphRAG 路线。
-- 选择 RDFLib + pySHACL，并设计 Python SDK、REST API、不可变快照和结构化错误契约。
+- 选择 RDFLib + pySHACL，交付不可变快照、结构化错误契约和 Python `OntologyResolver`；将 REST API、MappingRegistry 与 QueryPlan 保留为后续边界。
 - 使用旁路接入策略控制重构风险，保留后续兼容适配空间。
-- 通过 TDD 实现安全清单加载、SHACL 报告 DTO 化、内容寻址摘要和原子快照发布。
+- 通过 TDD 实现安全清单加载、SHACL 报告 DTO 化、内容寻址摘要、原子快照发布、标记型语义解析与确定性 Resolver。
 - 针对嵌套字典可变性和路径穿越边界进行独立代码审查，增加修复前失败、修复后通过的回归测试。
-- 在最终整分支审查中识别 RDF blank node、多 SHACL message 非确定性和重复读取导致的摘要/图错配风险，使用 canonical report、确定性消息聚合与单次字节快照修复，并补充跨进程和稳定错误映射测试。
+- 在审查中继续识别 RDFLib lexical form 规范化、URN 形式凭据谓词绕过、外部包初始化 TOCTOU 与 Windows junction 风险；用独立 lexical sink、URI local-name 归一化、随机 staging、原子 rename 和 fail-closed 清理策略补齐回归测试。
 
 ### Result
 
-已完成首个纯 Python 本体包内核里程碑：28 项内核测试全部通过，Ruff 与 Black 在新增范围通过；全量后端回归 111 passed、1 个既有乱码失败、1 skipped。实现保持旁路，不改变现有 Agent 和 HiveSQL 链路。尚未实现 QueryPlan、数据库适配器、多方言编译器和对外 API，因此简历表述仅覆盖已交付的语义内核。
+已完成本体包编辑与解析里程碑：外部空白包、RDF/OWL + SHACL 校验、不可变语义目录、原子发布、确定性 Python Resolver 与安全 CLI 已交付；Task 7 最终全量回归为 `228 passed, 2 skipped`，新增范围 Ruff 与 Black 通过。实现保持旁路，不改变现有 Agent 和 HiveSQL 链路。尚未实现 MappingRegistry、QueryPlan、数据库适配器、多方言编译器、Agent integration、REST 或前端，因此简历表述仅覆盖已交付的语义内核。
 
 ## 转型能力映射
 
@@ -51,6 +52,7 @@
 - 数据质量规则与异常排查 → SHACL 可执行约束、结构化违规报告和稳定错误契约。
 - 指标血缘与结果复核 → 内容摘要、Git 提交边界、RED/GREEN 证据和失败回滚。
 - 从分析脚本走向 Agent 工程 → 分离 LLM 意图理解、确定性语义内核、查询编译和执行器职责。
+- 风控场景的对抗性边界意识 → 对 URI 凭据绕过、字面量保真、并发初始化与失败回滚建立可复现的安全回归证据。
 
 ## 后续需要持续收集的证据
 

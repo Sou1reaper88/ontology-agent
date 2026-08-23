@@ -71,6 +71,16 @@ black .
 pytest
 ```
 
+## 本体包开发
+
+本体包编辑流程见 [Protégé 本体编辑指南](docs/ontology-authoring.md)。本里程碑中的 `OntologyResolver` 是只读的 Python 边界；现有 Agent 仍走 legacy path，尚未切换到该 Resolver。
+
+```powershell
+python -m ontology_core init D:\path\to\private-package --package-id private.package --base-uri https://example.invalid/private/
+python -m ontology_core validate D:\path\to\private-package
+python -m ontology_core inspect D:\path\to\private-package
+```
+
 ## 实施计划
 
 详见 [分阶段实施计划](docs/plans/2026-08-06-ontology-agent-implementation-plan.md)。
