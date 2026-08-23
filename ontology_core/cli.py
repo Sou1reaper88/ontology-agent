@@ -5,7 +5,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from ontology_core.authoring import initialize_package
 from ontology_core.errors import OntologyError
@@ -13,8 +13,8 @@ from ontology_core.inspection import inspect_package, inspection_from_snapshot
 from ontology_core.repository import OntologyRepository
 
 
-def _write_json(payload: dict[str, Any]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+def _write_json(payload: dict[str, Any], *, stream: TextIO | None = None) -> None:
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=stream)
 
 
 def _write_error(error: OntologyError, *, as_json: bool) -> None:
@@ -24,7 +24,8 @@ def _write_error(error: OntologyError, *, as_json: bool) -> None:
                 "code": error.code,
                 "details": error.details,
                 "message": error.message,
-            }
+            },
+            stream=sys.stderr,
         )
         return
     print(f"{error.code}: {error.message}", file=sys.stderr)

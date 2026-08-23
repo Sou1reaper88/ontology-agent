@@ -16,6 +16,36 @@ def _copy_package(source: Path, target: Path) -> None:
         target.joinpath(path.name).write_bytes(path.read_bytes())
 
 
+def _assert_valid_payload(payload: dict[str, object], *, package_path: Path) -> None:
+    assert set(payload) == {"status", "package", "counts"}
+    assert payload["status"] == "valid"
+    package = payload["package"]
+    assert isinstance(package, dict)
+    assert set(package) == {"package_id", "version", "sha256"}
+    assert package["package_id"] == "example.neutral"
+    assert package["version"] == "1.0.0"
+    assert isinstance(package["sha256"], str)
+    assert re.fullmatch(r"[0-9a-f]{64}", package["sha256"])
+    assert payload["counts"] == {
+        "concepts": 2,
+        "properties": 1,
+        "relations": 1,
+        "rules": 1,
+        "data_sources": 1,
+        "mappings": 1,
+    }
+    assert {"identifiers", "source_path", "source", "loaded_at", "timestamp"}.isdisjoint(
+        _all_keys(payload)
+    )
+    assert str(package_path.resolve()) not in json.dumps(payload, ensure_ascii=False)
+
+
+def _all_keys(value: object) -> set[str]:
+    if not isinstance(value, dict):
+        return set()
+    return set(value) | {key for item in value.values() for key in _all_keys(item)}
+
+
 def test_init_creates_package_and_refuses_to_overwrite(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -59,28 +89,17 @@ def test_init_creates_package_and_refuses_to_overwrite(
 
 def test_validate_text_and_json_success(
     valid_package_dir: Path,
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert main(["validate", str(valid_package_dir)]) == 0
     assert capsys.readouterr().out == "valid: example.neutral@1.0.0\n"
 
-    assert main(["validate", str(valid_package_dir), "--json"]) == 0
-    payload = json.loads(capsys.readouterr().out)
+    package_dir = tmp_path / "valid-package"
+    _copy_package(valid_package_dir, package_dir)
 
-    assert payload["status"] == "valid"
-    assert payload["package"]["package_id"] == "example.neutral"
-    assert payload["package"]["version"] == "1.0.0"
-    assert re.fullmatch(r"[0-9a-f]{64}", payload["package"]["sha256"])
-    assert payload["counts"] == {
-        "concepts": 2,
-        "properties": 1,
-        "relations": 1,
-        "rules": 1,
-        "data_sources": 1,
-        "mappings": 1,
-    }
-    assert "identifiers" not in payload
-    assert str(valid_package_dir) not in json.dumps(payload, ensure_ascii=False)
+    assert main(["validate", str(package_dir), "--json"]) == 0
+    _assert_valid_payload(json.loads(capsys.readouterr().out), package_path=package_dir)
 
 
 def test_malformed_package_json_error_is_stable(
@@ -93,25 +112,40 @@ def test_malformed_package_json_error_is_stable(
     broken.joinpath("manifest.yaml").write_text("package_id: [\n", encoding="utf-8")
 
     assert main(["validate", str(broken), "--json"]) == 1
-    payload = json.loads(capsys.readouterr().out)
+    output = capsys.readouterr()
 
-    assert payload["code"] == "ontology_parse_error"
-    assert payload["message"]
-    assert isinstance(payload["details"], dict)
-    assert "traceback" not in json.dumps(payload).casefold()
+    assert output.out == ""
+    payload = json.loads(output.err)
+    assert output.err == json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+    assert payload == {
+        "code": "ontology_parse_error",
+        "message": "本体包清单解析失败",
+        "details": {
+            "path": str((broken / "manifest.yaml").resolve()),
+            "reason": (
+                "while parsing a flow node\n"
+                "expected the node content, but found '<stream end>'\n"
+                '  in "<unicode string>", line 2, column 1:\n'
+                "    \n"
+                "    ^"
+            ),
+        },
+    }
+    assert "traceback" not in output.err.casefold()
 
 
 def test_inspect_counts_excludes_identifiers_and_source_path(
     valid_package_dir: Path,
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert main(["inspect", str(valid_package_dir), "--json"]) == 0
+    package_dir = tmp_path / "valid-package"
+    _copy_package(valid_package_dir, package_dir)
+
+    assert main(["inspect", str(package_dir), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["status"] == "valid"
-    assert payload["counts"]["concepts"] == 2
-    assert "identifiers" not in payload
-    assert str(valid_package_dir) not in json.dumps(payload, ensure_ascii=False)
+    _assert_valid_payload(payload, package_path=package_dir)
 
 
 def test_inspect_lists_sorted_identifiers(
@@ -133,6 +167,7 @@ def test_inspect_lists_sorted_identifiers(
 
     assert main(["inspect", str(valid_package_dir), "--json", "--list-identifiers"]) == 0
     payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == {"status", "package", "counts", "identifiers"}
     assert payload["identifiers"] == list(inspection.identifiers)
 
 
