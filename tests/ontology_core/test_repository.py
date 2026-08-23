@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from rdflib import Literal
 from rdflib.namespace import OWL, RDF
 
 from ontology_core.errors import (
@@ -10,6 +11,7 @@ from ontology_core.errors import (
 )
 from ontology_core.repository import OntologyRepository
 from ontology_core.validator import OntologyValidator
+from ontology_core.vocabulary import OA
 
 
 def _copy_package(source_dir: Path, target_dir: Path) -> None:
@@ -133,6 +135,31 @@ def test_publish_preserves_typed_literal_lexical_form_from_package_bytes(
     assert literal.lexical_form == "001"
     assert literal.datatype_uri == "http://www.w3.org/2001/XMLSchema#integer"
     assert literal.language is None
+
+
+def test_snapshot_data_graph_copy_preserves_typed_literal_lexical_form(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "lexical-snapshot-package"
+    _copy_package(valid_package_dir, package_dir)
+    rules_path = package_dir / "rules.ttl"
+    rules_path.write_text(
+        rules_path.read_text(encoding="utf-8").replace('"42"^^xsd:integer', '"001"^^xsd:integer'),
+        encoding="utf-8",
+    )
+
+    repository = OntologyRepository()
+    repository.publish(package_dir)
+    copied_graph = repository.current().copy_data_graph()
+    literal = next(
+        value
+        for value in copied_graph.objects(None, OA.value)
+        if isinstance(value, Literal) and str(value) == "001"
+    )
+
+    assert str(literal) == "001"
+    assert str(literal.datatype) == "http://www.w3.org/2001/XMLSchema#integer"
 
 
 def test_same_bytes_produce_same_digest(valid_package_dir: Path) -> None:

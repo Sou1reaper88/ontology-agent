@@ -50,18 +50,25 @@ class _LexicalTurtleSink(RDFSink):
         return Literal(s, lang=lang, normalize=False)
 
 
+def _parse_with_lexical_sink(content: str, *, base_uri: str) -> Graph:
+    graph = Graph()
+    parser = SinkParser(
+        _LexicalTurtleSink(graph),
+        baseURI=base_uri,
+        turtle=True,
+    )
+    parser.loadBuf(content)
+    for prefix, namespace in parser._bindings.items():
+        graph.bind(prefix, namespace)
+    return graph
+
+
 def _parse_turtle(content: bytes, path: Path) -> Graph:
     try:
-        graph = Graph()
-        parser = SinkParser(
-            _LexicalTurtleSink(graph),
-            baseURI=graph.absolutize(path.resolve().as_uri()),
-            turtle=True,
+        return _parse_with_lexical_sink(
+            content.decode("utf-8"),
+            base_uri=path.resolve().as_uri(),
         )
-        parser.loadBuf(content.decode("utf-8"))
-        for prefix, namespace in parser._bindings.items():
-            graph.bind(prefix, namespace)
-        return graph
     except Exception as exc:
         raise OntologyParseError(
             "本体 Turtle 文件解析失败",
@@ -96,7 +103,10 @@ def _serialize(graph: Graph, graph_name: str) -> str:
 
 
 def _copy_graph(serialized: str) -> Graph:
-    return Graph().parse(data=serialized, format="nt")
+    return _parse_with_lexical_sink(
+        serialized,
+        base_uri="urn:ontology-agent:snapshot",
+    )
 
 
 @dataclass(frozen=True)
