@@ -75,7 +75,7 @@ OntologyRepository ──发布──> 不可变 RDF 快照
 
 ### 5.2 Concept
 
-领域概念使用 `owl:Class`：
+领域概念同时声明为 `owl:Class` 和项目标记类型 `oa:Concept`。`oa:Concept` 只用于把领域概念与通用词汇中的元模型类区分开，概念的标准 OWL 语义仍由 `owl:Class` 表达。Resolver 只把带有 `oa:Concept` 标记的 OWL 类暴露为业务概念。
 
 - `oa:shortName`：稳定短名。
 - `rdfs:label`：显示名称。
@@ -86,14 +86,16 @@ OntologyRepository ──发布──> 不可变 RDF 快照
 
 ### 5.3 Property 与 Relation
 
-- 数据属性使用 `owl:DatatypeProperty`。
-- 概念关系使用 `owl:ObjectProperty`。
+- 数据属性同时声明为 `owl:DatatypeProperty` 和项目标记类型 `oa:Property`。
+- 概念关系同时声明为 `owl:ObjectProperty` 和项目标记类型 `oa:Relation`。
 - `rdfs:domain` 声明属性或关系的源概念。
 - 数据属性使用 XSD 类型作为 `rdfs:range`。
 - 对象属性使用目标概念作为 `rdfs:range`。
 - 必填、多值、基数等约束由 SHACL 表达，不通过物理数据库字段推断。
 
 Resolver 对外将 `owl:DatatypeProperty` 转换为 `Property` DTO，将 `owl:ObjectProperty` 转换为 `Relation` DTO。
+
+`oa:Property` 和 `oa:Relation` 与 `oa:Concept` 一样只承担业务语义元素的边界标记。Resolver 不把通用词汇自身使用的注解属性或 RDF 谓词暴露为领域属性和关系。
 
 ### 5.4 BusinessRule
 
