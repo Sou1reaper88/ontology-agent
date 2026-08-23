@@ -46,8 +46,8 @@ def test_semantic_collections_coerce_to_tuples_and_preserve_input_order() -> Non
         short_name="First",
         label="First",
         labels=[{"value": "First", "language": "en"}],
-        parent_uris=["urn:parent"],
-        child_uris=["urn:child"],
+        parent_uris=["https://example.invalid/semantic/parent"],
+        child_uris=["https://example.invalid/semantic/child"],
     )
     second = Concept(
         uri="https://example.invalid/domain/Second",
@@ -58,15 +58,20 @@ def test_semantic_collections_coerce_to_tuples_and_preserve_input_order() -> Non
     catalog = SemanticCatalog(concepts=[first, second])
 
     assert first.labels == (LocalizedText(value="First", language="en"),)
-    assert first.parent_uris == ("urn:parent",)
-    assert first.child_uris == ("urn:child",)
+    assert first.parent_uris == ("https://example.invalid/semantic/parent",)
+    assert first.child_uris == ("https://example.invalid/semantic/child",)
     assert catalog.concepts == (first, second)
 
 
 def test_rule_expression_uses_typed_recursive_children() -> None:
     expression = RuleExpression(
         operator=RuleOperator.ALL_OF,
-        children=(RuleExpression(operator=RuleOperator.IS_NULL, property_uri="urn:p"),),
+        children=(
+            RuleExpression(
+                operator=RuleOperator.IS_NULL,
+                property_uri="https://example.invalid/semantic/property",
+            ),
+        ),
     )
 
     assert expression.children[0].operator is RuleOperator.IS_NULL
@@ -74,27 +79,27 @@ def test_rule_expression_uses_typed_recursive_children() -> None:
 
 def test_semantic_dtos_accept_their_public_contract_fields() -> None:
     property_ = Property(
-        uri="urn:property",
+        uri="https://example.invalid/semantic/property",
         short_name="field_name",
         label="Field name",
         labels=(),
-        concept_uri="urn:concept",
-        datatype_uri="urn:datatype",
+        concept_uri="https://example.invalid/semantic/concept",
+        datatype_uri="https://example.invalid/semantic/datatype",
     )
     relation = Relation(
-        uri="urn:relation",
+        uri="https://example.invalid/semantic/relation",
         short_name="related_to",
         label="Related to",
         labels=(),
-        source_concept_uri="urn:concept",
-        target_concept_uri="urn:target",
+        source_concept_uri="https://example.invalid/semantic/concept",
+        target_concept_uri="https://example.invalid/semantic/target-concept",
     )
     rule = BusinessRule(
-        uri="urn:rule",
+        uri="https://example.invalid/semantic/rule",
         short_name="check_record",
         label="Check record",
         labels=(),
-        applies_to_uri="urn:concept",
+        applies_to_uri="https://example.invalid/semantic/concept",
         property_uris=[property_.uri],
         relation_uris=[relation.uri],
         condition=RuleExpression(
@@ -104,7 +109,7 @@ def test_semantic_dtos_accept_their_public_contract_fields() -> None:
         ),
     )
     data_source = DataSource(
-        uri="urn:source",
+        uri="https://example.invalid/semantic/source",
         short_name="source",
         label="Source",
         labels=(),
@@ -112,20 +117,20 @@ def test_semantic_dtos_accept_their_public_contract_fields() -> None:
         capabilities=["read"],
     )
     mapping = PhysicalMapping(
-        uri="urn:mapping",
+        uri="https://example.invalid/semantic/mapping",
         short_name="mapping",
         label="Mapping",
         labels=(),
         semantic_element_uri=property_.uri,
         data_source_uri=data_source.uri,
-        join_path=["urn:join"],
+        join_path=["https://example.invalid/semantic/join"],
     )
 
     assert rule.property_uris == (property_.uri,)
     assert rule.condition is not None
     assert rule.condition.values == (RdfLiteral(lexical_form="neutral"),)
     assert data_source.capabilities == ("read",)
-    assert mapping.join_path == ("urn:join",)
+    assert mapping.join_path == ("https://example.invalid/semantic/join",)
 
 
 def test_vocabulary_uses_the_fixed_namespace_and_terms() -> None:
