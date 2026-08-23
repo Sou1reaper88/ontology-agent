@@ -4,6 +4,7 @@ import inspect
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
+from typing import get_type_hints
 
 import pytest
 from rdflib import Graph
@@ -44,6 +45,7 @@ def _concept(
     uri: str | None = None,
     label: str | None = None,
     description: str | None = None,
+    parent_uris: tuple[str, ...] = (),
 ) -> Concept:
     display_name = label or short_name
     return Concept(
@@ -52,6 +54,7 @@ def _concept(
         label=display_name,
         labels=(LocalizedText(value=display_name, language="en"),),
         description=description,
+        parent_uris=parent_uris,
     )
 
 
@@ -353,6 +356,20 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
     assert {
         name: tuple(inspect.signature(method).parameters) for name, method in public_methods.items()
     } == expected_parameters
+    assert {name: get_type_hints(method) for name, method in public_methods.items()} == {
+        "__init__": {"snapshot": OntologySnapshot, "return": type(None)},
+        "list_concepts": {"return": tuple[Concept, ...]},
+        "get_concept": {"identifier": str, "return": Concept},
+        "search_concepts": {"text": str, "return": tuple[Concept, ...]},
+        "list_properties": {"concept_id": str, "return": tuple[Property, ...]},
+        "resolve_property": {
+            "concept_id": str,
+            "property_id": str,
+            "return": Property,
+        },
+        "list_relations": {"concept_id": str, "return": tuple[Relation, ...]},
+        "list_rules": {"concept_id": str, "return": tuple[BusinessRule, ...]},
+    }
     assert isinstance(resolver.list_concepts(), tuple)
     assert isinstance(resolver.search_concepts("record"), tuple)
     assert isinstance(resolver.list_properties("Record"), tuple)
@@ -371,3 +388,213 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
     assert all(isinstance(value, tuple) for index in indexes for value in index.values())
     assert not isinstance(resolver, Graph)
     assert not any(isinstance(value, Graph) for value in vars(resolver).values())
+
+
+def test_search_concepts_prefers_rank_over_alphabetical_order_with_competing_matches() -> None:
+    query = "rank"
+    resolver = _catalog_resolver(
+        concepts=(
+            _concept("Rank", label="Zero"),
+            _concept("AlphaExactLabel", label=query),
+            _concept("RankPrefix", label="Prefix"),
+            _concept("AlphaContainsLabel", label="contains rank"),
+            _concept("AardvarkDescription", label="Description", description="rank narrative"),
+        )
+    )
+
+    assert tuple(item.short_name for item in resolver.search_concepts(query)) == (
+        "Rank",
+        "AlphaExactLabel",
+        "RankPrefix",
+        "AlphaContainsLabel",
+        "AardvarkDescription",
+    )
+
+
+def test_search_concepts_prefers_exact_uri_over_exact_label_competitor() -> None:
+    query = "https://example.invalid/ontology/RankUri"
+    resolver = _catalog_resolver(
+        concepts=(
+            _concept("ZuluUriWinner", uri=query, label="URI winner"),
+            _concept("AlphaLabelCompetitor", label=query),
+        )
+    )
+
+    assert tuple(item.short_name for item in resolver.search_concepts(query)) == (
+        "ZuluUriWinner",
+        "AlphaLabelCompetitor",
+    )
+
+
+def test_get_concept_prefers_uri_then_short_name_over_label() -> None:
+    uri_identifier = "https://example.invalid/ontology/SharedUri"
+    resolver = _catalog_resolver(
+        concepts=(
+            _concept("UriWinner", uri=uri_identifier, label="URI winner"),
+            _concept("UriLabelCompetitor", label=uri_identifier),
+            _concept("SharedName", label="Short-name winner"),
+            _concept("LabelCompetitor", label="SharedName"),
+        )
+    )
+
+    assert resolver.get_concept(uri_identifier).short_name == "UriWinner"
+    assert resolver.get_concept("SharedName").short_name == "SharedName"
+
+
+def test_child_does_not_inherit_parent_relations_or_rules_and_excludes_incoming() -> None:
+    parent = _concept("Parent")
+    child = _concept("Child", parent_uris=(parent.uri,))
+    target = _concept("Target")
+    parent_relation = Relation(
+        uri="https://example.invalid/ontology/ParentToTarget",
+        short_name="ParentToTarget",
+        label="Parent to target",
+        labels=(LocalizedText(value="Parent to target", language="en"),),
+        source_concept_uri=parent.uri,
+        target_concept_uri=target.uri,
+    )
+    incoming_relation = Relation(
+        uri="https://example.invalid/ontology/TargetToParent",
+        short_name="TargetToParent",
+        label="Target to parent",
+        labels=(LocalizedText(value="Target to parent", language="en"),),
+        source_concept_uri=target.uri,
+        target_concept_uri=parent.uri,
+    )
+    parent_rule = BusinessRule(
+        uri="https://example.invalid/ontology/ParentRule",
+        short_name="ParentRule",
+        label="Parent rule",
+        labels=(LocalizedText(value="Parent rule", language="en"),),
+        applies_to_uri=parent.uri,
+    )
+    resolver = _catalog_resolver(
+        concepts=(child, target, parent),
+        relations=(incoming_relation, parent_relation),
+        rules=(parent_rule,),
+    )
+
+    assert child.parent_uris == (parent.uri,)
+    assert tuple(item.short_name for item in resolver.list_relations("Parent")) == (
+        "ParentToTarget",
+    )
+    assert resolver.list_relations("Child") == ()
+    assert tuple(item.short_name for item in resolver.list_rules("Parent")) == ("ParentRule",)
+    assert resolver.list_rules("Child") == ()
+
+
+def test_list_methods_sort_unordered_catalog_members_by_normalized_short_name_and_uri() -> None:
+    owner = _concept("Owner")
+    alpha_upper = _concept(
+        "Alpha",
+        uri="https://example.invalid/ontology/ZuluAlpha",
+    )
+    alpha_lower = _concept(
+        "alpha",
+        uri="https://example.invalid/ontology/AlphaAlpha",
+    )
+    zeta = _concept("Zeta")
+    resolver = _catalog_resolver(
+        concepts=(zeta, owner, alpha_upper, alpha_lower),
+        properties=(
+            Property(
+                uri="https://example.invalid/ontology/ZuluAttribute",
+                short_name="AlphaAttribute",
+                label="Upper attribute",
+                labels=(LocalizedText(value="Upper attribute", language="en"),),
+                concept_uri=owner.uri,
+                datatype_uri="https://example.invalid/datatype/Number",
+            ),
+            Property(
+                uri="https://example.invalid/ontology/AlphaAttribute",
+                short_name="alphaAttribute",
+                label="Lower attribute",
+                labels=(LocalizedText(value="Lower attribute", language="en"),),
+                concept_uri=owner.uri,
+                datatype_uri="https://example.invalid/datatype/Number",
+            ),
+            Property(
+                uri="https://example.invalid/ontology/ZetaAttribute",
+                short_name="ZetaAttribute",
+                label="Zeta attribute",
+                labels=(LocalizedText(value="Zeta attribute", language="en"),),
+                concept_uri=owner.uri,
+                datatype_uri="https://example.invalid/datatype/Number",
+            ),
+        ),
+        relations=(
+            Relation(
+                uri="https://example.invalid/ontology/ZuluRelation",
+                short_name="AlphaRelation",
+                label="Upper relation",
+                labels=(LocalizedText(value="Upper relation", language="en"),),
+                source_concept_uri=owner.uri,
+                target_concept_uri=zeta.uri,
+            ),
+            Relation(
+                uri="https://example.invalid/ontology/AlphaRelation",
+                short_name="alphaRelation",
+                label="Lower relation",
+                labels=(LocalizedText(value="Lower relation", language="en"),),
+                source_concept_uri=owner.uri,
+                target_concept_uri=zeta.uri,
+            ),
+            Relation(
+                uri="https://example.invalid/ontology/ZetaRelation",
+                short_name="ZetaRelation",
+                label="Zeta relation",
+                labels=(LocalizedText(value="Zeta relation", language="en"),),
+                source_concept_uri=owner.uri,
+                target_concept_uri=zeta.uri,
+            ),
+        ),
+        rules=(
+            BusinessRule(
+                uri="https://example.invalid/ontology/ZuluRule",
+                short_name="AlphaRule",
+                label="Upper rule",
+                labels=(LocalizedText(value="Upper rule", language="en"),),
+                applies_to_uri=owner.uri,
+            ),
+            BusinessRule(
+                uri="https://example.invalid/ontology/AlphaRule",
+                short_name="alphaRule",
+                label="Lower rule",
+                labels=(LocalizedText(value="Lower rule", language="en"),),
+                applies_to_uri=owner.uri,
+            ),
+            BusinessRule(
+                uri="https://example.invalid/ontology/ZetaRule",
+                short_name="ZetaRule",
+                label="Zeta rule",
+                labels=(LocalizedText(value="Zeta rule", language="en"),),
+                applies_to_uri=owner.uri,
+            ),
+        ),
+    )
+
+    assert isinstance(resolver.list_concepts(), tuple)
+    assert tuple(item.short_name for item in resolver.list_concepts()) == (
+        "alpha",
+        "Alpha",
+        "Owner",
+        "Zeta",
+    )
+    assert isinstance(resolver.list_properties("Owner"), tuple)
+    assert tuple(item.short_name for item in resolver.list_properties("Owner")) == (
+        "alphaAttribute",
+        "AlphaAttribute",
+        "ZetaAttribute",
+    )
+    assert isinstance(resolver.list_relations("Owner"), tuple)
+    assert tuple(item.short_name for item in resolver.list_relations("Owner")) == (
+        "alphaRelation",
+        "AlphaRelation",
+        "ZetaRelation",
+    )
+    assert isinstance(resolver.list_rules("Owner"), tuple)
+    assert tuple(item.short_name for item in resolver.list_rules("Owner")) == (
+        "alphaRule",
+        "AlphaRule",
+        "ZetaRule",
+    )
