@@ -22,3 +22,23 @@ class OntologyParseError(OntologyError):
 
 class OntologyValidationError(OntologyError):
     code = "ontology_validation_error"
+
+
+class ConceptNotFoundError(OntologyError):
+    code = "concept_not_found"
+
+
+class PropertyNotFoundError(OntologyError):
+    code = "property_not_found"
+
+
+class AmbiguousIdentifierError(OntologyError):
+    code = "ambiguous_identifier"
+
+
+class InvalidRuleExpressionError(OntologyError):
+    code = "invalid_rule_expression"
+
+
+class InvalidOntologyReferenceError(OntologyError):
+    code = "invalid_ontology_reference"

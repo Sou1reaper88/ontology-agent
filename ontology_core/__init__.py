@@ -1,8 +1,13 @@
 from ontology_core.errors import (
+    AmbiguousIdentifierError,
+    ConceptNotFoundError,
+    InvalidOntologyReferenceError,
+    InvalidRuleExpressionError,
     OntologyError,
     OntologyParseError,
     OntologyValidationError,
     PackageNotFoundError,
+    PropertyNotFoundError,
 )
 from ontology_core.manifest import load_manifest, resolve_package_files
 from ontology_core.models import (
@@ -13,9 +18,31 @@ from ontology_core.models import (
     ValidationReport,
 )
 from ontology_core.repository import OntologyRepository
+from ontology_core.semantic_models import (
+    BusinessRule,
+    Concept,
+    DataSource,
+    LocalizedText,
+    PhysicalMapping,
+    Property,
+    RdfLiteral,
+    Relation,
+    RuleExpression,
+    RuleOperator,
+    SemanticCatalog,
+    SemanticElement,
+)
 from ontology_core.validator import OntologyValidator
 
 __all__ = [
+    "AmbiguousIdentifierError",
+    "BusinessRule",
+    "Concept",
+    "ConceptNotFoundError",
+    "DataSource",
+    "InvalidOntologyReferenceError",
+    "InvalidRuleExpressionError",
+    "LocalizedText",
     "OntologyError",
     "OntologyParseError",
     "OntologyRepository",
@@ -26,6 +53,15 @@ __all__ = [
     "PackageInfo",
     "PackageManifest",
     "PackageNotFoundError",
+    "PhysicalMapping",
+    "Property",
+    "PropertyNotFoundError",
+    "RdfLiteral",
+    "Relation",
+    "RuleExpression",
+    "RuleOperator",
+    "SemanticCatalog",
+    "SemanticElement",
     "ValidationReport",
     "load_manifest",
     "resolve_package_files",
