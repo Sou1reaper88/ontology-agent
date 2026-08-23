@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,30 @@ def test_failed_reload_keeps_previous_snapshot(
         repository.publish(broken)
 
     assert repository.current().info.sha256 == previous.sha256
+
+
+def test_malformed_turtle_error_does_not_expose_source_or_path(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "malformed-turtle"
+    _copy_package(valid_package_dir, package)
+    secret = "fictional-secret-turtle"
+    package.joinpath("domain.ttl").write_text(
+        "@prefix ex: <https://example.invalid/ontology/> .\n" f"ex:{secret} ex:predicate [\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OntologyParseError) as caught:
+        OntologyRepository().publish(package)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False)
+    assert caught.value.details["error_type"] == "turtle_syntax_error"
+    assert caught.value.details["role"] == "domain"
+    assert isinstance(caught.value.details.get("line"), int)
+    assert isinstance(caught.value.details.get("column"), int)
+    assert secret not in serialized
+    assert str(package.resolve()) not in serialized
 
 
 def test_invalid_semantic_reload_keeps_previous_catalog(

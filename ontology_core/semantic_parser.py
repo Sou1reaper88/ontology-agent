@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TypeVar
 from unicodedata import normalize
 from urllib.parse import unquote, urlsplit
@@ -92,6 +94,19 @@ _CREDENTIAL_NAMES = {
     "secret",
     "connectionstring",
 }
+_URI_SEGMENT_SEPARATOR = re.compile(r"[/#:]+")
+
+MAX_RULE_EXPRESSION_DEPTH = 64
+MAX_RULE_EXPRESSION_NODES = 1024
+MAX_RULE_COLLECTION_ITEMS = 1024
+
+
+@dataclass
+class _ExpressionParseContext:
+    property_uris: set[str]
+    active: set[Identifier] = field(default_factory=set)
+    completed: dict[Identifier, RuleExpression] = field(default_factory=dict)
+    nodes: set[Identifier] = field(default_factory=set)
 
 
 class _InvalidReferenceError(ValueError):
@@ -426,6 +441,10 @@ def _collection_literals(
     seen: set[Identifier] = set()
     current = head
     while current != RDF.nil:
+        if len(values) >= MAX_RULE_COLLECTION_ITEMS:
+            raise ValueError(
+                f"RDF Collection exceeds maximum item count of {MAX_RULE_COLLECTION_ITEMS}"
+            )
         if not isinstance(current, (URIRef, BNode)) or current in seen:
             raise ValueError("RDF Collection contains a cycle or malformed tail")
         seen.add(current)
@@ -490,11 +509,23 @@ def _expression_key(expression: RuleExpression) -> tuple[object, ...]:
 def _parse_expression(
     graph: Graph,
     node: Identifier,
-    property_uris: set[str],
-    stack: set[Identifier],
+    context: _ExpressionParseContext,
+    *,
+    depth: int,
 ) -> RuleExpression:
-    if node in stack:
+    if depth > MAX_RULE_EXPRESSION_DEPTH:
+        raise ValueError(f"Rule expression exceeds maximum depth of {MAX_RULE_EXPRESSION_DEPTH}")
+    if node in context.active:
         raise ValueError("Rule expression contains a recursive condition cycle")
+    completed = context.completed.get(node)
+    if completed is not None:
+        return completed
+    if node not in context.nodes:
+        if len(context.nodes) >= MAX_RULE_EXPRESSION_NODES:
+            raise ValueError(
+                f"Rule expression exceeds maximum node count of {MAX_RULE_EXPRESSION_NODES}"
+            )
+        context.nodes.add(node)
     operators = [
         operator
         for rdf_type, operator in _OPERATOR_TYPES.items()
@@ -504,58 +535,79 @@ def _parse_expression(
         raise ValueError("Rule expression requires exactly one operator type")
     operator = operators[0]
     _validate_expression_structure(graph, node, operator)
-    next_stack = stack | {node}
-    if operator in (RuleOperator.ALL_OF, RuleOperator.ANY_OF, RuleOperator.NOT):
-        arguments = tuple(graph.objects(node, ARGUMENT))
-        if operator is RuleOperator.NOT:
-            valid_count = len(arguments) == 1
-            count_text = "exactly one"
+    context.active.add(node)
+    try:
+        if operator in (RuleOperator.ALL_OF, RuleOperator.ANY_OF, RuleOperator.NOT):
+            arguments = tuple(graph.objects(node, ARGUMENT))
+            if operator is RuleOperator.NOT:
+                valid_count = len(arguments) == 1
+                count_text = "exactly one"
+            else:
+                valid_count = len(arguments) >= 2
+                count_text = "at least two"
+            if not valid_count:
+                raise ValueError(f"{operator.value} requires {count_text} arguments")
+            children = tuple(
+                _parse_expression(graph, argument, context, depth=depth + 1)
+                for argument in arguments
+            )
+            if operator is not RuleOperator.NOT:
+                children = tuple(sorted(children, key=_expression_key))
+            expression = RuleExpression(operator=operator, children=children)
         else:
-            valid_count = len(arguments) >= 2
-            count_text = "at least two"
-        if not valid_count:
-            raise ValueError(f"{operator.value} requires {count_text} arguments")
-        children = tuple(
-            _parse_expression(graph, argument, property_uris, next_stack) for argument in arguments
-        )
-        if operator is not RuleOperator.NOT:
-            children = tuple(sorted(children, key=_expression_key))
-        return RuleExpression(operator=operator, children=children)
-
-    property_uri = _single_uri(graph, node, LEFT_PROPERTY, "left property")
-    if property_uri not in property_uris:
-        raise ValueError(f"Referenced property does not exist: {property_uri}")
-    if operator is RuleOperator.IS_NULL:
-        if any(tuple(graph.objects(node, predicate)) for predicate in (VALUE, VALUES, PARAMETER)):
-            raise ValueError("is_null does not accept a value or parameter")
-        return RuleExpression(operator=operator, property_uri=property_uri)
-    if operator in (RuleOperator.BETWEEN, RuleOperator.IN):
-        heads = tuple(graph.objects(node, VALUES))
-        if len(heads) != 1:
-            raise ValueError("Rule expression requires exactly one RDF Collection values")
-        return RuleExpression(
-            operator=operator,
-            property_uri=property_uri,
-            values=_collection_literals(
-                graph,
-                heads[0],
-                minimum=1 if operator is RuleOperator.IN else 2,
-                exact=2 if operator is RuleOperator.BETWEEN else None,
-            ),
-        )
-    literal_values = tuple(graph.objects(node, VALUE))
-    parameters = tuple(graph.objects(node, PARAMETER))
-    if len(literal_values) == 1 and isinstance(literal_values[0], Literal) and not parameters:
-        return RuleExpression(
-            operator=operator,
-            property_uri=property_uri,
-            values=(_literal(literal_values[0]),),
-        )
-    if len(parameters) == 1 and isinstance(parameters[0], Literal) and not literal_values:
-        return RuleExpression(
-            operator=operator, property_uri=property_uri, parameter=str(parameters[0])
-        )
-    raise ValueError("Comparison requires exactly one literal value or parameter")
+            property_uri = _single_uri(graph, node, LEFT_PROPERTY, "left property")
+            if property_uri not in context.property_uris:
+                raise ValueError(f"Referenced property does not exist: {property_uri}")
+            if operator is RuleOperator.IS_NULL:
+                if any(
+                    tuple(graph.objects(node, predicate))
+                    for predicate in (VALUE, VALUES, PARAMETER)
+                ):
+                    raise ValueError("is_null does not accept a value or parameter")
+                expression = RuleExpression(operator=operator, property_uri=property_uri)
+            elif operator in (RuleOperator.BETWEEN, RuleOperator.IN):
+                heads = tuple(graph.objects(node, VALUES))
+                if len(heads) != 1:
+                    raise ValueError("Rule expression requires exactly one RDF Collection values")
+                expression = RuleExpression(
+                    operator=operator,
+                    property_uri=property_uri,
+                    values=_collection_literals(
+                        graph,
+                        heads[0],
+                        minimum=1 if operator is RuleOperator.IN else 2,
+                        exact=2 if operator is RuleOperator.BETWEEN else None,
+                    ),
+                )
+            else:
+                literal_values = tuple(graph.objects(node, VALUE))
+                parameters = tuple(graph.objects(node, PARAMETER))
+                if (
+                    len(literal_values) == 1
+                    and isinstance(literal_values[0], Literal)
+                    and not parameters
+                ):
+                    expression = RuleExpression(
+                        operator=operator,
+                        property_uri=property_uri,
+                        values=(_literal(literal_values[0]),),
+                    )
+                elif (
+                    len(parameters) == 1
+                    and isinstance(parameters[0], Literal)
+                    and not literal_values
+                ):
+                    expression = RuleExpression(
+                        operator=operator,
+                        property_uri=property_uri,
+                        parameter=str(parameters[0]),
+                    )
+                else:
+                    raise ValueError("Comparison requires exactly one literal value or parameter")
+    finally:
+        context.active.remove(node)
+    context.completed[node] = expression
+    return expression
 
 
 def _forbidden_predicates(graph: Graph, subject: URIRef, violations: list[dict[str, str]]) -> None:
@@ -573,17 +625,17 @@ def _forbidden_predicates(graph: Graph, subject: URIRef, violations: list[dict[s
 
 
 def _normalized_predicate_local_name(predicate: URIRef) -> str:
-    """Return a normalized final predicate segment for URL and URN identifiers."""
-    parsed = urlsplit(str(predicate))
-    if parsed.fragment:
-        local_name = parsed.fragment
-    elif parsed.scheme.casefold() == "urn":
-        local_name = parsed.path.rsplit(":", 1)[-1]
-    elif parsed.path:
-        local_name = parsed.path.rsplit("/", 1)[-1]
-    else:
-        local_name = str(predicate).rsplit(":", 1)[-1]
-    return normalize("NFKC", unquote(local_name)).replace("-", "").replace("_", "").casefold()
+    """Return a normalized final non-empty segment for any URI scheme."""
+    parsed_uri = urlsplit(str(predicate))
+    encoded_source = parsed_uri.fragment if parsed_uri.fragment else parsed_uri.path
+    decoded_source = unquote(encoded_source)
+    parsed_source = urlsplit(decoded_source)
+    local_source = parsed_source.fragment if parsed_source.fragment else parsed_source.path
+    segments = [
+        segment.strip() for segment in _URI_SEGMENT_SEPARATOR.split(local_source) if segment.strip()
+    ]
+    local_name = segments[-1] if segments else ""
+    return normalize("NFKC", local_name).strip().replace("-", "").replace("_", "").casefold()
 
 
 def parse_catalog(graph: Graph) -> SemanticCatalog:
@@ -826,7 +878,12 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             )
         elif nodes:
             try:
-                condition = _parse_expression(graph, nodes[0], marked_property_uris, set())
+                condition = _parse_expression(
+                    graph,
+                    nodes[0],
+                    _ExpressionParseContext(marked_property_uris),
+                    depth=1,
+                )
             except _InvalidReferencesError as exc:
                 for error in exc.errors:
                     violations.append(

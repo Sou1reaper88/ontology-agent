@@ -1,13 +1,14 @@
 from pathlib import Path
 
 import pytest
-from rdflib import Graph, Literal, URIRef
+from rdflib import BNode, Graph, Literal, URIRef
 from rdflib.namespace import RDF
 
+from ontology_core import semantic_parser
 from ontology_core.errors import OntologyValidationError
 from ontology_core.semantic_models import LocalizedText, RuleOperator
 from ontology_core.semantic_parser import parse_catalog
-from ontology_core.vocabulary import ARGUMENT, CONDITION, LEFT_PROPERTY, OA, VALUE
+from ontology_core.vocabulary import ARGUMENT, CONDITION, LEFT_PROPERTY, OA, VALUE, VALUES
 
 
 def _catalog_graph(valid_package_dir: Path) -> Graph:
@@ -791,6 +792,15 @@ def _marker_graph(marker: str, predicate: str) -> Graph:
     (
         "https://example.invalid/vocabulary#CONNECTION-string",
         "https://example.invalid/vocabulary/USER_name",
+        "https://example.invalid/password/",
+        "https://example.invalid/password?x=1",
+        "https://example.invalid/password%3Fx=1",
+        "https://example.invalid/password/?x=1",
+        "https://example.invalid/vocabulary/%20User_name%20/",
+        "https://example.invalid/vocabulary/%70%61%73%73%77%6f%72%64/",
+        "https://example.invalid/vocabulary#%EF%BC%B4%EF%BC%AF%EF%BC%AB%EF%BC%A5%EF%BC%AE",
+        "tag:example:password",
+        "custom:example%3Asecret",
         "urn:example:connection-string",
         "urn:example:SeCrEt",
     ),
@@ -808,8 +818,20 @@ def test_parse_catalog_rejects_credential_predicate_uri_variants(
 
 
 @pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
-def test_parse_catalog_allows_non_credential_predicate_with_similar_name(marker: str) -> None:
-    catalog = parse_catalog(_marker_graph(marker, "urn:example:tokenized"))
+@pytest.mark.parametrize(
+    "predicate",
+    (
+        "urn:example:tokenized",
+        "https://example.invalid/platformType?field=password",
+        "https://example.invalid/platformType?field=%23password",
+        "https://example.invalid/platformType?field=%3Asecret",
+    ),
+)
+def test_parse_catalog_allows_non_credential_predicate_with_similar_name(
+    marker: str,
+    predicate: str,
+) -> None:
+    catalog = parse_catalog(_marker_graph(marker, predicate))
 
     if marker == "oa:DataSource":
         assert len(catalog.data_sources) == 1
@@ -876,6 +898,123 @@ def test_parse_catalog_rejects_malformed_or_cyclic_rdf_collection(collection: st
     assert [item["code"] for item in caught.value.details["violations"]] == [
         "invalid_rule_expression"
     ]
+
+
+def _deep_not_graph(wrapper_count: int) -> Graph:
+    graph = _rule_graph("[ a oa:IsNull ; oa:leftProperty ex:Metric ]")
+    rule = URIRef("https://example.invalid/ontology/Rule")
+    metric = URIRef("https://example.invalid/ontology/Metric")
+    graph.remove((rule, CONDITION, None))
+    nodes = [
+        URIRef(f"https://example.invalid/ontology/condition/{index}")
+        for index in range(wrapper_count + 1)
+    ]
+    for index in range(wrapper_count):
+        graph.add((nodes[index], RDF.type, OA.Not))
+        graph.add((nodes[index], ARGUMENT, nodes[index + 1]))
+    graph.add((nodes[-1], RDF.type, OA.IsNull))
+    graph.add((nodes[-1], LEFT_PROPERTY, metric))
+    graph.add((rule, CONDITION, nodes[0]))
+    return graph
+
+
+def test_rule_expression_depth_budget_accepts_boundary_and_rejects_next_level() -> None:
+    maximum = semantic_parser.MAX_RULE_EXPRESSION_DEPTH
+    assert maximum == 64
+    assert parse_catalog(_deep_not_graph(maximum - 1)).rules[0].condition is not None
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_deep_not_graph(maximum))
+
+    assert caught.value.details["violations"] == [
+        {
+            "code": "invalid_rule_expression",
+            "uri": "https://example.invalid/ontology/Rule",
+            "path": str(CONDITION),
+            "message": f"Rule expression exceeds maximum depth of {maximum}",
+        }
+    ]
+
+
+def test_very_deep_rule_expression_returns_stable_violation() -> None:
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_deep_not_graph(1200))
+
+    serialized = str(caught.value.details)
+    assert "maximum depth" in serialized
+    assert "RecursionError" not in serialized
+    assert "_:" not in serialized
+
+
+def _shared_dag_graph(*, include_extra_leaf: bool) -> Graph:
+    graph = _rule_graph("[ a oa:IsNull ; oa:leftProperty ex:Metric ]")
+    namespace = "https://example.invalid/ontology/condition/"
+    rule = URIRef("https://example.invalid/ontology/Rule")
+    metric = URIRef("https://example.invalid/ontology/Metric")
+    root = URIRef(namespace + "root")
+    left = URIRef(namespace + "left")
+    right = URIRef(namespace + "right")
+    shared = URIRef(namespace + "shared")
+    graph.remove((rule, CONDITION, None))
+    graph.add((rule, CONDITION, root))
+    graph.add((root, RDF.type, OA.AllOf))
+    graph.add((root, ARGUMENT, left))
+    graph.add((root, ARGUMENT, right))
+    for parent in (left, right):
+        graph.add((parent, RDF.type, OA.Not))
+        graph.add((parent, ARGUMENT, shared))
+    graph.add((shared, RDF.type, OA.IsNull))
+    graph.add((shared, LEFT_PROPERTY, metric))
+    if include_extra_leaf:
+        extra = URIRef(namespace + "extra")
+        graph.add((root, ARGUMENT, extra))
+        graph.add((extra, RDF.type, OA.IsNull))
+        graph.add((extra, LEFT_PROPERTY, metric))
+    return graph
+
+
+def test_rule_expression_node_budget_counts_shared_dag_node_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(semantic_parser, "MAX_RULE_EXPRESSION_NODES", 4)
+    assert parse_catalog(_shared_dag_graph(include_extra_leaf=False)).rules[0].condition is not None
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_shared_dag_graph(include_extra_leaf=True))
+    assert "maximum node count of 4" in str(caught.value.details)
+
+
+def _collection_graph(item_count: int) -> Graph:
+    graph = _rule_graph("[ a oa:IsNull ; oa:leftProperty ex:Metric ]")
+    rule = URIRef("https://example.invalid/ontology/Rule")
+    metric = URIRef("https://example.invalid/ontology/Metric")
+    expression = URIRef("https://example.invalid/ontology/condition/in")
+    graph.remove((rule, CONDITION, None))
+    graph.add((rule, CONDITION, expression))
+    graph.add((expression, RDF.type, OA.In))
+    graph.add((expression, LEFT_PROPERTY, metric))
+    head = BNode()
+    graph.add((expression, VALUES, head))
+    current = head
+    for index in range(item_count):
+        graph.add((current, RDF.first, Literal(f"value-{index}")))
+        tail = RDF.nil if index == item_count - 1 else BNode()
+        graph.add((current, RDF.rest, tail))
+        current = tail
+    return graph
+
+
+def test_rule_collection_item_budget_accepts_boundary_and_rejects_next_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(semantic_parser, "MAX_RULE_COLLECTION_ITEMS", 3)
+    condition = parse_catalog(_collection_graph(3)).rules[0].condition
+    assert condition is not None
+    assert len(condition.values) == 3
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_collection_graph(4))
+    assert "maximum item count of 3" in str(caught.value.details)
 
 
 @pytest.mark.parametrize(

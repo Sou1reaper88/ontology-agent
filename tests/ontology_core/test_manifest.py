@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,29 @@ def test_missing_manifest_raises_stable_error(tmp_path: Path) -> None:
     with pytest.raises(PackageNotFoundError) as caught:
         load_manifest(tmp_path)
     assert caught.value.code == "package_not_found"
+
+
+def test_malformed_manifest_error_does_not_expose_source_or_path(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    secret = "fictional-secret-manifest"
+    package.joinpath("manifest.yaml").write_text(
+        f"package_id: [{secret}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OntologyParseError) as caught:
+        load_manifest(package)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False)
+    assert caught.value.details == {
+        "error_type": "yaml_syntax_error",
+        "role": "manifest",
+        "line": 2,
+        "column": 1,
+    }
+    assert secret not in serialized
+    assert str(package.resolve()) not in serialized
 
 
 def test_manifest_rejects_parent_path(tmp_path: Path) -> None:

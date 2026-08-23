@@ -109,7 +109,11 @@ def test_malformed_package_json_error_is_stable(
 ) -> None:
     broken = tmp_path / "broken"
     _copy_package(valid_package_dir, broken)
-    broken.joinpath("manifest.yaml").write_text("package_id: [\n", encoding="utf-8")
+    secret = "fictional-secret-cli"
+    broken.joinpath("manifest.yaml").write_text(
+        f"package_id: [{secret}\n",
+        encoding="utf-8",
+    )
 
     assert main(["validate", str(broken), "--json"]) == 1
     output = capsys.readouterr()
@@ -121,17 +125,75 @@ def test_malformed_package_json_error_is_stable(
         "code": "ontology_parse_error",
         "message": "本体包清单解析失败",
         "details": {
-            "path": str((broken / "manifest.yaml").resolve()),
-            "reason": (
-                "while parsing a flow node\n"
-                "expected the node content, but found '<stream end>'\n"
-                '  in "<unicode string>", line 2, column 1:\n'
-                "    \n"
-                "    ^"
-            ),
+            "error_type": "yaml_syntax_error",
+            "role": "manifest",
+            "line": 2,
+            "column": 1,
         },
     }
     assert "traceback" not in output.err.casefold()
+    assert secret not in output.err
+    assert str(broken.resolve()) not in output.err
+
+
+def test_malformed_turtle_cli_error_does_not_expose_source_or_path(
+    valid_package_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    broken = tmp_path / "broken-turtle"
+    _copy_package(valid_package_dir, broken)
+    secret = "fictional-secret-cli-turtle"
+    broken.joinpath("domain.ttl").write_text(
+        "@prefix ex: <https://example.invalid/ontology/> .\n" f"ex:{secret} ex:predicate [\n",
+        encoding="utf-8",
+    )
+
+    assert main(["validate", str(broken), "--json"]) == 1
+    output = capsys.readouterr()
+
+    assert output.out == ""
+    payload = json.loads(output.err)
+    assert payload["details"]["error_type"] == "turtle_syntax_error"
+    assert payload["details"]["role"] == "domain"
+    assert secret not in output.err
+    assert str(broken.resolve()) not in output.err
+    assert "traceback" not in output.err.casefold()
+
+
+def test_deep_rule_cli_error_is_stable_without_traceback(
+    valid_package_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    broken = tmp_path / "deep-rule"
+    _copy_package(valid_package_dir, broken)
+    wrappers = 1200
+    lines = [
+        "@prefix ex: <https://example.invalid/ontology/> .",
+        "@prefix oa: <urn:ontology-agent:core#> .",
+        "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+        'ex:Rule a oa:BusinessRule ; oa:shortName "Rule" ; rdfs:label "Rule" ;',
+        "    oa:appliesTo ex:Record ; oa:condition ex:condition0 .",
+    ]
+    lines.extend(
+        f"ex:condition{index} a oa:Not ; oa:argument ex:condition{index + 1} ."
+        for index in range(wrappers)
+    )
+    lines.append(f"ex:condition{wrappers} a oa:IsNull ; oa:leftProperty ex:Metric .")
+    broken.joinpath("rules.ttl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    assert main(["validate", str(broken), "--json"]) == 1
+    output = capsys.readouterr()
+
+    assert output.out == ""
+    payload = json.loads(output.err)
+    assert payload["code"] == "ontology_validation_error"
+    assert "maximum depth of 64" in output.err
+    assert "traceback" not in output.err.casefold()
+    assert "RecursionError" not in output.err
+    assert str(broken.resolve()) not in output.err
+    assert "_:" not in output.err
 
 
 def test_inspect_counts_excludes_identifiers_and_source_path(

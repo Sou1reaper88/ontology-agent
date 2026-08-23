@@ -160,11 +160,38 @@ def test_report_conversion_failure_raises_parse_error(
     data = Graph().parse(data=_UNLABELLED_TTL, format="turtle")
     shapes = Graph().parse(data=_MULTI_MESSAGE_SHAPES_TTL, format="turtle")
 
+    secret = "fictional-secret-report"
+
     def fail_canonicalization(_graph: Graph):
-        raise RuntimeError("canonicalization failed")
+        raise RuntimeError(secret)
 
     monkeypatch.setattr("ontology_core.validator.to_canonical_graph", fail_canonicalization)
 
     with pytest.raises(OntologyParseError) as caught:
         OntologyValidator().validate(data, shapes)
-    assert caught.value.details["reason"] == "canonicalization failed"
+    assert caught.value.details == {
+        "error_type": "shacl_report_error",
+        "role": "shapes",
+    }
+    assert secret not in str(caught.value.details)
+
+
+def test_shacl_execution_failure_does_not_expose_underlying_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = Graph().parse(data=_UNLABELLED_TTL, format="turtle")
+    shapes = Graph().parse(data=_MULTI_MESSAGE_SHAPES_TTL, format="turtle")
+    secret = "fictional-secret-validation"
+
+    def fail_validation(**_kwargs):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr("ontology_core.validator.validate", fail_validation)
+
+    with pytest.raises(OntologyParseError) as caught:
+        OntologyValidator().validate(data, shapes)
+    assert caught.value.details == {
+        "error_type": "shacl_execution_error",
+        "role": "shapes",
+    }
+    assert secret not in str(caught.value.details)

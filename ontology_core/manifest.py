@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from ontology_core.errors import OntologyParseError, PackageNotFoundError
 from ontology_core.models import PackageFileRole, PackageManifest
+from ontology_core.parse_diagnostics import safe_parse_details
 
 
 def _load_manifest_with_bytes(package_dir: str | Path) -> tuple[PackageManifest, bytes]:
@@ -21,15 +22,28 @@ def _load_manifest_with_bytes(package_dir: str | Path) -> tuple[PackageManifest,
     except OSError as exc:
         raise OntologyParseError(
             "本体包清单读取失败",
-            details={"path": str(path), "reason": str(exc)},
+            details=safe_parse_details("io_error", "manifest"),
         ) from exc
     try:
-        raw = yaml.safe_load(content.decode("utf-8")) or {}
-        return PackageManifest.model_validate(raw), content
-    except (UnicodeDecodeError, yaml.YAMLError, ValidationError) as exc:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
         raise OntologyParseError(
             "本体包清单解析失败",
-            details={"path": str(path), "reason": str(exc)},
+            details=safe_parse_details("invalid_utf8", "manifest"),
+        ) from exc
+    try:
+        raw = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        raise OntologyParseError(
+            "本体包清单解析失败",
+            details=safe_parse_details("yaml_syntax_error", "manifest", exc),
+        ) from exc
+    try:
+        return PackageManifest.model_validate(raw), content
+    except ValidationError as exc:
+        raise OntologyParseError(
+            "本体包清单解析失败",
+            details=safe_parse_details("manifest_schema_error", "manifest"),
         ) from exc
 
 

@@ -7,6 +7,7 @@ from rdflib.namespace import RDF, SH
 
 from ontology_core.errors import OntologyParseError
 from ontology_core.models import OntologyViolation, ValidationReport
+from ontology_core.parse_diagnostics import safe_parse_details
 
 
 def _node_text(value) -> str:
@@ -38,7 +39,7 @@ class OntologyValidator:
         except Exception as exc:
             raise OntologyParseError(
                 "SHACL 校验执行失败",
-                details={"reason": str(exc)},
+                details=safe_parse_details("shacl_execution_error", "shapes"),
             ) from exc
 
         if not isinstance(result_graph, Graph):
@@ -71,5 +72,5 @@ class OntologyValidator:
         except Exception as exc:
             raise OntologyParseError(
                 "SHACL 校验报告解析失败",
-                details={"reason": str(exc)},
+                details=safe_parse_details("shacl_report_error", "shapes"),
             ) from exc

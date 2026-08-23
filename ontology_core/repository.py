@@ -17,6 +17,7 @@ from ontology_core.errors import (
 )
 from ontology_core.manifest import _load_manifest_with_bytes, resolve_package_files
 from ontology_core.models import PackageFileRole, PackageInfo
+from ontology_core.parse_diagnostics import safe_parse_details
 from ontology_core.semantic_models import SemanticCatalog
 from ontology_core.semantic_parser import parse_catalog
 from ontology_core.validator import OntologyValidator
@@ -36,7 +37,7 @@ def _read_package_files(files: Mapping[PackageFileRole, Path]) -> dict[PackageFi
         except OSError as exc:
             raise OntologyParseError(
                 "本体包文件读取失败",
-                details={"role": role.value, "path": str(path), "reason": str(exc)},
+                details=safe_parse_details("io_error", role.value),
             ) from exc
     return contents
 
@@ -63,16 +64,20 @@ def _parse_with_lexical_sink(content: str, *, base_uri: str) -> Graph:
     return graph
 
 
-def _parse_turtle(content: bytes, path: Path) -> Graph:
+def _parse_turtle(content: bytes, path: Path, role: PackageFileRole) -> Graph:
     try:
-        return _parse_with_lexical_sink(
-            content.decode("utf-8"),
-            base_uri=path.resolve().as_uri(),
-        )
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OntologyParseError(
+            "本体 Turtle 文件解析失败",
+            details=safe_parse_details("invalid_utf8", role.value),
+        ) from exc
+    try:
+        return _parse_with_lexical_sink(text, base_uri=path.resolve().as_uri())
     except Exception as exc:
         raise OntologyParseError(
             "本体 Turtle 文件解析失败",
-            details={"path": str(path), "reason": str(exc)},
+            details=safe_parse_details("turtle_syntax_error", role.value, exc),
         ) from exc
 
 
@@ -98,7 +103,7 @@ def _serialize(graph: Graph, graph_name: str) -> str:
     except Exception as exc:
         raise OntologyParseError(
             "本体图序列化失败",
-            details={"graph": graph_name, "reason": str(exc)},
+            details={"error_type": "serialization_error", "graph": graph_name},
         ) from exc
 
 
@@ -141,10 +146,11 @@ class OntologyRepository:
             PackageFileRole.MAPPINGS,
             PackageFileRole.RULES,
         ):
-            data_graph += _parse_turtle(file_bytes[role], files[role])
+            data_graph += _parse_turtle(file_bytes[role], files[role], role)
         shapes_graph = _parse_turtle(
             file_bytes[PackageFileRole.SHAPES],
             files[PackageFileRole.SHAPES],
+            PackageFileRole.SHAPES,
         )
         report = self._validator.validate(data_graph, shapes_graph)
         if not report.conforms:
