@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import ontology_core.authoring as authoring
 from ontology_core.authoring import initialize_package
 from ontology_core.errors import OntologyParseError
 from ontology_core.manifest import load_manifest
@@ -69,6 +70,10 @@ def test_initialize_package_creates_stable_blank_publishable_package(tmp_path: P
         ("neutral.package", "version\nnext"),
         ("name\rafter", "0.1.0"),
         ("neutral.package", "version\rafter"),
+        ("name\u0085next", "0.1.0"),
+        ("neutral.package", "version\u0085next"),
+        ("name\u2028next", "0.1.0"),
+        ("neutral.package", "version\u2029next"),
     ],
 )
 def test_initialize_package_serializes_manifest_identifiers_without_yaml_injection(
@@ -89,8 +94,13 @@ def test_initialize_package_serializes_manifest_identifiers_without_yaml_injecti
     assert manifest.package_id == package_id
     assert manifest.version == version
     assert load_manifest(package_dir) == manifest
+    info = OntologyRepository().publish(package_dir)
+    assert (info.package_id, info.version) == (package_id, version)
     assert b"\r" not in manifest_bytes
     assert manifest_bytes.endswith(b"\n")
+    assert b"\xc2\x85" not in manifest_bytes
+    assert b"\xe2\x80\xa8" not in manifest_bytes
+    assert b"\xe2\x80\xa9" not in manifest_bytes
 
 
 @pytest.mark.parametrize(
@@ -163,25 +173,34 @@ def test_initialize_package_refuses_non_empty_directory_without_modification(
     assert sentinel.read_bytes() == before
 
 
-def test_initialize_package_preserves_a_file_inserted_after_empty_check(
+def test_failed_initialization_never_deletes_a_rebound_final_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package_dir = tmp_path / "package"
     core_path = package_dir / "core.ttl"
-    user_bytes = b"user-owned\n"
-    original_open = Path.open
-    inserted = False
+    user_bytes = b"user-owned-after-rebind\n"
+    original_write = authoring._write_exclusive
+    original_unlink = Path.unlink
+    rebound = False
 
-    def interleaving_open(path: Path, mode: str = "r", *args, **kwargs):
-        nonlocal inserted
-        if path == core_path and mode == "x" and not inserted:
-            inserted = True
-            path.parent.mkdir(parents=True, exist_ok=True)
+    def fail_after_core(path: Path, content: str, created) -> None:
+        if path.name == "domain.ttl":
+            package_dir.mkdir(parents=True, exist_ok=True)
+            core_path.write_bytes(user_bytes)
+            raise OSError("simulated staged write failure")
+        original_write(path, content, created)
+
+    def rebind_before_unlink(path: Path, *args, **kwargs) -> None:
+        nonlocal rebound
+        if path == core_path and not rebound:
+            rebound = True
+            original_unlink(path)
             path.write_bytes(user_bytes)
-        return original_open(path, mode, *args, **kwargs)
+        original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "open", interleaving_open)
+    monkeypatch.setattr(authoring, "_write_exclusive", fail_after_core)
+    monkeypatch.setattr(Path, "unlink", rebind_before_unlink)
 
     with pytest.raises(OntologyParseError):
         initialize_package(
@@ -192,11 +211,59 @@ def test_initialize_package_preserves_a_file_inserted_after_empty_check(
 
     assert core_path.read_bytes() == user_bytes
     assert not package_dir.joinpath("manifest.yaml").exists()
-    assert not package_dir.joinpath("domain.ttl").exists()
-    assert not package_dir.joinpath("mappings.ttl").exists()
-    assert not package_dir.joinpath("rules.ttl").exists()
-    assert not package_dir.joinpath("shapes.ttl").exists()
-    assert not package_dir.joinpath(".ontology-agent-init.lock").exists()
+
+
+def test_commit_preserves_user_file_inserted_before_directory_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    core_path = package_dir / "core.ttl"
+    user_bytes = b"user-owned-before-commit\n"
+    original_rename = Path.rename
+    inserted = False
+
+    def competing_rename(path: Path, target: Path):
+        nonlocal inserted
+        if target == package_dir and not inserted:
+            inserted = True
+            package_dir.mkdir()
+            core_path.write_bytes(user_bytes)
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", competing_rename)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert core_path.read_bytes() == user_bytes
+    assert not package_dir.joinpath("manifest.yaml").exists()
+    assert not any(path.name.startswith(".package.staging-") for path in tmp_path.iterdir())
+    assert not tmp_path.joinpath(".package.ontology-agent-init.lock").exists()
+
+
+@pytest.mark.parametrize("create_target", [False, True])
+def test_initialize_package_commits_from_staging_for_absent_or_empty_targets(
+    tmp_path: Path,
+    create_target: bool,
+) -> None:
+    package_dir = tmp_path / "package"
+    if create_target:
+        package_dir.mkdir()
+
+    initialize_package(
+        package_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+
+    assert load_manifest(package_dir).package_id == "neutral.package"
+    assert not any(path.name.startswith(".package.staging-") for path in tmp_path.iterdir())
+    assert not tmp_path.joinpath(".package.ontology-agent-init.lock").exists()
 
 
 def test_concurrent_initializers_allow_only_one_success_without_overwrite(
