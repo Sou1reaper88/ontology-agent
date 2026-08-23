@@ -9,6 +9,7 @@ from ontology_core.errors import (
     PackageNotFoundError,
     PropertyNotFoundError,
 )
+from ontology_core.authoring import initialize_package
 from ontology_core.manifest import load_manifest, resolve_package_files
 from ontology_core.models import (
     OntologyViolation,
@@ -43,6 +44,7 @@ __all__ = [
     "DataSource",
     "InvalidOntologyReferenceError",
     "InvalidRuleExpressionError",
+    "initialize_package",
     "LocalizedText",
     "OntologyError",
     "OntologyParseError",

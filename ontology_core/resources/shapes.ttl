@@ -1,0 +1,41 @@
+@prefix oa: <urn:ontology-agent:core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+oa:SemanticElementShape a sh:NodeShape ;
+    sh:targetClass oa:Concept, oa:Property, oa:Relation, oa:BusinessRule, oa:DataSource, oa:PhysicalMapping ;
+    sh:nodeKind sh:IRI ;
+    sh:property [
+        sh:path oa:shortName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:Literal
+    ] ;
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal
+    ] .
+
+oa:PropertyShape a sh:NodeShape ;
+    sh:targetClass oa:Property ;
+    sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+oa:RelationShape a sh:NodeShape ;
+    sh:targetClass oa:Relation ;
+    sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+oa:BusinessRuleShape a sh:NodeShape ;
+    sh:targetClass oa:BusinessRule ;
+    sh:property [ sh:path oa:appliesTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+oa:DataSourceShape a sh:NodeShape ;
+    sh:targetClass oa:DataSource ;
+    sh:property [ sh:path oa:platformType ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:Literal ] .
+
+oa:PhysicalMappingShape a sh:NodeShape ;
+    sh:targetClass oa:PhysicalMapping ;
+    sh:property [ sh:path oa:semanticElement ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:dataSource ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .

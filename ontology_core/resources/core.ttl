@@ -1,0 +1,46 @@
+@prefix oa: <urn:ontology-agent:core#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+oa:Concept a owl:Class ; rdfs:label "Concept marker" .
+oa:Property a owl:Class ; rdfs:label "Property marker" .
+oa:Relation a owl:Class ; rdfs:label "Relation marker" .
+oa:BusinessRule a owl:Class ; rdfs:label "Business rule marker" .
+oa:DataSource a owl:Class ; rdfs:label "Data source marker" .
+oa:PhysicalMapping a owl:Class ; rdfs:label "Physical mapping marker" .
+
+oa:AllOf a owl:Class ; rdfs:label "All of" .
+oa:AnyOf a owl:Class ; rdfs:label "Any of" .
+oa:Not a owl:Class ; rdfs:label "Not" .
+oa:Eq a owl:Class ; rdfs:label "Equal" .
+oa:Ne a owl:Class ; rdfs:label "Not equal" .
+oa:Gt a owl:Class ; rdfs:label "Greater than" .
+oa:Gte a owl:Class ; rdfs:label "Greater than or equal" .
+oa:Lt a owl:Class ; rdfs:label "Less than" .
+oa:Lte a owl:Class ; rdfs:label "Less than or equal" .
+oa:In a owl:Class ; rdfs:label "In collection" .
+oa:Between a owl:Class ; rdfs:label "Between bounds" .
+oa:IsNull a owl:Class ; rdfs:label "Is null" .
+
+oa:shortName a owl:AnnotationProperty ; rdfs:label "Short name" .
+oa:appliesTo a owl:ObjectProperty ; rdfs:label "Applies to" .
+oa:usesProperty a owl:ObjectProperty ; rdfs:label "Uses property" .
+oa:usesRelation a owl:ObjectProperty ; rdfs:label "Uses relation" .
+oa:condition a owl:ObjectProperty ; rdfs:label "Condition" .
+oa:status a owl:DatatypeProperty ; rdfs:label "Status" .
+oa:priority a owl:DatatypeProperty ; rdfs:label "Priority" .
+oa:platformType a owl:DatatypeProperty ; rdfs:label "Platform type" .
+oa:dialect a owl:DatatypeProperty ; rdfs:label "Dialect" .
+oa:capability a owl:DatatypeProperty ; rdfs:label "Capability" .
+oa:semanticElement a owl:ObjectProperty ; rdfs:label "Semantic element" .
+oa:dataSource a owl:ObjectProperty ; rdfs:label "Data source" .
+oa:physicalNamespace a owl:DatatypeProperty ; rdfs:label "Physical namespace" .
+oa:objectName a owl:DatatypeProperty ; rdfs:label "Object name" .
+oa:fieldName a owl:DatatypeProperty ; rdfs:label "Field name" .
+oa:joinPath a owl:DatatypeProperty ; rdfs:label "Join path" .
+oa:enabled a owl:DatatypeProperty ; rdfs:label "Enabled" .
+oa:argument a owl:ObjectProperty ; rdfs:label "Argument" .
+oa:leftProperty a owl:ObjectProperty ; rdfs:label "Left property" .
+oa:value a owl:DatatypeProperty ; rdfs:label "Value" .
+oa:values a owl:ObjectProperty ; rdfs:label "Values" .
+oa:parameter a owl:DatatypeProperty ; rdfs:label "Parameter" .
