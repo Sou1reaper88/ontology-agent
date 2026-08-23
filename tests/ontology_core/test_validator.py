@@ -18,11 +18,11 @@ _UNLABELLED_TTL = (
 
 _MULTI_MESSAGE_SHAPES_TTL = (
     "@prefix ex: <https://example.invalid/ontology/> .\n"
-    "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+    "@prefix oa: <urn:ontology-agent:core#> .\n"
     "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
     "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
     "ex:Shape a sh:NodeShape ;\n"
-    "  sh:targetClass owl:Class ;\n"
+    "  sh:targetClass oa:Concept ;\n"
     "  sh:property [\n"
     "    sh:path rdfs:label ;\n"
     "    sh:minCount 1 ;\n"

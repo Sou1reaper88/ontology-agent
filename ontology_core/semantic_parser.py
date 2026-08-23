@@ -59,13 +59,13 @@ def _preferred_text(texts: tuple[LocalizedText, ...]) -> str:
         text for text in texts if text.language and text.language.casefold().startswith("zh")
     ]
     if chinese:
-        return min(chinese, key=lambda text: (text.language.casefold(), text.value)).value
+        return min(chinese, key=lambda text: (text.value, text.language.casefold())).value
 
     untagged = [text for text in texts if text.language is None]
     if untagged:
-        return min(untagged, key=lambda text: text.value).value
+        return min(untagged, key=lambda text: (text.value, text.language or "")).value
 
-    return min(texts, key=lambda text: ((text.language or "").casefold(), text.value)).value
+    return min(texts, key=lambda text: (text.value, (text.language or "").casefold())).value
 
 
 def _single_short_name(graph: Graph, subject: Identifier) -> str:
@@ -153,6 +153,41 @@ def _validate_short_name(*, short_name: str, uri: str, violations: list[dict[str
     return True
 
 
+def _valid_short_names(graph: Graph, subjects: set[URIRef]) -> dict[str, list[str]]:
+    short_names: dict[str, list[str]] = defaultdict(list)
+    for subject in sorted(subjects, key=str):
+        uri = str(subject)
+        try:
+            short_name = _single_short_name(graph, subject)
+            Concept(uri=uri, short_name=short_name, label="Valid", labels=())
+        except (ValidationError, ValueError):
+            continue
+        short_names[short_name].append(uri)
+    return short_names
+
+
+def _parent_uris(
+    graph: Graph,
+    subject: URIRef,
+    violations: list[dict[str, str]],
+) -> tuple[str, ...]:
+    uri = str(subject)
+    parent_uris = []
+    for value in graph.objects(subject, RDFS.subClassOf):
+        if isinstance(value, URIRef):
+            parent_uris.append(str(value))
+        else:
+            violations.append(
+                _violation(
+                    "invalid_parent_reference",
+                    uri,
+                    RDFS.subClassOf,
+                    f"Concept parent must be a URI: {value}",
+                )
+            )
+    return tuple(sorted(set(parent_uris)))
+
+
 def _raise_if_invalid(violations: list[dict[str, str]]) -> None:
     if not violations:
         return
@@ -180,7 +215,8 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         (subject for subject in subjects if (subject, RDF.type, RELATION) in graph), key=str
     )
 
-    short_names: dict[str, list[str]] = defaultdict(list)
+    marked_concept_uris = {str(subject) for subject in concept_subjects}
+    short_names = _valid_short_names(graph, subjects)
     concept_data: list[
         tuple[
             str,
@@ -199,14 +235,12 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         uri = str(subject)
         if not _validate_short_name(short_name=short_name, uri=uri, violations=violations):
             continue
-        short_names[short_name].append(uri)
-        parent_uris = _uris(graph, subject, RDFS.subClassOf)
+        parent_uris = _parent_uris(graph, subject, violations)
         concept_data.append((uri, short_name, label, labels, description, parent_uris))
 
-    concept_uris = {item[0] for item in concept_data}
     for uri, _, _, _, _, parent_uris in concept_data:
         for parent_uri in parent_uris:
-            if parent_uri not in concept_uris:
+            if parent_uri not in marked_concept_uris:
                 violations.append(
                     _violation(
                         "dangling_concept_reference",
@@ -239,7 +273,6 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         short_name, label, labels, description = fields
         if not _validate_short_name(short_name=short_name, uri=uri, violations=violations):
             continue
-        short_names[short_name].append(uri)
         property_data.append((uri, short_name, label, labels, description, domain_uri, range_uri))
 
     relation_data: list[tuple[str, str, str, tuple[LocalizedText, ...], str | None, str, str]] = []
@@ -265,7 +298,6 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         short_name, label, labels, description = fields
         if not _validate_short_name(short_name=short_name, uri=uri, violations=violations):
             continue
-        short_names[short_name].append(uri)
         relation_data.append((uri, short_name, label, labels, description, source_uri, target_uri))
 
     for short_name, uris in short_names.items():
@@ -281,7 +313,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                 )
 
     for uri, _, _, _, _, domain_uri, _ in property_data:
-        if domain_uri not in concept_uris:
+        if domain_uri not in marked_concept_uris:
             violations.append(
                 _violation(
                     "dangling_concept_reference",
@@ -292,7 +324,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             )
     for uri, _, _, _, _, source_uri, target_uri in relation_data:
         for path, concept_uri in ((RDFS.domain, source_uri), (RDFS.range, target_uri)):
-            if concept_uri not in concept_uris:
+            if concept_uri not in marked_concept_uris:
                 violations.append(
                     _violation(
                         "dangling_concept_reference",

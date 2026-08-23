@@ -147,6 +147,86 @@ def test_parse_catalog_rejects_duplicate_short_names_across_markers() -> None:
     ]
 
 
+def test_parse_catalog_reports_duplicate_short_names_alongside_other_errors() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Repeated" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Repeated" ;
+            rdfs:label "Metric" ; rdfs:range xsd:integer .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [(item["code"], item["uri"]) for item in caught.value.details["violations"]] == [
+        ("duplicate_short_name", "https://example.invalid/ontology/Metric"),
+        ("duplicate_short_name", "https://example.invalid/ontology/Record"),
+        ("missing_domain", "https://example.invalid/ontology/Metric"),
+        ("missing_label", "https://example.invalid/ontology/Record"),
+    ]
+
+
+def test_parse_catalog_prefers_chinese_labels_by_value_before_language() -> None:
+    catalog = parse_catalog(_graph("""
+            @prefix ex: <https://example.invalid/ontology/> .
+            @prefix oa: <urn:ontology-agent:core#> .
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+            ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ;
+                rdfs:label "Zulu"@zh, "Alpha"@zh-CN .
+            """))
+
+    assert catalog.concepts[0].label == "Alpha"
+
+
+def test_parse_catalog_does_not_report_marked_invalid_concept_as_dangling() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:InvalidRecord a owl:Class, oa:Concept ; oa:shortName "InvalidRecord" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:InvalidRecord ; rdfs:range xsd:integer .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == ["missing_label"]
+
+
+def test_parse_catalog_rejects_invalid_and_unknown_concept_parents() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Child a owl:Class, oa:Concept ; oa:shortName "Child" ; rdfs:label "Child" ;
+            rdfs:subClassOf ex:Unknown, "not-a-uri" .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [(item["code"], item["message"]) for item in caught.value.details["violations"]] == [
+        (
+            "dangling_concept_reference",
+            "Referenced concept does not exist: https://example.invalid/ontology/Unknown",
+        ),
+        ("invalid_parent_reference", "Concept parent must be a URI: not-a-uri"),
+    ]
+
+
 def test_parse_catalog_aggregates_sorted_missing_and_dangling_concept_references() -> None:
     graph = _graph("""
         @prefix ex: <https://example.invalid/ontology/> .
