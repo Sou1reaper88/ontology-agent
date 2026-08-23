@@ -705,6 +705,78 @@ def test_parse_catalog_reports_malformed_reference_uri_without_echoing_value(
     )
 
 
+@pytest.mark.parametrize(
+    "invalid_uri",
+    (
+        "https://example.invalid/fictional-secret path",
+        "https://example.invalid/fictional-secret\x1fvalue",
+        "https://example.invalid/%fictional-secret",
+        "https://example.invalid/%2Gfictional-secret",
+        "https://alice:fictional-secret@example.invalid/Concept",
+        "urn:example:Concept?fictional-secret",
+        "custom:Concept?fictional-secret",
+    ),
+)
+def test_parse_catalog_rejects_unsafe_semantic_uri_syntax_without_echoing_value(
+    invalid_uri: str,
+) -> None:
+    graph = Graph()
+    subject = URIRef(invalid_uri)
+    graph.add((subject, RDF.type, OWL.Class))
+    graph.add((subject, RDF.type, OA.Concept))
+    graph.add((subject, OA.shortName, Literal("Marked")))
+    graph.add((subject, RDFS.label, Literal("Marked")))
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False, sort_keys=True)
+    assert [item["code"] for item in caught.value.details["violations"]] == ["invalid_semantic_uri"]
+    assert invalid_uri not in serialized
+    assert "fictional-secret" not in serialized
+
+
+@pytest.mark.parametrize(
+    "invalid_uri",
+    (
+        "https://example.invalid/%fictional-secret",
+        "https://alice:fictional-secret@example.invalid/Concept",
+        "urn:example:Concept?fictional-secret",
+    ),
+)
+def test_parse_catalog_rejects_unsafe_reference_uri_syntax_without_echoing_value(
+    invalid_uri: str,
+) -> None:
+    graph = _reference_graph("parent", "ex:Record")
+    subject = URIRef("https://example.invalid/ontology/Subject")
+    graph.remove((subject, RDFS.subClassOf, None))
+    graph.add((subject, RDFS.subClassOf, URIRef(invalid_uri)))
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False, sort_keys=True)
+    assert "invalid_ontology_reference" in [
+        item["code"] for item in caught.value.details["violations"]
+    ]
+    assert invalid_uri not in serialized
+    assert "fictional-secret" not in serialized
+
+
+def test_parse_catalog_allows_question_mark_inside_semantic_uri_fragment() -> None:
+    uri = "https://example.invalid/Concept#part?kept"
+    graph = Graph()
+    subject = URIRef(uri)
+    graph.add((subject, RDF.type, OWL.Class))
+    graph.add((subject, RDF.type, OA.Concept))
+    graph.add((subject, OA.shortName, Literal("Marked")))
+    graph.add((subject, RDFS.label, Literal("Marked")))
+
+    catalog = parse_catalog(graph)
+
+    assert catalog.concepts[0].uri == uri
+
+
 def _reference_graph(case: str, object_term: str) -> Graph:
     declarations = {
         "parent": (
@@ -853,6 +925,13 @@ def test_parse_catalog_rejects_credential_predicates(marker: str) -> None:
     assert [item["code"] for item in caught.value.details["violations"]] == [
         "forbidden_credential_predicate"
     ]
+    assert caught.value.details["violations"][0]["uri"] == (
+        "urn:ontology-agent:diagnostic:credential-configuration"
+    )
+    assert caught.value.details["violations"][0]["path"] == str(OA.configuration)
+    assert "not-permitted" not in json.dumps(
+        caught.value.details, ensure_ascii=False, sort_keys=True
+    )
 
 
 def _marker_graph(marker: str, predicate: str) -> Graph:
@@ -895,6 +974,11 @@ def _marker_graph(marker: str, predicate: str) -> Graph:
         "custom:example%3Asecret",
         "urn:example:connection-string",
         "urn:example:SeCrEt",
+        "https://example.invalid/vocabulary／password",
+        "https://example.invalid/vocabulary＃password",
+        "custom:example：password",
+        "https://example.invalid/vocabulary/%EF%BC%8Fpassword",
+        "https://example.invalid/vocabulary/%25EF%25BC%2583password",
     ),
 )
 def test_parse_catalog_rejects_credential_predicate_uri_variants(
@@ -1011,6 +1095,82 @@ def test_credential_scan_stops_at_marked_domain_elements(marker: str) -> None:
     catalog = parse_catalog(graph)
 
     assert "DomainElement" in {concept.short_name for concept in catalog.concepts}
+
+
+@pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
+def test_explicit_configuration_root_scans_marked_domain_element(marker: str) -> None:
+    graph = _nested_config_graph(
+        marker,
+        "ex:DomainElement",
+        """
+        ex:DomainElement a owl:Class, oa:Concept ; oa:shortName "DomainElement" ;
+            rdfs:label "Domain element" ;
+            <https://example.invalid/password> "fictional-secret" .
+        """,
+    )
+    graph.remove((None, URIRef("https://example.invalid/ontology/configuration"), None))
+    marked = URIRef("https://example.invalid/ontology/Marked")
+    domain_element = URIRef("https://example.invalid/ontology/DomainElement")
+    graph.add((marked, OA.configuration, domain_element))
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert "forbidden_credential_predicate" in [
+        item["code"] for item in caught.value.details["violations"]
+    ]
+
+
+def test_catalog_credential_scan_visits_shared_configuration_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:SourceA a oa:DataSource ; oa:shortName "SourceA" ; rdfs:label "Source A" ;
+            oa:platformType "generic" ; oa:configuration ex:SharedConfig .
+        ex:SourceB a oa:DataSource ; oa:shortName "SourceB" ; rdfs:label "Source B" ;
+            oa:platformType "generic" ; oa:configuration ex:SharedConfig .
+        ex:SharedConfig ex:setting "neutral" .
+        """)
+    original = semantic_parser._normalized_predicate_local_name
+    setting = URIRef("https://example.invalid/ontology/setting")
+    visits = 0
+
+    def count_shared_predicate(predicate: URIRef) -> str:
+        nonlocal visits
+        if predicate == setting:
+            visits += 1
+        return original(predicate)
+
+    monkeypatch.setattr(semantic_parser, "_normalized_predicate_local_name", count_shared_predicate)
+
+    parse_catalog(graph)
+
+    assert visits == 1
+
+
+def test_credential_configuration_edge_budget_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _nested_config_graph(
+        "oa:DataSource",
+        "ex:Config",
+        'ex:Config ex:first "one" ; ex:second "two" .',
+    )
+    monkeypatch.setattr(semantic_parser, "MAX_CREDENTIAL_SCAN_EDGES", 1)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "credential_scan_budget_exceeded"
+    ]
+    serialized = json.dumps(caught.value.details, ensure_ascii=False, sort_keys=True)
+    assert "first" not in serialized
+    assert "second" not in serialized
 
 
 def test_credential_configuration_scan_budget_fails_closed(

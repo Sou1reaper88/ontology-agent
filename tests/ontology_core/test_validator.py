@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -69,7 +70,7 @@ def test_shacl_contract_requires_paired_standard_owl_types(
         report = OntologyValidator().validate(data, _graph(shapes_path))
         assert report.conforms is False
         assert any(
-            violation.path == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+            violation.path.startswith("urn:ontology-agent:diagnostic:path:")
             for violation in report.violations
         )
 
@@ -94,7 +95,7 @@ def test_shacl_contract_requires_xsd_property_range(valid_package_dir: Path) -> 
         report = OntologyValidator().validate(data, _graph(shapes_path))
         assert report.conforms is False
         assert any(
-            violation.path == "http://www.w3.org/2000/01/rdf-schema#range"
+            violation.path.startswith("urn:ontology-agent:diagnostic:path:")
             for violation in report.violations
         )
 
@@ -122,7 +123,7 @@ def test_shacl_contract_rejects_unknown_datatype_in_xsd_namespace(
         report = OntologyValidator().validate(data, _graph(shapes_path))
         assert report.conforms is False
         assert any(
-            violation.path == "http://www.w3.org/2000/01/rdf-schema#range"
+            violation.path.startswith("urn:ontology-agent:diagnostic:path:")
             for violation in report.violations
         )
 
@@ -133,8 +134,46 @@ def test_missing_label_returns_structured_violation(valid_package_dir: Path) -> 
     report = OntologyValidator().validate(data, shapes)
     assert report.conforms is False
     assert len(report.violations) == 1
-    assert report.violations[0].focus_node.endswith("Unlabelled")
+    assert report.violations[0].focus_node.startswith("urn:ontology-agent:diagnostic:focus_node:")
     assert report.violations[0].message == "Ontology constraint violation"
+
+
+def test_shacl_violation_terms_are_deterministic_opaque_diagnostics() -> None:
+    data = Graph().parse(
+        data=(
+            "@prefix oa: <urn:ontology-agent:core#> .\n"
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
+            "<https://example.invalid/fictional-secret-focus> "
+            "a owl:Class, oa:Concept .\n"
+        ),
+        format="turtle",
+    )
+    shapes = Graph().parse(
+        data=(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+            "<https://example.invalid/fictional-secret-source-shape> a sh:NodeShape ;\n"
+            "  sh:targetNode <https://example.invalid/fictional-secret-focus> ;\n"
+            "  sh:severity <https://example.invalid/fictional-secret-severity> ;\n"
+            "  sh:property [\n"
+            "    sh:path <https://example.invalid/fictional-secret-path> ;\n"
+            "    sh:minCount 1 ;\n"
+            '    sh:message "fictional-secret-shacl-message"\n'
+            "  ] .\n"
+        ),
+        format="turtle",
+    )
+
+    report = OntologyValidator().validate(data, shapes)
+
+    serialized = json.dumps(report.model_dump(mode="json"), sort_keys=True)
+    assert "fictional-secret" not in serialized
+    assert len(report.violations) == 1
+    violation = report.violations[0]
+    for field in ("focus_node", "path", "severity", "source_shape"):
+        assert re.fullmatch(
+            rf"urn:ontology-agent:diagnostic:{field}:[0-9a-f]{{64}}",
+            getattr(violation, field),
+        )
 
 
 def test_violation_report_is_stable_for_fresh_graphs(valid_package_dir: Path) -> None:

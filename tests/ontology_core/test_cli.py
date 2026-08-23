@@ -21,14 +21,25 @@ def _append_secret_shape(package_dir: Path) -> None:
     shapes.write_text(
         shapes.read_text(encoding="utf-8") + """
 
-<https://example.invalid/ontology/SecretMessageShape> a sh:NodeShape ;
+<https://example.invalid/fictional-secret-source-shape> a sh:NodeShape ;
     sh:targetNode <https://example.invalid/ontology/Record> ;
+    sh:severity <https://example.invalid/fictional-secret-severity> ;
     sh:property [
-        sh:path <urn:ontology-agent:core#shortName> ;
-        sh:minCount 2 ;
+        sh:path <https://example.invalid/fictional-secret-path> ;
+        sh:minCount 1 ;
         sh:message "fictional-secret-shacl-message"
     ] .
 """,
+        encoding="utf-8",
+    )
+
+
+def _append_credential_predicate(package_dir: Path) -> None:
+    mappings = package_dir / "mappings.ttl"
+    mappings.write_text(
+        mappings.read_text(encoding="utf-8")
+        + "\nex:MetricMapping <https://example.invalid/fictional-secret/password> "
+        '"fictional-secret-value" .\n',
         encoding="utf-8",
     )
 
@@ -229,8 +240,35 @@ def test_validate_json_does_not_expose_authored_shacl_result_message(
     payload = json.loads(output.err)
     assert payload["code"] == "ontology_validation_error"
     assert payload["details"]["violations"]
-    assert "fictional-secret-shacl-message" not in output.err
+    assert "fictional-secret" not in output.err
+    for violation in payload["details"]["violations"]:
+        for field in ("focus_node", "path", "severity", "source_shape"):
+            assert violation[field].startswith(f"urn:ontology-agent:diagnostic:{field}:")
     assert "traceback" not in output.err.casefold()
+
+
+def test_validate_json_credential_violation_uses_safe_diagnostics(
+    valid_package_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    broken = tmp_path / "credential-predicate"
+    _copy_package(valid_package_dir, broken)
+    _append_credential_predicate(broken)
+
+    assert main(["validate", str(broken), "--json"]) == 1
+    output = capsys.readouterr()
+
+    assert output.out == ""
+    assert "fictional-secret" not in output.err
+    payload = json.loads(output.err)
+    violation = next(
+        item
+        for item in payload["details"]["violations"]
+        if item["code"] == "forbidden_credential_predicate"
+    )
+    assert violation["uri"] == "urn:ontology-agent:diagnostic:credential-configuration"
+    assert violation["path"] == "urn:ontology-agent:core#configuration"
 
 
 def test_inspect_counts_excludes_identifiers_and_source_path(

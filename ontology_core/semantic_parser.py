@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypeVar
-from unicodedata import normalize
-from urllib.parse import unquote, urlsplit
+from unicodedata import category, normalize
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from pydantic import ValidationError
 from rdflib import BNode, Graph, Literal, URIRef
@@ -35,6 +35,7 @@ from ontology_core.vocabulary import (
     CAPABILITY,
     CONCEPT,
     CONDITION,
+    CONFIGURATION,
     DATA_SOURCE,
     DATA_SOURCE_REF,
     DIALECT,
@@ -149,13 +150,16 @@ _CREDENTIAL_NAMES = {
 }
 _URI_SEGMENT_SEPARATOR = re.compile(r"[/#:]+")
 _URN_NID_AND_NSS = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{1,31}:.+")
+_INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _INVALID_SEMANTIC_ELEMENT_URI = "urn:ontology-agent:invalid-semantic-element"
+_CREDENTIAL_DIAGNOSTIC_URI = "urn:ontology-agent:diagnostic:credential-configuration"
 
 MAX_RULE_EXPRESSION_DEPTH = 64
 MAX_RULE_EXPRESSION_NODES = 1024
 MAX_RULE_COLLECTION_ITEMS = 1024
 MAX_RULE_LOGICAL_ARGUMENT_EDGES = 4096
 MAX_CREDENTIAL_SCAN_NODES = 1024
+MAX_CREDENTIAL_SCAN_EDGES = 4096
 MAX_CREDENTIAL_PERCENT_DECODE_ROUNDS = 4
 
 
@@ -202,6 +206,12 @@ class _CredentialDecodeBudgetError(ValueError):
 
 def _is_stable_semantic_uri(value: URIRef) -> bool:
     text = str(value)
+    if any(character.isspace() or category(character).startswith("C") for character in text):
+        return False
+    if _INVALID_PERCENT_ESCAPE.search(text):
+        return False
+    if "?" in text.partition("#")[0]:
+        return False
     try:
         parts = urlsplit(text)
         hostname = parts.hostname
@@ -212,10 +222,10 @@ def _is_stable_semantic_uri(value: URIRef) -> bool:
     if not scheme or scheme == "file":
         return False
     if scheme in {"http", "https"}:
-        return bool(parts.netloc and hostname)
+        return bool(parts.netloc and hostname and parts.username is None and parts.password is None)
     if scheme == "urn":
         return bool(_URN_NID_AND_NSS.fullmatch(parts.path))
-    scheme_specific = text.partition(":")[2].partition("?")[0].partition("#")[0]
+    scheme_specific = text.partition(":")[2].partition("#")[0]
     return bool(scheme_specific)
 
 
@@ -754,25 +764,29 @@ def _parse_expression(
     return expression
 
 
-def _forbidden_predicates(
+def _scan_forbidden_credentials(
     graph: Graph,
-    subject: URIRef,
+    roots: tuple[URIRef, ...],
     violations: list[dict[str, str]],
     marked_semantic_nodes: set[Identifier],
 ) -> None:
     visited: set[Identifier] = set()
-    pending: list[Identifier] = [subject]
+    pending = deque(roots)
+    queued: set[Identifier] = set(roots)
+    edge_count = 0
+    credential_found = False
     while pending:
-        node = pending.pop(0)
+        node = pending.popleft()
+        queued.discard(node)
         if node in visited:
             continue
         if len(visited) >= MAX_CREDENTIAL_SCAN_NODES:
             violations.append(
                 _violation(
                     "credential_scan_budget_exceeded",
-                    str(subject),
-                    OA.configuration,
-                    "Credential configuration scan exceeded its node budget",
+                    _CREDENTIAL_DIAGNOSTIC_URI,
+                    CONFIGURATION,
+                    "Credential configuration scan exceeded its resource budget",
                 )
             )
             return
@@ -782,25 +796,49 @@ def _forbidden_predicates(
             key=lambda item: (str(item[0]), type(item[1]).__name__, str(item[1])),
         )
         for predicate, value in edges:
+            edge_count += 1
+            if edge_count > MAX_CREDENTIAL_SCAN_EDGES:
+                violations.append(
+                    _violation(
+                        "credential_scan_budget_exceeded",
+                        _CREDENTIAL_DIAGNOSTIC_URI,
+                        CONFIGURATION,
+                        "Credential configuration scan exceeded its resource budget",
+                    )
+                )
+                return
             try:
                 forbidden = _normalized_predicate_local_name(predicate) in _CREDENTIAL_NAMES
             except ValueError:
                 forbidden = True
             if forbidden:
-                violations.append(
-                    _violation(
-                        "forbidden_credential_predicate",
-                        str(subject),
-                        predicate,
-                        "Credential-like predicates are prohibited",
+                credential_found = True
+            if predicate == RDF.type:
+                continue
+            if predicate != CONFIGURATION and value in marked_semantic_nodes:
+                continue
+            if (
+                (
+                    isinstance(value, BNode)
+                    or (
+                        isinstance(value, URIRef)
+                        and next(graph.predicate_objects(value), None) is not None
                     )
                 )
-            if predicate == RDF.type or value in marked_semantic_nodes:
-                continue
-            if isinstance(value, BNode) or (
-                isinstance(value, URIRef) and next(graph.predicate_objects(value), None) is not None
+                and value not in visited
+                and value not in queued
             ):
                 pending.append(value)
+                queued.add(value)
+    if credential_found:
+        violations.append(
+            _violation(
+                "forbidden_credential_predicate",
+                _CREDENTIAL_DIAGNOSTIC_URI,
+                CONFIGURATION,
+                "Credential-like predicates are prohibited",
+            )
+        )
 
 
 def _bounded_percent_decode(value: str) -> str:
@@ -818,15 +856,20 @@ def _bounded_percent_decode(value: str) -> str:
 def _normalized_predicate_local_name(predicate: URIRef) -> str:
     """Return a normalized final non-empty segment for any URI scheme."""
     parsed_uri = urlsplit(str(predicate))
-    encoded_source = parsed_uri.fragment if parsed_uri.fragment else parsed_uri.path
+    encoded_source = (
+        parsed_uri.fragment
+        if parsed_uri.fragment
+        else urlunsplit((parsed_uri.scheme, parsed_uri.netloc, parsed_uri.path, "", ""))
+    )
     decoded_source = _bounded_percent_decode(encoded_source)
-    parsed_source = urlsplit(decoded_source)
+    normalized_source = normalize("NFKC", decoded_source)
+    parsed_source = urlsplit(normalized_source)
     local_source = parsed_source.fragment if parsed_source.fragment else parsed_source.path
     segments = [
         segment.strip() for segment in _URI_SEGMENT_SEPARATOR.split(local_source) if segment.strip()
     ]
     local_name = segments[-1] if segments else ""
-    return normalize("NFKC", local_name).strip().replace("-", "").replace("_", "").casefold()
+    return local_name.strip().replace("-", "").replace("_", "").casefold()
 
 
 def parse_catalog(graph: Graph) -> SemanticCatalog:
@@ -847,6 +890,13 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
     rule_subjects = by_marker[BUSINESS_RULE]
     source_subjects = by_marker[DATA_SOURCE]
     mapping_subjects = by_marker[PHYSICAL_MAPPING]
+    credential_roots = tuple(sorted(set(source_subjects) | set(mapping_subjects), key=str))
+    _scan_forbidden_credentials(
+        graph,
+        credential_roots,
+        violations,
+        marked_semantic_nodes,
+    )
     _validate_standard_types(graph, by_marker, violations)
     marked_concept_uris = {str(subject) for subject in concept_subjects}
     marked_property_uris = {str(subject) for subject in property_subjects}
@@ -961,7 +1011,6 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
     ] = []
     for subject in source_subjects:
         uri = str(subject)
-        _forbidden_predicates(graph, subject, violations, marked_semantic_nodes)
         fields = _element_fields(graph, subject, violations)
         platform_type = _capture(
             lambda subject=subject: str(
@@ -1160,7 +1209,6 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
     semantic_element_uris = marked_concept_uris | marked_property_uris | marked_relation_uris
     for subject in mapping_subjects:
         uri = str(subject)
-        _forbidden_predicates(graph, subject, violations, marked_semantic_nodes)
         fields = _element_fields(graph, subject, violations)
         element = _capture(
             lambda subject=subject: _single_uri(

@@ -26,14 +26,25 @@ def _append_secret_shape(package_dir: Path) -> None:
     shapes.write_text(
         shapes.read_text(encoding="utf-8") + """
 
-<https://example.invalid/ontology/SecretMessageShape> a sh:NodeShape ;
+<https://example.invalid/fictional-secret-source-shape> a sh:NodeShape ;
     sh:targetNode <https://example.invalid/ontology/Record> ;
+    sh:severity <https://example.invalid/fictional-secret-severity> ;
     sh:property [
-        sh:path <urn:ontology-agent:core#shortName> ;
-        sh:minCount 2 ;
+        sh:path <https://example.invalid/fictional-secret-path> ;
+        sh:minCount 1 ;
         sh:message "fictional-secret-shacl-message"
     ] .
 """,
+        encoding="utf-8",
+    )
+
+
+def _append_credential_predicate(package_dir: Path) -> None:
+    mappings = package_dir / "mappings.ttl"
+    mappings.write_text(
+        mappings.read_text(encoding="utf-8")
+        + "\nex:MetricMapping <https://example.invalid/fictional-secret/password> "
+        '"fictional-secret-value" .\n',
         encoding="utf-8",
     )
 
@@ -124,6 +135,52 @@ def test_publish_does_not_expose_authored_shacl_result_message(
     assert {item["message"] for item in caught.value.details["violations"]} == {
         "Ontology constraint violation"
     }
+    for violation in caught.value.details["violations"]:
+        for field in ("focus_node", "path", "severity", "source_shape"):
+            assert violation[field].startswith(f"urn:ontology-agent:diagnostic:{field}:")
+
+
+def test_publish_malformed_marker_does_not_leak_through_shacl(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "malformed-marker"
+    _copy_package(valid_package_dir, package)
+    domain = package / "domain.ttl"
+    domain.write_text(
+        domain.read_text(encoding="utf-8")
+        + "\n<https://alice:fictional-secret@example.invalid/Marker> a oa:Concept .\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        OntologyRepository().publish(package)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False, sort_keys=True)
+    assert "fictional-secret" not in serialized
+    assert caught.value.details["violations"]
+
+
+def test_publish_credential_violation_uses_safe_diagnostics(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "credential-predicate"
+    _copy_package(valid_package_dir, package)
+    _append_credential_predicate(package)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        OntologyRepository().publish(package)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False, sort_keys=True)
+    assert "fictional-secret" not in serialized
+    violation = next(
+        item
+        for item in caught.value.details["violations"]
+        if item["code"] == "forbidden_credential_predicate"
+    )
+    assert violation["uri"] == "urn:ontology-agent:diagnostic:credential-configuration"
+    assert violation["path"] == str(OA.configuration)
 
 
 def test_malformed_turtle_error_does_not_expose_source_or_path(
@@ -199,6 +256,40 @@ def test_publish_rejects_relative_semantic_uri_resolved_from_package_path(
         for item in caught.value.details["violations"]
         if item["code"] == "invalid_semantic_uri"
     ] == ["invalid_semantic_uri"]
+
+
+@pytest.mark.parametrize(
+    "invalid_uri",
+    (
+        "https://alice:fictional-secret@example.invalid/Concept",
+        "urn:example:Concept?fictional-secret",
+        "https://example.invalid/%2Gfictional-secret",
+    ),
+)
+def test_publish_rejects_unsafe_semantic_uri_without_exposing_source(
+    valid_package_dir: Path,
+    tmp_path: Path,
+    invalid_uri: str,
+) -> None:
+    package = tmp_path / "unsafe-semantic-uri"
+    _copy_package(valid_package_dir, package)
+    domain = package / "domain.ttl"
+    domain.write_text(
+        domain.read_text(encoding="utf-8")
+        + (
+            f'\n<{invalid_uri}> a owl:Class, oa:Concept ; oa:shortName "Unsafe" ; '
+            'rdfs:label "Unsafe" .\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        OntologyRepository().publish(package)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False, sort_keys=True)
+    assert "invalid_semantic_uri" in [item["code"] for item in caught.value.details["violations"]]
+    assert invalid_uri not in serialized
+    assert "fictional-secret" not in serialized
 
 
 def test_publish_preserves_typed_literal_lexical_form_from_package_bytes(

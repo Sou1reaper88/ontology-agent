@@ -17,6 +17,7 @@ CONDITION = OA.condition
 STATUS = OA.status
 PRIORITY = OA.priority
 PLATFORM_TYPE = OA.platformType
+CONFIGURATION = OA.configuration
 DIALECT = OA.dialect
 CAPABILITY = OA.capability
 SEMANTIC_ELEMENT = OA.semanticElement
