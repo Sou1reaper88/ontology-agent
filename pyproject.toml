@@ -38,6 +38,9 @@ dev = [
     "pytest-asyncio>=0.23",
 ]
 
+[project.scripts]
+ontology-core = "ontology_core.cli:main"
+
 [tool.setuptools.package-data]
 ontology_core = ["resources/*.ttl"]
 

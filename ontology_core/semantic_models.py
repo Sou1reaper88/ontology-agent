@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field
 
@@ -97,3 +98,25 @@ class SemanticCatalog(FrozenModel):
     rules: tuple[BusinessRule, ...] = ()
     data_sources: tuple[DataSource, ...] = ()
     mappings: tuple[PhysicalMapping, ...] = ()
+
+
+class SemanticCounts(FrozenModel):
+    concepts: int = 0
+    properties: int = 0
+    relations: int = 0
+    rules: int = 0
+    data_sources: int = 0
+    mappings: int = 0
+
+
+class InspectedPackage(FrozenModel):
+    package_id: str
+    version: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class PackageInspection(FrozenModel):
+    status: Literal["valid"] = "valid"
+    package: InspectedPackage
+    counts: SemanticCounts
+    identifiers: tuple[str, ...] | None = None

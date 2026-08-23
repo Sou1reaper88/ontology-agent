@@ -1,3 +1,4 @@
+from ontology_core.authoring import initialize_package
 from ontology_core.errors import (
     AmbiguousIdentifierError,
     ConceptNotFoundError,
@@ -9,7 +10,7 @@ from ontology_core.errors import (
     PackageNotFoundError,
     PropertyNotFoundError,
 )
-from ontology_core.authoring import initialize_package
+from ontology_core.inspection import inspect_package
 from ontology_core.manifest import load_manifest, resolve_package_files
 from ontology_core.models import (
     OntologyViolation,
@@ -24,7 +25,9 @@ from ontology_core.semantic_models import (
     BusinessRule,
     Concept,
     DataSource,
+    InspectedPackage,
     LocalizedText,
+    PackageInspection,
     PhysicalMapping,
     Property,
     RdfLiteral,
@@ -32,6 +35,7 @@ from ontology_core.semantic_models import (
     RuleExpression,
     RuleOperator,
     SemanticCatalog,
+    SemanticCounts,
     SemanticElement,
 )
 from ontology_core.validator import OntologyValidator
@@ -44,6 +48,8 @@ __all__ = [
     "DataSource",
     "InvalidOntologyReferenceError",
     "InvalidRuleExpressionError",
+    "inspect_package",
+    "InspectedPackage",
     "initialize_package",
     "LocalizedText",
     "OntologyError",
@@ -55,6 +61,7 @@ __all__ = [
     "OntologyViolation",
     "PackageFileRole",
     "PackageInfo",
+    "PackageInspection",
     "PackageManifest",
     "PackageNotFoundError",
     "PhysicalMapping",
@@ -65,6 +72,7 @@ __all__ = [
     "RuleExpression",
     "RuleOperator",
     "SemanticCatalog",
+    "SemanticCounts",
     "SemanticElement",
     "ValidationReport",
     "load_manifest",
