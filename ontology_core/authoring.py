@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import stat
 import tempfile
 from importlib.resources import files
@@ -139,34 +140,49 @@ def _target_is_empty_directory(root: Path) -> bool:
     return root.is_dir() and not any(root.iterdir())
 
 
-def _prepare_empty_target_for_commit(root: Path) -> None:
-    if not _require_real_directory(root, allow_absent=True):
-        return
-    if not _target_is_empty_directory(root):
-        raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
-    try:
-        root.rmdir()
-    except OSError as exc:
-        raise _initialization_error(root, exc) from exc
+def _empty_backup_path(root: Path) -> Path:
+    return root.parent / f".{root.name}.empty-backup-{secrets.token_hex(16)}"
 
 
-def _restore_empty_target(root: Path) -> None:
-    if root.exists():
-        return
+def _restore_captured_target(backup: Path, root: Path) -> None:
     try:
-        root.mkdir()
+        root.lstat()
+    except FileNotFoundError:
+        try:
+            backup.rename(root)
+        except OSError:
+            return
     except OSError:
         return
 
 
-def _commit_staging(staging: Path, root: Path) -> None:
+def _capture_empty_target(root: Path) -> Path | None:
+    if not _require_real_directory(root, allow_absent=True):
+        return None
+    backup = _empty_backup_path(root)
+    try:
+        root.rename(backup)
+    except OSError as exc:
+        raise _initialization_error(root, exc) from exc
+    try:
+        _require_real_directory(backup, allow_absent=False)
+        if not _target_is_empty_directory(backup):
+            raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
+    except OntologyParseError:
+        _restore_captured_target(backup, root)
+        raise
+    return backup
+
+
+def _commit_staging(staging: Path, root: Path, captured_target: Path | None) -> None:
     if _require_real_directory(root, allow_absent=True):
         raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
     _require_real_directory(staging, allow_absent=False)
     try:
         staging.rename(root)
     except OSError as exc:
-        _restore_empty_target(root)
+        if captured_target is not None:
+            _restore_captured_target(captured_target, root)
         raise _initialization_error(root, exc) from exc
 
 
@@ -226,7 +242,8 @@ def initialize_package(
         root.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise _initialization_error(root.parent, exc) from exc
-    if _require_real_directory(root, allow_absent=True) and not _target_is_empty_directory(root):
+    target_was_empty = _require_real_directory(root, allow_absent=True)
+    if target_was_empty and not _target_is_empty_directory(root):
         raise OntologyParseError("本体包目录必须不存在或为空", details={"path": str(root)})
 
     staging = _staging_directory(root)
@@ -253,11 +270,12 @@ def initialize_package(
         )
         _write_exclusive(staging / "manifest.yaml", expected_files["manifest.yaml"], created)
         _verify_package_contents(staging, expected_files)
-        _prepare_empty_target_for_commit(root)
-        _commit_staging(staging, root)
+        captured_target = _capture_empty_target(root) if target_was_empty else None
+        _commit_staging(staging, root, captured_target)
         _verify_package_contents(root, expected_files)
-        _require_real_directory(root, allow_absent=False)
-        if load_manifest(root) != manifest:
+        loaded_manifest = load_manifest(root)
+        _verify_package_contents(root, expected_files)
+        if loaded_manifest != manifest:
             raise _integrity_error(root)
     except OSError as exc:
         raise _initialization_error(root, exc) from exc

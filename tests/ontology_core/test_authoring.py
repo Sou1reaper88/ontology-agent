@@ -22,6 +22,12 @@ def _staging_directories(parent: Path) -> tuple[Path, ...]:
     return tuple(path for path in parent.iterdir() if path.name.startswith(".package.staging"))
 
 
+def _empty_backups(parent: Path) -> tuple[Path, ...]:
+    return tuple(
+        path for path in parent.iterdir() if path.name.startswith(".package.empty-backup-")
+    )
+
+
 def _make_directory_symlink_or_skip(link: Path, target: Path) -> None:
     try:
         link.symlink_to(target, target_is_directory=True)
@@ -377,6 +383,132 @@ def test_initialize_package_commits_from_staging_for_absent_or_empty_targets(
 
     assert load_manifest(package_dir).package_id == "neutral.package"
     assert not _staging_directories(tmp_path)
+    assert len(_empty_backups(tmp_path)) == int(create_target)
+
+
+def test_existing_empty_target_is_captured_without_rmdir_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    original_rmdir = Path.rmdir
+    called_rmdir = False
+
+    def observe_rmdir(path: Path) -> None:
+        nonlocal called_rmdir
+        if path == package_dir:
+            called_rmdir = True
+        original_rmdir(path)
+
+    monkeypatch.setattr(Path, "rmdir", observe_rmdir)
+
+    manifest = initialize_package(
+        package_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+
+    assert not called_rmdir
+    assert load_manifest(package_dir) == manifest
+
+
+def test_capture_rejects_and_restores_junction_swapped_before_backup_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    junction_target = tmp_path / "junction-target"
+    junction_target.mkdir()
+    original_rename = Path.rename
+    swapped = False
+
+    def swap_before_capture(path: Path, target: Path):
+        nonlocal swapped
+        if path == package_dir and target.name.startswith(".package.empty-backup-") and not swapped:
+            swapped = True
+            original_rename(path, tmp_path / "moved-empty-target")
+            _make_directory_junction_or_skip(path, junction_target)
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", swap_before_capture)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert swapped
+    assert package_dir.is_junction()
+    assert tuple(junction_target.iterdir()) == ()
+
+
+def test_capture_rejects_and_restores_non_empty_target_inserted_before_backup_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    user_file = package_dir / "user.txt"
+    original_rename = Path.rename
+    inserted = False
+
+    def insert_before_capture(path: Path, target: Path):
+        nonlocal inserted
+        if (
+            path == package_dir
+            and target.name.startswith(".package.empty-backup-")
+            and not inserted
+        ):
+            inserted = True
+            user_file.write_text("user-owned\n", encoding="utf-8", newline="\n")
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", insert_before_capture)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert inserted
+    assert user_file.read_text(encoding="utf-8") == "user-owned\n"
+    assert not package_dir.joinpath("manifest.yaml").exists()
+    assert not _empty_backups(tmp_path)
+
+
+def test_existing_empty_target_keeps_empty_backup_outside_publishable_package(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    manifest = initialize_package(
+        package_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+
+    backups = _empty_backups(tmp_path)
+    assert len(backups) == 1
+    assert backups[0].is_dir()
+    assert not backups[0].is_junction()
+    assert tuple(backups[0].iterdir()) == ()
+    assert tuple(path.name for path in sorted(package_dir.iterdir())) == (
+        "core.ttl",
+        "domain.ttl",
+        "manifest.yaml",
+        "mappings.ttl",
+        "rules.ttl",
+        "shapes.ttl",
+    )
+    assert load_manifest(package_dir) == manifest
+    OntologyRepository().publish(package_dir)
 
 
 def test_quarantined_random_staging_does_not_block_retry_after_write_failure(
@@ -590,6 +722,43 @@ def test_initialize_package_rejects_post_rename_byte_tampering(
         )
 
     assert package_dir.joinpath("domain.ttl").read_bytes() == b"tampered\n"
+
+
+def test_initialize_package_rechecks_final_root_after_loading_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_dir = tmp_path / "package"
+    replacement_dir = tmp_path / "replacement"
+    initialize_package(
+        replacement_dir,
+        package_id="neutral.package",
+        base_uri="https://example.invalid/private/",
+    )
+    original_load_manifest = authoring.load_manifest
+    original_rename = Path.rename
+    replaced = False
+
+    def replace_after_loading_manifest(path: Path):
+        nonlocal replaced
+        manifest = original_load_manifest(path)
+        if path == package_dir and not replaced:
+            replaced = True
+            original_rename(package_dir, tmp_path / "quarantined-final")
+            _make_directory_junction_or_skip(package_dir, replacement_dir)
+        return manifest
+
+    monkeypatch.setattr(authoring, "load_manifest", replace_after_loading_manifest)
+
+    with pytest.raises(OntologyParseError):
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri="https://example.invalid/private/",
+        )
+
+    assert replaced
+    assert package_dir.is_junction()
 
 
 def test_concurrent_initializers_allow_only_one_success_without_overwrite(
