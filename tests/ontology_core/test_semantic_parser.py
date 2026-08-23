@@ -1,8 +1,9 @@
+import json
 from pathlib import Path
 
 import pytest
 from rdflib import BNode, Graph, Literal, URIRef
-from rdflib.namespace import RDF
+from rdflib.namespace import OWL, RDF, RDFS
 
 from ontology_core import semantic_parser
 from ontology_core.errors import OntologyValidationError
@@ -151,6 +152,28 @@ def test_parse_catalog_requires_xsd_datatype_property_range() -> None:
             "path": "http://www.w3.org/2000/01/rdf-schema#range",
             "message": "Property range must be an XSD datatype URI",
         }
+    ]
+
+
+def test_parse_catalog_rejects_unknown_datatype_in_xsd_namespace() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:Metric a owl:DatatypeProperty, oa:Property ; oa:shortName "Metric" ;
+            rdfs:label "Metric" ; rdfs:domain ex:Record ;
+            rdfs:range xsd:DefinitelyNotAnXsdDatatype .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_datatype_range"
     ]
 
 
@@ -607,9 +630,78 @@ def test_parse_catalog_rejects_file_derived_marked_subjects(declaration: str) ->
     with pytest.raises(OntologyValidationError) as caught:
         parse_catalog(graph)
 
-    assert any(
-        item["code"] == "invalid_semantic_uri" and item["uri"].startswith("file:")
-        for item in caught.value.details["violations"]
+    assert "invalid_semantic_uri" in [item["code"] for item in caught.value.details["violations"]]
+
+
+@pytest.mark.parametrize(
+    "invalid_uri",
+    ("https://", "urn:", "https://[broken", "https://example.invalid:broken/value"),
+)
+def test_parse_catalog_reports_malformed_marker_subject_uri_without_echoing_value(
+    invalid_uri: str,
+) -> None:
+    graph = Graph()
+    subject = URIRef(invalid_uri)
+    graph.add((subject, RDF.type, OWL.Class))
+    graph.add((subject, RDF.type, OA.Concept))
+    graph.add((subject, URIRef(str(OA.shortName)), Literal("Marked")))
+    graph.add((subject, RDFS.label, Literal("Marked")))
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    violations = caught.value.details["violations"]
+    assert "invalid_semantic_uri" in [item["code"] for item in violations]
+    assert all(
+        invalid_uri not in (item["uri"], item["path"], item["message"]) for item in violations
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid_uri",
+    ("https://[broken", "https://[broken-fictional-secret"),
+)
+def test_malformed_marker_only_subject_does_not_cascade_or_leak(
+    invalid_uri: str,
+) -> None:
+    graph = Graph()
+    graph.add((URIRef(invalid_uri), RDF.type, OA.Concept))
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False, sort_keys=True)
+    assert caught.value.details["violations"] == [
+        {
+            "code": "invalid_semantic_uri",
+            "uri": "urn:ontology-agent:invalid-semantic-element",
+            "path": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            "message": "Marked semantic element requires an absolute non-file URI",
+        }
+    ]
+    assert invalid_uri not in serialized
+    assert "fictional-secret" not in serialized
+
+
+@pytest.mark.parametrize(
+    "invalid_uri",
+    ("https://", "urn:", "https://[broken", "https://example.invalid:broken/value"),
+)
+def test_parse_catalog_reports_malformed_reference_uri_without_echoing_value(
+    invalid_uri: str,
+) -> None:
+    graph = _reference_graph("parent", "ex:Record")
+    subject = URIRef("https://example.invalid/ontology/Subject")
+    graph.remove((subject, RDFS.subClassOf, None))
+    graph.add((subject, RDFS.subClassOf, URIRef(invalid_uri)))
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    violations = caught.value.details["violations"]
+    assert "invalid_ontology_reference" in [item["code"] for item in violations]
+    assert all(
+        invalid_uri not in (item["uri"], item["path"], item["message"]) for item in violations
     )
 
 
@@ -839,6 +931,117 @@ def test_parse_catalog_allows_non_credential_predicate_with_similar_name(
     else:
         assert len(catalog.data_sources) == 1
         assert len(catalog.mappings) == 1
+
+
+def _nested_config_graph(marker: str, config_term: str, config_data: str) -> Graph:
+    if marker == "oa:DataSource":
+        support = ""
+        values = 'oa:platformType "generic" ;'
+    else:
+        support = """
+            ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ;
+                rdfs:label "Record" .
+            ex:Source a oa:DataSource ; oa:shortName "Source" ; rdfs:label "Source" ;
+                oa:platformType "generic" .
+        """
+        values = "oa:semanticElement ex:Record ; oa:dataSource ex:Source ;"
+    return _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        {support}
+        ex:Marked a {marker} ; oa:shortName "Marked" ; rdfs:label "Marked" ;
+            {values} ex:configuration {config_term} .
+        {config_data}
+        """)
+
+
+@pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
+@pytest.mark.parametrize("named", (False, True))
+def test_parse_catalog_rejects_credentials_in_nested_configuration_graphs(
+    marker: str,
+    named: bool,
+) -> None:
+    if named:
+        graph = _nested_config_graph(
+            marker,
+            "ex:Config",
+            'ex:Config <https://example.invalid/password> "fictional-secret" .',
+        )
+    else:
+        graph = _nested_config_graph(
+            marker,
+            '[ <https://example.invalid/password> "fictional-secret" ]',
+            "",
+        )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert "forbidden_credential_predicate" in [
+        item["code"] for item in caught.value.details["violations"]
+    ]
+    assert "fictional-secret" not in str(caught.value.details)
+
+
+@pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
+def test_parse_catalog_rejects_repeatedly_encoded_credential_predicates(marker: str) -> None:
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_marker_graph(marker, "https://example.invalid/%2570assword"))
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "forbidden_credential_predicate"
+    ]
+
+
+@pytest.mark.parametrize("marker", ("oa:DataSource", "oa:PhysicalMapping"))
+def test_credential_scan_stops_at_marked_domain_elements(marker: str) -> None:
+    graph = _nested_config_graph(
+        marker,
+        "ex:DomainElement",
+        """
+        ex:DomainElement a owl:Class, oa:Concept ; oa:shortName "DomainElement" ;
+            rdfs:label "Domain element" ;
+            <https://example.invalid/password> "fictional-secret" .
+        """,
+    )
+
+    catalog = parse_catalog(graph)
+
+    assert "DomainElement" in {concept.short_name for concept in catalog.concepts}
+
+
+def test_credential_configuration_scan_budget_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = _nested_config_graph(
+        "oa:DataSource",
+        "ex:Config",
+        'ex:Config ex:setting "neutral" .',
+    )
+    monkeypatch.setattr(semantic_parser, "MAX_CREDENTIAL_SCAN_NODES", 1)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert "credential_scan_budget_exceeded" in [
+        item["code"] for item in caught.value.details["violations"]
+    ]
+
+
+def test_credential_percent_decode_budget_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(semantic_parser, "MAX_CREDENTIAL_PERCENT_DECODE_ROUNDS", 1)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_marker_graph("oa:DataSource", "https://example.invalid/%2570assword"))
+
+    assert "forbidden_credential_predicate" in [
+        item["code"] for item in caught.value.details["violations"]
+    ]
 
 
 def _rule_graph(condition: str) -> Graph:
@@ -1075,6 +1278,22 @@ def test_parse_catalog_rejects_extra_structural_predicates_for_every_operator(
     ]
 
 
+@pytest.mark.parametrize("false_y_value", ('""', "0", "false"))
+def test_parse_catalog_rejects_false_y_forbidden_structural_objects(
+    false_y_value: str,
+) -> None:
+    graph = _rule_graph(
+        '[ a oa:In ; oa:leftProperty ex:Metric ; oa:values ("one") ; ' f"oa:value {false_y_value} ]"
+    )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [item["code"] for item in caught.value.details["violations"]] == [
+        "invalid_rule_expression"
+    ]
+
+
 def _logical_graph(argument_order: tuple[str, str]) -> Graph:
     graph = _graph("""
         @prefix ex: <https://example.invalid/ontology/> .
@@ -1118,3 +1337,94 @@ def test_parse_catalog_canonicalizes_commutative_children_across_insertion_order
         RuleOperator.EQ,
         RuleOperator.IS_NULL,
     )
+
+
+def _invalid_logical_graph(argument_order: tuple[str, str]) -> Graph:
+    graph = _logical_graph(("value", "null"))
+    namespace = "https://example.invalid/ontology/"
+    condition = URIRef(namespace + "Condition")
+    value_child = URIRef(namespace + "ValueChild")
+    null_child = URIRef(namespace + "NullChild")
+    graph.remove((condition, ARGUMENT, None))
+    graph.remove((value_child, LEFT_PROPERTY, None))
+    graph.add((value_child, LEFT_PROPERTY, Literal("not-an-iri")))
+    graph.remove((null_child, RDF.type, None))
+    children = {"reference": value_child, "operator": null_child}
+    for name in argument_order:
+        graph.add((condition, ARGUMENT, children[name]))
+    return graph
+
+
+def test_invalid_commutative_children_are_aggregated_deterministically() -> None:
+    reports = []
+    for order in (("reference", "operator"), ("operator", "reference")):
+        with pytest.raises(OntologyValidationError) as caught:
+            parse_catalog(_invalid_logical_graph(order))
+        reports.append(caught.value.details["violations"])
+
+    assert reports[0] == reports[1]
+    assert [item["code"] for item in reports[0]] == [
+        "invalid_ontology_reference",
+        "invalid_rule_expression",
+    ]
+
+
+def _layered_shared_dag_graph(levels: int) -> Graph:
+    graph = _rule_graph("[ a oa:IsNull ; oa:leftProperty ex:Metric ]")
+    namespace = "https://example.invalid/ontology/condition/"
+    rule = URIRef("https://example.invalid/ontology/Rule")
+    metric = URIRef("https://example.invalid/ontology/Metric")
+    root = URIRef(namespace + "root")
+    pairs = [
+        (URIRef(f"{namespace}{level}/left"), URIRef(f"{namespace}{level}/right"))
+        for level in range(levels)
+    ]
+    graph.remove((rule, CONDITION, None))
+    graph.add((rule, CONDITION, root))
+    graph.add((root, RDF.type, OA.AllOf))
+    for child in pairs[0]:
+        graph.add((root, ARGUMENT, child))
+    for level, pair in enumerate(pairs):
+        if level == levels - 1:
+            for node in pair:
+                graph.add((node, RDF.type, OA.IsNull))
+                graph.add((node, LEFT_PROPERTY, metric))
+            continue
+        for node in pair:
+            graph.add((node, RDF.type, OA.AllOf))
+            for child in pairs[level + 1]:
+                graph.add((node, ARGUMENT, child))
+    return graph
+
+
+def test_shared_dag_canonical_key_work_is_bounded_by_unique_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    original = semantic_parser._expression_key
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 200:
+            raise AssertionError("canonical key work exceeded unique-node bound")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(semantic_parser, "_expression_key", counted)
+
+    catalog = parse_catalog(_layered_shared_dag_graph(10))
+
+    assert catalog.rules[0].condition is not None
+    assert calls <= 21
+
+
+def test_rule_logical_argument_edge_budget_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(semantic_parser, "MAX_RULE_LOGICAL_ARGUMENT_EDGES", 4)
+    assert parse_catalog(_shared_dag_graph(include_extra_leaf=False)).rules[0].condition
+
+    monkeypatch.setattr(semantic_parser, "MAX_RULE_LOGICAL_ARGUMENT_EDGES", 3)
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(_shared_dag_graph(include_extra_leaf=False))
+    assert "maximum logical argument edge count of 3" in str(caught.value.details)

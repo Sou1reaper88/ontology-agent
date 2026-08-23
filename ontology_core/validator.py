@@ -9,6 +9,8 @@ from ontology_core.errors import OntologyParseError
 from ontology_core.models import OntologyViolation, ValidationReport
 from ontology_core.parse_diagnostics import safe_parse_details
 
+_SAFE_CONSTRAINT_MESSAGE = "Ontology constraint violation"
+
 
 def _node_text(value) -> str:
     if isinstance(value, BNode):
@@ -49,12 +51,11 @@ class OntologyValidator:
             canonical_graph = to_canonical_graph(result_graph)
             violations = []
             for result in canonical_graph.subjects(RDF.type, SH.ValidationResult):
-                messages = _texts(canonical_graph, result, SH.resultMessage)
                 violations.append(
                     OntologyViolation(
                         focus_node=_text(canonical_graph, result, SH.focusNode),
                         path=_text(canonical_graph, result, SH.resultPath),
-                        message=" | ".join(messages) or "Ontology constraint violation",
+                        message=_SAFE_CONSTRAINT_MESSAGE,
                         severity=_text(canonical_graph, result, SH.resultSeverity),
                         source_shape=_text(canonical_graph, result, SH.sourceShape),
                     )

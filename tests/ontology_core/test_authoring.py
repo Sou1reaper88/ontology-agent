@@ -223,6 +223,57 @@ def test_initialize_package_rejects_http_base_uri_credentials_and_query_without_
     assert not _empty_backups(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "base_uri",
+    (
+        "urn:example:private?token=fictional-secret",
+        "urn:example:private?",
+    ),
+)
+def test_initialize_package_rejects_query_for_every_allowed_scheme_without_writes(
+    tmp_path: Path,
+    base_uri: str,
+) -> None:
+    package_dir = tmp_path / "package"
+
+    with pytest.raises(OntologyParseError) as caught:
+        initialize_package(
+            package_dir,
+            package_id="neutral.package",
+            base_uri=base_uri,
+        )
+
+    assert caught.value.details == {"field": "base_uri"}
+    assert "fictional-secret" not in str(caught.value.details)
+    assert not package_dir.exists()
+    assert not _staging_directories(tmp_path)
+    assert not _empty_backups(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "base_uri",
+    (
+        "urn:example:private#section?allowed",
+        "https://example.invalid/private/#section?allowed",
+    ),
+)
+def test_initialize_package_allows_question_mark_inside_fragment(
+    tmp_path: Path,
+    base_uri: str,
+) -> None:
+    package_dir = tmp_path / "package"
+
+    initialize_package(
+        package_dir,
+        package_id="neutral.package",
+        base_uri=base_uri,
+    )
+
+    assert f"<{base_uri}> a owl:Ontology ." in package_dir.joinpath("domain.ttl").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_initialize_package_accepts_a_valid_http_base_uri(tmp_path: Path) -> None:
     package_dir = tmp_path / "package"
 
@@ -881,7 +932,7 @@ def test_generated_package_contains_only_generic_vocabulary_and_blank_modules(
     assert "Example" not in generated
     assert "ConcreteTable" not in generated
     assert "password" not in generated.casefold()
-    assert "token" not in generated.casefold()
+    assert "oa:token" not in generated.casefold()
     assert "ex:Instance" not in generated
     for path in package_dir.iterdir():
         content = path.read_bytes()

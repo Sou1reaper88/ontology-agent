@@ -21,6 +21,23 @@ def _copy_package(source_dir: Path, target_dir: Path) -> None:
         target_dir.joinpath(source.name).write_bytes(source.read_bytes())
 
 
+def _append_secret_shape(package_dir: Path) -> None:
+    shapes = package_dir / "shapes.ttl"
+    shapes.write_text(
+        shapes.read_text(encoding="utf-8") + """
+
+<https://example.invalid/ontology/SecretMessageShape> a sh:NodeShape ;
+    sh:targetNode <https://example.invalid/ontology/Record> ;
+    sh:property [
+        sh:path <urn:ontology-agent:core#shortName> ;
+        sh:minCount 2 ;
+        sh:message "fictional-secret-shacl-message"
+    ] .
+""",
+        encoding="utf-8",
+    )
+
+
 class _MutatingValidator:
     def __init__(self, target: Path) -> None:
         self._target = target
@@ -88,6 +105,25 @@ def test_failed_reload_keeps_previous_snapshot(
         repository.publish(broken)
 
     assert repository.current().info.sha256 == previous.sha256
+
+
+def test_publish_does_not_expose_authored_shacl_result_message(
+    valid_package_dir: Path,
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "secret-shape"
+    _copy_package(valid_package_dir, package)
+    _append_secret_shape(package)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        OntologyRepository().publish(package)
+
+    serialized = json.dumps(caught.value.details, ensure_ascii=False)
+    assert "fictional-secret-shacl-message" not in serialized
+    assert caught.value.details["violations"]
+    assert {item["message"] for item in caught.value.details["violations"]} == {
+        "Ontology constraint violation"
+    }
 
 
 def test_malformed_turtle_error_does_not_expose_source_or_path(

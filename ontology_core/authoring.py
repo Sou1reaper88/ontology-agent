@@ -47,6 +47,8 @@ def _validate_base_uri(base_uri: str) -> str:
         character.isspace() or ord(character) < 0x20 or character in '<>"{}' for character in value
     ):
         raise _invalid_base_uri()
+    if query_is_present:
+        raise _invalid_base_uri()
     try:
         parts = urlsplit(value)
         hostname = parts.hostname
@@ -54,13 +56,7 @@ def _validate_base_uri(base_uri: str) -> str:
     except ValueError as exc:
         raise _invalid_base_uri() from exc
     if parts.scheme in {"http", "https"}:
-        if (
-            parts.netloc
-            and hostname
-            and parts.username is None
-            and parts.password is None
-            and not query_is_present
-        ):
+        if parts.netloc and hostname and parts.username is None and parts.password is None:
             return value
         raise _invalid_base_uri()
     if parts.scheme == "urn" and _URN_NID_AND_NSS.fullmatch(parts.path):

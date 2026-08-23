@@ -16,6 +16,23 @@ def _copy_package(source: Path, target: Path) -> None:
         target.joinpath(path.name).write_bytes(path.read_bytes())
 
 
+def _append_secret_shape(package_dir: Path) -> None:
+    shapes = package_dir / "shapes.ttl"
+    shapes.write_text(
+        shapes.read_text(encoding="utf-8") + """
+
+<https://example.invalid/ontology/SecretMessageShape> a sh:NodeShape ;
+    sh:targetNode <https://example.invalid/ontology/Record> ;
+    sh:property [
+        sh:path <urn:ontology-agent:core#shortName> ;
+        sh:minCount 2 ;
+        sh:message "fictional-secret-shacl-message"
+    ] .
+""",
+        encoding="utf-8",
+    )
+
+
 def _assert_valid_payload(payload: dict[str, object], *, package_path: Path) -> None:
     assert set(payload) == {"status", "package", "counts"}
     assert payload["status"] == "valid"
@@ -196,6 +213,26 @@ def test_deep_rule_cli_error_is_stable_without_traceback(
     assert "_:" not in output.err
 
 
+def test_validate_json_does_not_expose_authored_shacl_result_message(
+    valid_package_dir: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    broken = tmp_path / "secret-shape"
+    _copy_package(valid_package_dir, broken)
+    _append_secret_shape(broken)
+
+    assert main(["validate", str(broken), "--json"]) == 1
+    output = capsys.readouterr()
+
+    assert output.out == ""
+    payload = json.loads(output.err)
+    assert payload["code"] == "ontology_validation_error"
+    assert payload["details"]["violations"]
+    assert "fictional-secret-shacl-message" not in output.err
+    assert "traceback" not in output.err.casefold()
+
+
 def test_inspect_counts_excludes_identifiers_and_source_path(
     valid_package_dir: Path,
     tmp_path: Path,
@@ -246,7 +283,10 @@ def test_inspect_text_prints_digest_and_counts_without_sensitive_details(
     assert str(package_dir.resolve()) not in output
     assert "https://example.invalid/ontology/Record" not in output
     assert "Neutral record used only by tests." not in output
-    assert "42" not in output
+    non_digest_output = "\n".join(
+        line for line in output.splitlines() if not line.startswith("sha256: ")
+    )
+    assert "42" not in non_digest_output
     assert "fictional_physical_table" not in output
     assert "fictional_physical_field" not in output
 

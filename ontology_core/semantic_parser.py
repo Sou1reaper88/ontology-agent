@@ -84,7 +84,60 @@ _OPERATOR_TYPES = {
 _STRUCTURAL_PREDICATES = frozenset({ARGUMENT, LEFT_PROPERTY, VALUE, VALUES, PARAMETER})
 _LOGICAL_OPERATORS = frozenset({RuleOperator.ALL_OF, RuleOperator.ANY_OF, RuleOperator.NOT})
 _COLLECTION_OPERATORS = frozenset({RuleOperator.IN, RuleOperator.BETWEEN})
-_XSD_NAMESPACE = str(XSD)
+_XSD_BUILTIN_LOCAL_NAMES = frozenset(
+    {
+        "ENTITIES",
+        "ENTITY",
+        "ID",
+        "IDREF",
+        "IDREFS",
+        "NCName",
+        "NMTOKEN",
+        "NMTOKENS",
+        "NOTATION",
+        "Name",
+        "QName",
+        "anyURI",
+        "base64Binary",
+        "boolean",
+        "byte",
+        "date",
+        "dateTime",
+        "dateTimeStamp",
+        "dayTimeDuration",
+        "decimal",
+        "double",
+        "duration",
+        "float",
+        "gDay",
+        "gMonth",
+        "gMonthDay",
+        "gYear",
+        "gYearMonth",
+        "hexBinary",
+        "int",
+        "integer",
+        "language",
+        "long",
+        "negativeInteger",
+        "nonNegativeInteger",
+        "nonPositiveInteger",
+        "normalizedString",
+        "positiveInteger",
+        "short",
+        "string",
+        "time",
+        "token",
+        "unsignedByte",
+        "unsignedInt",
+        "unsignedLong",
+        "unsignedShort",
+        "yearMonthDuration",
+    }
+)
+_XSD_BUILTIN_DATATYPE_URIS = frozenset(
+    f"{XSD}{local_name}" for local_name in _XSD_BUILTIN_LOCAL_NAMES
+)
 _CREDENTIAL_NAMES = {
     "host",
     "port",
@@ -95,10 +148,15 @@ _CREDENTIAL_NAMES = {
     "connectionstring",
 }
 _URI_SEGMENT_SEPARATOR = re.compile(r"[/#:]+")
+_URN_NID_AND_NSS = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{1,31}:.+")
+_INVALID_SEMANTIC_ELEMENT_URI = "urn:ontology-agent:invalid-semantic-element"
 
 MAX_RULE_EXPRESSION_DEPTH = 64
 MAX_RULE_EXPRESSION_NODES = 1024
 MAX_RULE_COLLECTION_ITEMS = 1024
+MAX_RULE_LOGICAL_ARGUMENT_EDGES = 4096
+MAX_CREDENTIAL_SCAN_NODES = 1024
+MAX_CREDENTIAL_PERCENT_DECODE_ROUNDS = 4
 
 
 @dataclass
@@ -106,7 +164,9 @@ class _ExpressionParseContext:
     property_uris: set[str]
     active: set[Identifier] = field(default_factory=set)
     completed: dict[Identifier, RuleExpression] = field(default_factory=dict)
+    canonical_keys: dict[Identifier, tuple[object, ...]] = field(default_factory=dict)
     nodes: set[Identifier] = field(default_factory=set)
+    logical_argument_edges: int = 0
 
 
 class _InvalidReferenceError(ValueError):
@@ -121,9 +181,42 @@ class _InvalidReferencesError(ValueError):
         self.errors = errors
 
 
+@dataclass(frozen=True)
+class _RuleExpressionIssue:
+    code: str
+    path: URIRef
+    message: str
+
+
+class _RuleExpressionIssuesError(ValueError):
+    def __init__(self, issues: tuple[_RuleExpressionIssue, ...]) -> None:
+        super().__init__("Invalid rule expression children")
+        self.issues = tuple(
+            sorted(issues, key=lambda item: (item.code, str(item.path), item.message))
+        )
+
+
+class _CredentialDecodeBudgetError(ValueError):
+    pass
+
+
 def _is_stable_semantic_uri(value: URIRef) -> bool:
-    scheme = urlsplit(str(value)).scheme.casefold()
-    return bool(scheme) and scheme != "file"
+    text = str(value)
+    try:
+        parts = urlsplit(text)
+        hostname = parts.hostname
+        _ = parts.port
+    except ValueError:
+        return False
+    scheme = parts.scheme.casefold()
+    if not scheme or scheme == "file":
+        return False
+    if scheme in {"http", "https"}:
+        return bool(parts.netloc and hostname)
+    if scheme == "urn":
+        return bool(_URN_NID_AND_NSS.fullmatch(parts.path))
+    scheme_specific = text.partition(":")[2].partition("?")[0].partition("#")[0]
+    return bool(scheme_specific)
 
 
 def _reference_text(value: Identifier, predicate: URIRef) -> str:
@@ -248,12 +341,13 @@ def _invalid_subject_violations(graph: Graph) -> tuple[set[URIRef], list[dict[st
     for marker in _MARKERS:
         for subject in graph.subjects(RDF.type, marker):
             if isinstance(subject, URIRef):
-                subjects.add(subject)
-                if not _is_stable_semantic_uri(subject):
+                if _is_stable_semantic_uri(subject):
+                    subjects.add(subject)
+                else:
                     violations.append(
                         _violation(
                             "invalid_semantic_uri",
-                            str(subject),
+                            _INVALID_SEMANTIC_ELEMENT_URI,
                             RDF.type,
                             "Marked semantic element requires an absolute non-file URI",
                         )
@@ -479,7 +573,9 @@ def _validate_expression_structure(
     else:
         allowed = {LEFT_PROPERTY, VALUE, PARAMETER}
     supplied = {
-        predicate for predicate in _STRUCTURAL_PREDICATES if any(graph.objects(node, predicate))
+        predicate
+        for predicate in _STRUCTURAL_PREDICATES
+        if next(graph.objects(node, predicate), None) is not None
     }
     extras = sorted(str(predicate) for predicate in supplied - allowed)
     if extras:
@@ -488,7 +584,10 @@ def _validate_expression_structure(
         )
 
 
-def _expression_key(expression: RuleExpression) -> tuple[object, ...]:
+def _expression_key(
+    expression: RuleExpression,
+    child_keys: tuple[tuple[object, ...], ...] = (),
+) -> tuple[object, ...]:
     literal_keys = tuple(
         (
             value.lexical_form,
@@ -502,7 +601,7 @@ def _expression_key(expression: RuleExpression) -> tuple[object, ...]:
         expression.property_uri or "",
         literal_keys,
         expression.parameter or "",
-        tuple(_expression_key(child) for child in expression.children),
+        child_keys,
     )
 
 
@@ -536,6 +635,7 @@ def _parse_expression(
     operator = operators[0]
     _validate_expression_structure(graph, node, operator)
     context.active.add(node)
+    child_keys: tuple[tuple[object, ...], ...] = ()
     try:
         if operator in (RuleOperator.ALL_OF, RuleOperator.ANY_OF, RuleOperator.NOT):
             arguments = tuple(graph.objects(node, ARGUMENT))
@@ -547,12 +647,55 @@ def _parse_expression(
                 count_text = "at least two"
             if not valid_count:
                 raise ValueError(f"{operator.value} requires {count_text} arguments")
-            children = tuple(
-                _parse_expression(graph, argument, context, depth=depth + 1)
-                for argument in arguments
-            )
+            if context.logical_argument_edges + len(arguments) > MAX_RULE_LOGICAL_ARGUMENT_EDGES:
+                raise ValueError(
+                    "Rule expression exceeds maximum logical argument edge count of "
+                    f"{MAX_RULE_LOGICAL_ARGUMENT_EDGES}"
+                )
+            context.logical_argument_edges += len(arguments)
+            child_entries: list[tuple[Identifier, RuleExpression]] = []
+            child_issues: list[_RuleExpressionIssue] = []
+            for argument in arguments:
+                try:
+                    child_entries.append(
+                        (
+                            argument,
+                            _parse_expression(graph, argument, context, depth=depth + 1),
+                        )
+                    )
+                except _RuleExpressionIssuesError as exc:
+                    child_issues.extend(exc.issues)
+                except _InvalidReferencesError as exc:
+                    child_issues.extend(
+                        _RuleExpressionIssue(
+                            "invalid_ontology_reference",
+                            error.path,
+                            str(error),
+                        )
+                        for error in exc.errors
+                    )
+                except _InvalidReferenceError as exc:
+                    child_issues.append(
+                        _RuleExpressionIssue(
+                            "invalid_ontology_reference",
+                            exc.path,
+                            str(exc),
+                        )
+                    )
+                except ValueError as exc:
+                    child_issues.append(
+                        _RuleExpressionIssue(
+                            "invalid_rule_expression",
+                            CONDITION,
+                            str(exc),
+                        )
+                    )
+            if child_issues:
+                raise _RuleExpressionIssuesError(tuple(child_issues))
             if operator is not RuleOperator.NOT:
-                children = tuple(sorted(children, key=_expression_key))
+                child_entries.sort(key=lambda item: context.canonical_keys[item[0]])
+            children = tuple(expression for _, expression in child_entries)
+            child_keys = tuple(context.canonical_keys[argument] for argument, _ in child_entries)
             expression = RuleExpression(operator=operator, children=children)
         else:
             property_uri = _single_uri(graph, node, LEFT_PROPERTY, "left property")
@@ -607,28 +750,76 @@ def _parse_expression(
     finally:
         context.active.remove(node)
     context.completed[node] = expression
+    context.canonical_keys[node] = _expression_key(expression, child_keys)
     return expression
 
 
-def _forbidden_predicates(graph: Graph, subject: URIRef, violations: list[dict[str, str]]) -> None:
-    for predicate in graph.predicates(subject):
-        local_name = _normalized_predicate_local_name(predicate)
-        if local_name in _CREDENTIAL_NAMES:
+def _forbidden_predicates(
+    graph: Graph,
+    subject: URIRef,
+    violations: list[dict[str, str]],
+    marked_semantic_nodes: set[Identifier],
+) -> None:
+    visited: set[Identifier] = set()
+    pending: list[Identifier] = [subject]
+    while pending:
+        node = pending.pop(0)
+        if node in visited:
+            continue
+        if len(visited) >= MAX_CREDENTIAL_SCAN_NODES:
             violations.append(
                 _violation(
-                    "forbidden_credential_predicate",
+                    "credential_scan_budget_exceeded",
                     str(subject),
-                    predicate,
-                    "Credential-like predicates are prohibited",
+                    OA.configuration,
+                    "Credential configuration scan exceeded its node budget",
                 )
             )
+            return
+        visited.add(node)
+        edges = sorted(
+            graph.predicate_objects(node),
+            key=lambda item: (str(item[0]), type(item[1]).__name__, str(item[1])),
+        )
+        for predicate, value in edges:
+            try:
+                forbidden = _normalized_predicate_local_name(predicate) in _CREDENTIAL_NAMES
+            except ValueError:
+                forbidden = True
+            if forbidden:
+                violations.append(
+                    _violation(
+                        "forbidden_credential_predicate",
+                        str(subject),
+                        predicate,
+                        "Credential-like predicates are prohibited",
+                    )
+                )
+            if predicate == RDF.type or value in marked_semantic_nodes:
+                continue
+            if isinstance(value, BNode) or (
+                isinstance(value, URIRef) and next(graph.predicate_objects(value), None) is not None
+            ):
+                pending.append(value)
+
+
+def _bounded_percent_decode(value: str) -> str:
+    current = value
+    for _ in range(MAX_CREDENTIAL_PERCENT_DECODE_ROUNDS):
+        decoded = unquote(current)
+        if decoded == current:
+            return current
+        current = decoded
+    if unquote(current) != current:
+        raise _CredentialDecodeBudgetError("Credential predicate decode budget exceeded")
+    return current
 
 
 def _normalized_predicate_local_name(predicate: URIRef) -> str:
     """Return a normalized final non-empty segment for any URI scheme."""
     parsed_uri = urlsplit(str(predicate))
     encoded_source = parsed_uri.fragment if parsed_uri.fragment else parsed_uri.path
-    decoded_source = unquote(encoded_source)
+    decoded_source = _bounded_percent_decode(encoded_source)
     parsed_source = urlsplit(decoded_source)
     local_source = parsed_source.fragment if parsed_source.fragment else parsed_source.path
     segments = [
@@ -641,6 +832,9 @@ def _normalized_predicate_local_name(predicate: URIRef) -> str:
 def parse_catalog(graph: Graph) -> SemanticCatalog:
     """Parse marked semantic elements or raise one aggregated validation error."""
     subjects, violations = _invalid_subject_violations(graph)
+    marked_semantic_nodes = {
+        subject for marker in _MARKERS for subject in graph.subjects(RDF.type, marker)
+    }
     by_marker = {
         marker: sorted(
             (subject for subject in subjects if (subject, RDF.type, marker) in graph), key=str
@@ -703,9 +897,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             marked_concept_uris=marked_concept_uris,
             violations=violations,
         )
-        if value_range is not None and not (
-            value_range.startswith(_XSD_NAMESPACE) and len(value_range) > len(_XSD_NAMESPACE)
-        ):
+        if value_range is not None and value_range not in _XSD_BUILTIN_DATATYPE_URIS:
             violations.append(
                 _violation(
                     "invalid_datatype_range",
@@ -769,7 +961,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
     ] = []
     for subject in source_subjects:
         uri = str(subject)
-        _forbidden_predicates(graph, subject, violations)
+        _forbidden_predicates(graph, subject, violations, marked_semantic_nodes)
         fields = _element_fields(graph, subject, violations)
         platform_type = _capture(
             lambda subject=subject: str(
@@ -884,6 +1076,16 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                     _ExpressionParseContext(marked_property_uris),
                     depth=1,
                 )
+            except _RuleExpressionIssuesError as exc:
+                for issue in exc.issues:
+                    violations.append(
+                        _violation(
+                            issue.code,
+                            uri,
+                            issue.path,
+                            issue.message,
+                        )
+                    )
             except _InvalidReferencesError as exc:
                 for error in exc.errors:
                     violations.append(
@@ -958,7 +1160,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
     semantic_element_uris = marked_concept_uris | marked_property_uris | marked_relation_uris
     for subject in mapping_subjects:
         uri = str(subject)
-        _forbidden_predicates(graph, subject, violations)
+        _forbidden_predicates(graph, subject, violations, marked_semantic_nodes)
         fields = _element_fields(graph, subject, violations)
         element = _capture(
             lambda subject=subject: _single_uri(

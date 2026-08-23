@@ -86,7 +86,7 @@ Protégé 的图形界面适合创建类、属性和个体；保存后请检查 
     rdfs:range <https://example.invalid/private/OtherConcept> .
 ```
 
-`oa:Property` 只能表示数据属性，range 必须是 `http://www.w3.org/2001/XMLSchema#` 命名空间中的 XSD 数据类型 URI，不接受自定义 datatype IRI。`oa:Relation` 表示对象关系，domain 与 range 必须指向已标记的概念。SHACL 同时要求每个标记元素有一个 IRI、一个 short name 和至少一个 label。
+`oa:Property` 只能表示数据属性，range 必须取自标准 XSD built-in datatype 闭合列表，不是只要带有 `http://www.w3.org/2001/XMLSchema#` 前缀就合法。允许项包括常用的 `xsd:string`、`xsd:boolean`、`xsd:decimal`、`xsd:integer`、各有符号/无符号整数派生类型、`xsd:float`、`xsd:double`、日期时间与 duration 系列、binary 系列、URI/名称/语言及 XML Schema 定义的其他非抽象 built-in simple datatypes；自定义 datatype IRI 和伪造的 XSD 局部名都会被拒绝。完整闭合列表以随包发布的 `shapes.ttl` 中 `rdfs:range` 的 `sh:in` 为准，并与 Python 语义校验保持同步。`oa:Relation` 表示对象关系，domain 与 range 必须指向已标记的概念。SHACL 同时要求每个标记元素有一个 IRI、一个 short name 和至少一个 label。
 
 ## 6. 创建规则、数据源与映射个体
 
