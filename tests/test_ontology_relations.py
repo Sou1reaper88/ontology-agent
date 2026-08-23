@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from tools.ontology_client import DbOntologyClient
 
@@ -33,7 +33,10 @@ def test_relations_crud(client: TestClient, admin_token: str) -> None:
     assert resp.status_code == 200
     assert any(r["id"] == rid for r in resp.json())
 
-    assert client.delete(f"/ontology/relations/{rid}", headers=_headers(admin_token)).status_code == 204
+    assert (
+        client.delete(f"/ontology/relations/{rid}", headers=_headers(admin_token)).status_code
+        == 204
+    )
 
 
 def test_logical_defs_crud(client: TestClient, admin_token: str) -> None:
@@ -55,7 +58,10 @@ def test_logical_defs_crud(client: TestClient, admin_token: str) -> None:
     assert resp.status_code == 200
     assert any(r["id"] == did for r in resp.json())
 
-    assert client.delete(f"/ontology/logical-defs/{did}", headers=_headers(admin_token)).status_code == 204
+    assert (
+        client.delete(f"/ontology/logical-defs/{did}", headers=_headers(admin_token)).status_code
+        == 204
+    )
 
 
 def test_retrieval_returns_relations_and_defs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,9 +90,7 @@ def test_retrieval_returns_relations_and_defs(monkeypatch: pytest.MonkeyPatch) -
     definition = client.get_ontology_definition("查询数据")
 
     assert definition["relations"] == []
-    assert definition["logical_definitions"] == {
-        "example_rule": "neutral contract description"
-    }
+    assert definition["logical_definitions"] == {"example_rule": "neutral contract description"}
 
 
 def test_meta_tables_excluded_from_objects() -> None:
