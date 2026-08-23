@@ -1,6 +1,25 @@
+@prefix oa: <urn:ontology-agent:core#> .
 @prefix ex: <https://example.invalid/ontology/> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+oa:Concept a owl:Class ;
+    rdfs:label "Concept marker" .
+
+oa:Property a owl:Class ;
+    rdfs:label "Property marker" .
+
+oa:Relation a owl:Class ;
+    rdfs:label "Relation marker" .
+
+oa:BusinessRule a owl:Class ;
+    rdfs:label "Business rule marker" .
+
+oa:DataSource a owl:Class ;
+    rdfs:label "Data source marker" .
+
+oa:PhysicalMapping a owl:Class ;
+    rdfs:label "Physical mapping marker" .
 
 ex:SemanticElement a owl:Class ;
     rdfs:label "Semantic element" .

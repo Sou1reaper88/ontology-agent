@@ -1,12 +1,12 @@
 @prefix ex: <https://example.invalid/ontology/> .
-@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix oa: <urn:ontology-agent:core#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 
-ex:OntologyClassShape a sh:NodeShape ;
-    sh:targetClass owl:Class ;
+ex:MarkedSemanticElementShape a sh:NodeShape ;
+    sh:targetClass oa:Concept, oa:Property, oa:Relation, oa:BusinessRule, oa:DataSource, oa:PhysicalMapping ;
     sh:property [
         sh:path rdfs:label ;
         sh:minCount 1 ;
-        sh:message "OWL class requires a label"
+        sh:message "Marked semantic element requires a label"
     ] .

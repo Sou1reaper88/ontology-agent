@@ -11,8 +11,9 @@ from ontology_core.validator import OntologyValidator
 
 _UNLABELLED_TTL = (
     "@prefix ex: <https://example.invalid/ontology/> .\n"
+    "@prefix oa: <urn:ontology-agent:core#> .\n"
     "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
-    "ex:Unlabelled a owl:Class .\n"
+    "ex:Unlabelled a owl:Class, oa:Concept .\n"
 )
 
 _MULTI_MESSAGE_SHAPES_TTL = (
@@ -51,7 +52,7 @@ def test_missing_label_returns_structured_violation(valid_package_dir: Path) -> 
     assert report.conforms is False
     assert len(report.violations) == 1
     assert report.violations[0].focus_node.endswith("Unlabelled")
-    assert report.violations[0].message == "OWL class requires a label"
+    assert report.violations[0].message == "Marked semantic element requires a label"
 
 
 def test_violation_report_is_stable_for_fresh_graphs(valid_package_dir: Path) -> None:

@@ -67,8 +67,9 @@ def test_failed_reload_keeps_previous_snapshot(
         broken.joinpath(source.name).write_bytes(source.read_bytes())
     broken.joinpath("domain.ttl").write_text(
         "@prefix ex: <https://example.invalid/ontology/> .\n"
+        "@prefix oa: <urn:ontology-agent:core#> .\n"
         "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n"
-        "ex:Unlabelled a owl:Class .\n",
+        "ex:Unlabelled a owl:Class, oa:Concept .\n",
         encoding="utf-8",
     )
 

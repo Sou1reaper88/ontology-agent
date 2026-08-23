@@ -1,7 +1,27 @@
 @prefix ex: <https://example.invalid/ontology/> .
+@prefix oa: <urn:ontology-agent:core#> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-ex:Record a owl:Class ;
-    rdfs:subClassOf ex:SemanticElement ;
-    rdfs:label "Record" .
+ex:Record a owl:Class, oa:Concept ;
+    oa:shortName "Record" ;
+    rdfs:label "记录"@zh-CN, "Record"@en ;
+    rdfs:comment "Neutral record used only by tests." .
+
+ex:RelatedRecord a owl:Class, oa:Concept ;
+    oa:shortName "RelatedRecord" ;
+    rdfs:label "Related record"@en ;
+    rdfs:subClassOf ex:Record .
+
+ex:Metric a owl:DatatypeProperty, oa:Property ;
+    oa:shortName "Metric" ;
+    rdfs:label "Metric"@en ;
+    rdfs:domain ex:Record ;
+    rdfs:range xsd:integer .
+
+ex:relatesTo a owl:ObjectProperty, oa:Relation ;
+    oa:shortName "relatesTo" ;
+    rdfs:label "Relates to"@en ;
+    rdfs:domain ex:Record ;
+    rdfs:range ex:RelatedRecord .
