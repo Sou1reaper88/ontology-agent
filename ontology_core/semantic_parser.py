@@ -188,6 +188,26 @@ def _parent_uris(
     return tuple(sorted(set(parent_uris)))
 
 
+def _validate_concept_reference(
+    *,
+    uri: str,
+    concept_uri: str | None,
+    path: URIRef,
+    marked_concept_uris: set[str],
+    violations: list[dict[str, str]],
+) -> None:
+    if concept_uri is None or concept_uri in marked_concept_uris:
+        return
+    violations.append(
+        _violation(
+            "dangling_concept_reference",
+            uri,
+            path,
+            f"Referenced concept does not exist: {concept_uri}",
+        )
+    )
+
+
 def _raise_if_invalid(violations: list[dict[str, str]]) -> None:
     if not violations:
         return
@@ -228,27 +248,23 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         ]
     ] = []
     for subject in concept_subjects:
+        uri = str(subject)
+        parent_uris = _parent_uris(graph, subject, violations)
+        for parent_uri in parent_uris:
+            _validate_concept_reference(
+                uri=uri,
+                concept_uri=parent_uri,
+                path=RDFS.subClassOf,
+                marked_concept_uris=marked_concept_uris,
+                violations=violations,
+            )
         fields = _element_fields(graph, subject, violations)
         if fields is None:
             continue
         short_name, label, labels, description = fields
-        uri = str(subject)
         if not _validate_short_name(short_name=short_name, uri=uri, violations=violations):
             continue
-        parent_uris = _parent_uris(graph, subject, violations)
         concept_data.append((uri, short_name, label, labels, description, parent_uris))
-
-    for uri, _, _, _, _, parent_uris in concept_data:
-        for parent_uri in parent_uris:
-            if parent_uri not in marked_concept_uris:
-                violations.append(
-                    _violation(
-                        "dangling_concept_reference",
-                        uri,
-                        RDFS.subClassOf,
-                        f"Referenced concept does not exist: {parent_uri}",
-                    )
-                )
 
     property_data: list[tuple[str, str, str, tuple[LocalizedText, ...], str | None, str, str]] = []
     for subject in property_subjects:
@@ -267,6 +283,13 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             code="missing_range",
             uri=uri,
             path=RDFS.range,
+        )
+        _validate_concept_reference(
+            uri=uri,
+            concept_uri=domain_uri,
+            path=RDFS.domain,
+            marked_concept_uris=marked_concept_uris,
+            violations=violations,
         )
         if fields is None or domain_uri is None or range_uri is None:
             continue
@@ -293,6 +316,20 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             uri=uri,
             path=RDFS.range,
         )
+        _validate_concept_reference(
+            uri=uri,
+            concept_uri=source_uri,
+            path=RDFS.domain,
+            marked_concept_uris=marked_concept_uris,
+            violations=violations,
+        )
+        _validate_concept_reference(
+            uri=uri,
+            concept_uri=target_uri,
+            path=RDFS.range,
+            marked_concept_uris=marked_concept_uris,
+            violations=violations,
+        )
         if fields is None or source_uri is None or target_uri is None:
             continue
         short_name, label, labels, description = fields
@@ -309,28 +346,6 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                         uri,
                         SHORT_NAME,
                         f"Duplicate short name: {short_name}",
-                    )
-                )
-
-    for uri, _, _, _, _, domain_uri, _ in property_data:
-        if domain_uri not in marked_concept_uris:
-            violations.append(
-                _violation(
-                    "dangling_concept_reference",
-                    uri,
-                    RDFS.domain,
-                    f"Referenced concept does not exist: {domain_uri}",
-                )
-            )
-    for uri, _, _, _, _, source_uri, target_uri in relation_data:
-        for path, concept_uri in ((RDFS.domain, source_uri), (RDFS.range, target_uri)):
-            if concept_uri not in marked_concept_uris:
-                violations.append(
-                    _violation(
-                        "dangling_concept_reference",
-                        uri,
-                        path,
-                        f"Referenced concept does not exist: {concept_uri}",
                     )
                 )
 

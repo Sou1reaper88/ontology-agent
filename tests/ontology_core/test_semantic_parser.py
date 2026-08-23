@@ -204,6 +204,70 @@ def test_parse_catalog_does_not_report_marked_invalid_concept_as_dangling() -> N
     assert [item["code"] for item in caught.value.details["violations"]] == ["missing_label"]
 
 
+def test_parse_catalog_reports_unknown_property_domain_when_property_is_invalid() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Metric a owl:DatatypeProperty, oa:Property ;
+            rdfs:domain ex:Unknown ; rdfs:range xsd:integer .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [(item["code"], item["path"]) for item in caught.value.details["violations"]] == [
+        ("dangling_concept_reference", "http://www.w3.org/2000/01/rdf-schema#domain"),
+        ("missing_label", "http://www.w3.org/2000/01/rdf-schema#label"),
+        ("missing_short_name", "urn:ontology-agent:core#shortName"),
+    ]
+
+
+def test_parse_catalog_reports_unknown_relation_endpoints_when_relation_is_invalid() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:relatesTo a owl:ObjectProperty, oa:Relation ; oa:shortName "relatesTo" ;
+            rdfs:domain ex:UnknownSource ; rdfs:range ex:UnknownTarget .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [(item["code"], item["path"]) for item in caught.value.details["violations"]] == [
+        ("dangling_concept_reference", "http://www.w3.org/2000/01/rdf-schema#domain"),
+        ("dangling_concept_reference", "http://www.w3.org/2000/01/rdf-schema#range"),
+        ("missing_label", "http://www.w3.org/2000/01/rdf-schema#label"),
+    ]
+
+
+def test_parse_catalog_reports_invalid_concept_parents_when_concept_is_invalid() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Child a owl:Class, oa:Concept ; oa:shortName "Child" ;
+            rdfs:subClassOf ex:Unknown, "not-a-uri" .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert [(item["code"], item["path"]) for item in caught.value.details["violations"]] == [
+        ("dangling_concept_reference", "http://www.w3.org/2000/01/rdf-schema#subClassOf"),
+        ("invalid_parent_reference", "http://www.w3.org/2000/01/rdf-schema#subClassOf"),
+        ("missing_label", "http://www.w3.org/2000/01/rdf-schema#label"),
+    ]
+
+
 def test_parse_catalog_rejects_invalid_and_unknown_concept_parents() -> None:
     graph = _graph("""
         @prefix ex: <https://example.invalid/ontology/> .
