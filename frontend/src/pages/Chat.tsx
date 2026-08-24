@@ -26,6 +26,10 @@ import {
   ClearOutlined,
 } from "@ant-design/icons";
 import client from "../api/client";
+import {
+  OntologyComparison,
+  type OntologyShadowResult,
+} from "../components/OntologyComparison";
 
 const { Sider, Content } = Layout;
 const { Text, Paragraph } = Typography;
@@ -48,6 +52,7 @@ interface Msg {
   steps: any[] | null; // 实时轮询中的链路步骤（增量）
   generating: boolean; // 生成中占位
   error: string | null;
+  ontology_shadow: OntologyShadowResult | null;
   created_at: string;
 }
 
@@ -183,7 +188,7 @@ export default function Chat() {
     setInput("");
     setMessages((prev) => [
       ...prev,
-      { id: -Date.now(), role: "user", content, sql: null, query_id: null, trace: null, steps: null, generating: false, error: null, created_at: "" },
+      { id: -Date.now(), role: "user", content, sql: null, query_id: null, trace: null, steps: null, generating: false, error: null, ontology_shadow: null, created_at: "" },
     ]);
     try {
       // 草稿态：首条消息先创建对话（标题取首条消息前 20 字），再发消息
@@ -214,6 +219,7 @@ export default function Chat() {
           steps: [],
           generating: true,
           error: null,
+          ontology_shadow: null,
           created_at: "",
         },
       ]);
@@ -238,6 +244,7 @@ export default function Chat() {
                   steps: data.steps || [],
                   generating: data.status === "generating",
                   error: data.error || null,
+                  ontology_shadow: data.ontology_shadow || null,
                 }
               : m
           )
@@ -621,7 +628,19 @@ export default function Chat() {
                             generating={m.generating}
                           />
                         ) : null}
-                        {m.sql && (
+                        {m.ontology_shadow && editing?.msgId !== m.id && (
+                          <OntologyComparison
+                            legacySql={m.sql}
+                            result={m.ontology_shadow}
+                            onEditLegacy={() =>
+                              m.sql && setEditing({ msgId: m.id, sql: m.sql })
+                            }
+                            onCopyOntology={copySql}
+                          />
+                        )}
+                        {m.sql &&
+                          (m.ontology_shadow?.status !== "generated" ||
+                            editing?.msgId === m.id) && (
                           <div
                             style={{
                               marginTop: 8,
@@ -677,7 +696,7 @@ export default function Chat() {
                               </>
                             )}
                           </div>
-                        )}
+                          )}
                         <Space style={{ marginTop: 8 }}>
                           {m.query_id && !(editing?.msgId === m.id) && (
                             <Button
