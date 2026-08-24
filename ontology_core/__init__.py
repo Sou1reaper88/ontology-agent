@@ -9,6 +9,7 @@ from ontology_core.errors import (
     NoMatchingConceptError,
     OntologyCompileError,
     OntologyError,
+    OntologyImportError,
     OntologyParseError,
     OntologyValidationError,
     PackageNotFoundError,
@@ -18,6 +19,11 @@ from ontology_core.errors import (
 )
 from ontology_core.inspection import inspect_package
 from ontology_core.manifest import load_manifest, resolve_package_files
+from ontology_core.metadata_package import (
+    MetadataImportResult,
+    PackageGenerationOptions,
+    generate_metadata_package,
+)
 from ontology_core.models import (
     OntologyViolation,
     PackageFileRole,
@@ -46,6 +52,20 @@ from ontology_core.semantic_models import (
     SemanticCounts,
     SemanticElement,
 )
+from ontology_core.tabular_metadata import (
+    DiagnosticSeverity,
+    FieldMetadata,
+    ImportDiagnostic,
+    MetadataOverrides,
+    SourceLocation,
+    TableMetadata,
+    TabularMetadataDraft,
+    analyze_metadata,
+    apply_metadata_overrides,
+    load_metadata_overrides,
+    parse_tabular_metadata,
+    raise_for_blocking_diagnostics,
+)
 from ontology_core.validator import OntologyValidator
 
 __all__ = [
@@ -58,15 +78,21 @@ __all__ = [
     "Concept",
     "ConceptNotFoundError",
     "DataSource",
+    "DiagnosticSeverity",
+    "FieldMetadata",
     "InvalidOntologyReferenceError",
     "InvalidRuleExpressionError",
     "NoMatchingConceptError",
     "GenericSqlCompiler",
     "inspect_package",
     "InspectedPackage",
+    "ImportDiagnostic",
     "initialize_package",
     "LocalizedText",
+    "MetadataImportResult",
+    "MetadataOverrides",
     "OntologyError",
+    "OntologyImportError",
     "OntologyCompileError",
     "OntologyParseError",
     "OntologyPlanner",
@@ -79,6 +105,7 @@ __all__ = [
     "PackageFileRole",
     "PackageInfo",
     "PackageInspection",
+    "PackageGenerationOptions",
     "PackageManifest",
     "PackageNotFoundError",
     "PhysicalMapping",
@@ -93,9 +120,18 @@ __all__ = [
     "SemanticCatalog",
     "SemanticCounts",
     "SemanticElement",
+    "SourceLocation",
     "SqlCompiler",
     "UnsupportedQueryPlanError",
+    "TableMetadata",
+    "TabularMetadataDraft",
     "ValidationReport",
     "load_manifest",
+    "load_metadata_overrides",
+    "parse_tabular_metadata",
+    "analyze_metadata",
+    "apply_metadata_overrides",
+    "generate_metadata_package",
+    "raise_for_blocking_diagnostics",
     "resolve_package_files",
 ]
