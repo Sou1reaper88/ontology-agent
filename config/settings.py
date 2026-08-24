@@ -86,6 +86,8 @@ class OntologySettings(BaseSettings):
     ontology_id: str = ""
     timeout_seconds: int = 30
     retry_times: int = 2
+    package_path: str = ""
+    shadow_enabled: bool = True
 
 
 class Settings(BaseSettings):
@@ -112,7 +114,7 @@ class Settings(BaseSettings):
     ontology: OntologySettings = Field(default_factory=OntologySettings)
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "Settings":
+    def from_yaml(cls, path: str | Path) -> Settings:
         """从 YAML 文件加载配置（与 .env 合并，.env 优先）。"""
         path = Path(path)
         if not path.exists():
