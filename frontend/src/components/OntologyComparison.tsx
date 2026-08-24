@@ -1,10 +1,30 @@
 import { CopyOutlined, EditOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Row, Space, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Descriptions, Row, Space, Tag, Typography } from "antd";
 
 const { Text } = Typography;
 
+export interface TemporalEvidence {
+  partition_field: string;
+  grain: "day" | "month";
+  policy_source: "ontology";
+  system_time: string;
+  user_time: string | null;
+  source: "explicit_absolute" | "explicit_relative" | "ontology_default";
+  default_strategy: "t_minus_2" | "previous_complete_month";
+  resolved_start: string;
+  resolved_end: string;
+  safety_status: "bounded";
+  explanation: string;
+}
+
 export interface OntologyShadowResult {
-  status: "generated" | "no_match" | "ambiguous" | "unsupported" | "unavailable";
+  status:
+    | "generated"
+    | "no_match"
+    | "ambiguous"
+    | "unsupported"
+    | "unavailable"
+    | "clarification_required";
   ontology_sql: string | null;
   summary: string;
   diff: {
@@ -24,6 +44,7 @@ export interface OntologyShadowResult {
     version: string;
     sha256: string;
   } | null;
+  temporal_decision: TemporalEvidence | null;
 }
 
 interface Props {
@@ -38,6 +59,18 @@ const statusTitles: Record<Exclude<OntologyShadowResult["status"], "generated">,
   ambiguous: "本体匹配有歧义",
   unsupported: "本体映射暂不支持",
   unavailable: "本体影子链路不可用",
+  clarification_required: "业务账期需要确认",
+};
+
+const sourceLabels: Record<TemporalEvidence["source"], string> = {
+  explicit_absolute: "用户明确指定",
+  explicit_relative: "用户相对时间",
+  ontology_default: "本体默认推算",
+};
+
+const strategyLabels: Record<TemporalEvidence["default_strategy"], string> = {
+  t_minus_2: "T-2",
+  previous_complete_month: "上一个完整自然月",
 };
 
 function SqlBlock({ sql }: { sql: string }) {
@@ -84,7 +117,11 @@ export function OntologyComparison({
     return (
       <Alert
         style={{ marginTop: 10 }}
-        type={result.status === "unavailable" ? "warning" : "info"}
+        type={
+          result.status === "unavailable" || result.status === "clarification_required"
+            ? "warning"
+            : "info"
+        }
         showIcon
         message={
           result.status === "generated" ? "本体 SQL 未生成" : statusTitles[result.status]
@@ -147,6 +184,47 @@ export function OntologyComparison({
           </Card>
         </Col>
       </Row>
+      {result.temporal_decision && (
+        <Card
+          size="small"
+          title="业务账期决策"
+          extra={<Tag color="green">已添加有界分区约束</Tag>}
+          style={{ marginTop: 10, borderColor: "#95de64" }}
+        >
+          <Descriptions size="small" column={{ xs: 1, sm: 2, xl: 4 }}>
+            <Descriptions.Item label="分区字段">
+              <Text code>{result.temporal_decision.partition_field}</Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="分区粒度">
+              {result.temporal_decision.grain === "month" ? "月" : "日"}
+            </Descriptions.Item>
+            <Descriptions.Item label="策略来源">
+              {sourceLabels[result.temporal_decision.source]}
+            </Descriptions.Item>
+            <Descriptions.Item label="系统时间">
+              {result.temporal_decision.system_time}
+            </Descriptions.Item>
+            <Descriptions.Item label="用户时间">
+              {result.temporal_decision.user_time || "未指定"}
+            </Descriptions.Item>
+            <Descriptions.Item label="默认算法">
+              {strategyLabels[result.temporal_decision.default_strategy]}
+            </Descriptions.Item>
+            <Descriptions.Item label="最终账期">
+              <Text strong>
+                {result.temporal_decision.resolved_start ===
+                result.temporal_decision.resolved_end
+                  ? result.temporal_decision.resolved_start
+                  : `${result.temporal_decision.resolved_start} 至 ${result.temporal_decision.resolved_end}`}
+              </Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="安全状态">
+              <Tag color="green">有界</Tag>
+            </Descriptions.Item>
+          </Descriptions>
+          <Text type="secondary">{result.temporal_decision.explanation}</Text>
+        </Card>
+      )}
       <Card
         size="small"
         title="本体依据"
