@@ -186,6 +186,42 @@ def _mappings_graph(draft: TabularMetadataDraft, options: PackageGenerationOptio
     return graph
 
 
+def _rules_graph(draft: TabularMetadataDraft, options: PackageGenerationOptions) -> Graph:
+    graph = Graph()
+    graph.bind("oa", OA)
+    graph.bind("owl", OWL)
+    graph.bind("rdfs", RDFS)
+    graph.bind("xsd", XSD)
+    graph.add((URIRef(options.base_uri), RDF.type, OWL.Ontology))
+    policy = draft.temporal_policy
+    if policy is None:
+        return graph
+
+    concept_short_name = _semantic_short_name(draft.table.physical_name, "Concept")
+    concept_uri = _uri(options.base_uri, "concept", concept_short_name)
+    property_short_name = _semantic_short_name(policy.field, "Property")
+    property_uri = _uri(options.base_uri, "property", property_short_name)
+    policy_short_name = _semantic_short_name(
+        f"{concept_short_name}TemporalPolicy", "TemporalPolicy"
+    )
+    policy_uri = _uri(options.base_uri, "policy", policy_short_name)
+    graph.add((policy_uri, RDF.type, OA.TemporalPartitionPolicy))
+    _add_element_text(
+        graph,
+        policy_uri,
+        short_name=policy_short_name,
+        label="默认时间分区策略",
+    )
+    graph.add((policy_uri, OA.appliesTo, concept_uri))
+    graph.add((policy_uri, OA.partitionProperty, property_uri))
+    graph.add((policy_uri, OA.partitionGrain, Literal(policy.grain.value)))
+    graph.add((policy_uri, OA.defaultStrategy, Literal(policy.default_strategy.value)))
+    graph.add((policy_uri, OA.allowQueryOverride, Literal(policy.allow_query_override)))
+    graph.add((policy_uri, OA.status, Literal("active")))
+    graph.add((policy_uri, OA.priority, Literal(100, datatype=XSD.integer)))
+    return graph
+
+
 def _write_graph(path: Path, graph: Graph) -> None:
     content = graph.serialize(format="turtle")
     path.write_text(content.rstrip() + "\n", encoding="utf-8", newline="\n")
@@ -266,6 +302,7 @@ def generate_metadata_package(
         )
         _write_graph(staging / "domain.ttl", _domain_graph(draft, options))
         _write_graph(staging / "mappings.ttl", _mappings_graph(draft, options))
+        _write_graph(staging / "rules.ttl", _rules_graph(draft, options))
         repository = OntologyRepository()
         repository.publish(staging)
         _activate_staging(staging, target, replace=replace)

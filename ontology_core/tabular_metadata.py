@@ -6,13 +6,15 @@ import json
 import re
 from enum import StrEnum
 from pathlib import Path
+from typing import Self
 
 import yaml
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from ontology_core.errors import OntologyImportError
 from ontology_core.models import FrozenModel
 from ontology_core.normalization import normalize_text
+from ontology_core.semantic_models import TemporalDefaultStrategy, TemporalGrain
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _KNOWN_TYPES = {
@@ -76,6 +78,7 @@ class TabularMetadataDraft(FrozenModel):
     fields: tuple[FieldMetadata, ...]
     object_names: tuple[str, ...] = ()
     diagnostics: tuple[ImportDiagnostic, ...] = ()
+    temporal_policy: TemporalPolicyOverride | None = None
 
 
 class FieldOverride(FrozenModel):
@@ -85,8 +88,26 @@ class FieldOverride(FrozenModel):
     aliases: tuple[str, ...] | None = None
 
 
+class TemporalPolicyOverride(FrozenModel):
+    field: str
+    grain: TemporalGrain
+    default_strategy: TemporalDefaultStrategy
+    allow_query_override: bool = True
+
+    @model_validator(mode="after")
+    def validate_pair(self) -> Self:
+        expected = {
+            TemporalGrain.DAY: TemporalDefaultStrategy.T_MINUS_2,
+            TemporalGrain.MONTH: TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+        }
+        if expected[self.grain] is not self.default_strategy:
+            raise ValueError("时间分区粒度与默认策略不匹配")
+        return self
+
+
 class MetadataOverrides(FrozenModel):
     fields: dict[str, FieldOverride] = Field(default_factory=dict)
+    temporal_policy: TemporalPolicyOverride | None = None
 
 
 def _clean(row: dict[str, str | None], column: str) -> str | None:
@@ -344,6 +365,16 @@ def apply_metadata_overrides(
             details={"fields": unknown},
         )
 
+    temporal_policy = overrides.temporal_policy
+    if temporal_policy is not None:
+        matched_field = fields_by_key.get(temporal_policy.field.casefold())
+        if matched_field is None:
+            raise OntologyImportError(
+                "时间分区策略引用了未知字段",
+                details={"field": temporal_policy.field},
+            )
+        temporal_policy = temporal_policy.model_copy(update={"field": matched_field.physical_name})
+
     updated: list[FieldMetadata] = []
     for field in draft.fields:
         source_name = override_keys.get(field.physical_name.casefold())
@@ -353,4 +384,4 @@ def apply_metadata_overrides(
             continue
         changes = override.model_dump(exclude_none=True)
         updated.append(field.model_copy(update=changes))
-    return draft.model_copy(update={"fields": tuple(updated)})
+    return draft.model_copy(update={"fields": tuple(updated), "temporal_policy": temporal_policy})

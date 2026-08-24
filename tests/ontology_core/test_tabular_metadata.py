@@ -8,6 +8,7 @@ import pytest
 from ontology_core.errors import OntologyImportError
 from ontology_core.tabular_metadata import (
     DiagnosticSeverity,
+    MetadataOverrides,
     analyze_metadata,
     apply_metadata_overrides,
     load_metadata_overrides,
@@ -187,3 +188,72 @@ def test_load_metadata_overrides_forbids_physical_identifier_changes(tmp_path: P
 
     with pytest.raises(OntologyImportError, match="本地覆盖配置无效"):
         load_metadata_overrides(override_path)
+
+
+def test_apply_overrides_attaches_confirmed_temporal_policy(tmp_path: Path) -> None:
+    draft = parse_tabular_metadata(SYNTHETIC_TSV)
+    override_path = tmp_path / "overrides.json"
+    override_path.write_text(
+        json.dumps(
+            {
+                "temporal_policy": {
+                    "field": "p_mon",
+                    "grain": "month",
+                    "default_strategy": "previous_complete_month",
+                    "allow_query_override": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    updated = apply_metadata_overrides(draft, load_metadata_overrides(override_path))
+
+    assert updated.temporal_policy is not None
+    assert updated.temporal_policy.field == "P_MON"
+    assert draft.temporal_policy is None
+
+
+def test_apply_overrides_does_not_infer_temporal_policy_from_labels() -> None:
+    draft = parse_tabular_metadata(SYNTHETIC_TSV)
+
+    updated = apply_metadata_overrides(draft, MetadataOverrides())
+
+    assert updated.temporal_policy is None
+
+
+def test_temporal_policy_override_rejects_unknown_field_and_strategy_pair(
+    tmp_path: Path,
+) -> None:
+    draft = parse_tabular_metadata(SYNTHETIC_TSV)
+    unknown_path = tmp_path / "unknown.json"
+    unknown_path.write_text(
+        json.dumps(
+            {
+                "temporal_policy": {
+                    "field": "UNKNOWN_FIELD",
+                    "grain": "month",
+                    "default_strategy": "previous_complete_month",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    mismatch_path = tmp_path / "mismatch.json"
+    mismatch_path.write_text(
+        json.dumps(
+            {
+                "temporal_policy": {
+                    "field": "P_MON",
+                    "grain": "month",
+                    "default_strategy": "t_minus_2",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OntologyImportError, match="时间分区策略引用了未知字段"):
+        apply_metadata_overrides(draft, load_metadata_overrides(unknown_path))
+    with pytest.raises(OntologyImportError, match="本地覆盖配置无效"):
+        load_metadata_overrides(mismatch_path)

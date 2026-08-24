@@ -14,7 +14,13 @@ from ontology_core.metadata_package import (
 )
 from ontology_core.repository import OntologyRepository
 from ontology_core.resolver import OntologyResolver
-from ontology_core.tabular_metadata import parse_tabular_metadata
+from ontology_core.semantic_models import TemporalDefaultStrategy, TemporalGrain
+from ontology_core.tabular_metadata import (
+    MetadataOverrides,
+    TemporalPolicyOverride,
+    apply_metadata_overrides,
+    parse_tabular_metadata,
+)
 
 SYNTHETIC_TSV = (
     "对象英文名称\t对象中文名称\t对象描述\t属性英文名\t属性中文名\t属性类型\t属性描述\n"
@@ -78,6 +84,36 @@ def test_generate_metadata_package_builds_publishable_semantics(tmp_path: Path) 
         for property_ in properties
     }
     assert field_mappings == {"ENTITY_ID": "ENTITY_ID", "TOTAL_VALUE": "TOTAL_VALUE"}
+
+
+def test_generate_metadata_package_publishes_confirmed_temporal_policy(
+    tmp_path: Path,
+) -> None:
+    draft = parse_tabular_metadata(
+        SYNTHETIC_TSV.replace("TOTAL_VALUE\t累计值\tdecimal", "ACCOUNTING_MONTH\t账期\tstring")
+    )
+    draft = apply_metadata_overrides(
+        draft,
+        MetadataOverrides(
+            temporal_policy=TemporalPolicyOverride(
+                field="ACCOUNTING_MONTH",
+                grain=TemporalGrain.MONTH,
+                default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+            )
+        ),
+    )
+    target = tmp_path / "package"
+
+    result = generate_metadata_package(draft, target, _options())
+
+    assert result.inspection.counts.temporal_policies == 1
+    repository = OntologyRepository()
+    repository.publish(target)
+    resolver = OntologyResolver(repository.current())
+    concept = resolver.get_concept("DEMO_ENTITY_M")
+    policy = resolver.get_temporal_policy(concept.uri)
+    assert policy is not None
+    assert policy.partition_property_uri.endswith("/property/ACCOUNTING_MONTH")
 
 
 def test_generate_metadata_package_serializes_untrusted_text_as_literals(tmp_path: Path) -> None:
