@@ -20,7 +20,9 @@ from ontology_core.resolver import OntologyResolver
 from ontology_core.semantic_models import (
     BusinessRule,
     Concept,
+    DataSource,
     LocalizedText,
+    PhysicalMapping,
     Property,
     Relation,
     SemanticCatalog,
@@ -64,6 +66,8 @@ def _catalog_resolver(
     properties: tuple[Property, ...] = (),
     relations: tuple[Relation, ...] = (),
     rules: tuple[BusinessRule, ...] = (),
+    data_sources: tuple[DataSource, ...] = (),
+    mappings: tuple[PhysicalMapping, ...] = (),
 ) -> OntologyResolver:
     snapshot = OntologySnapshot(
         info=PackageInfo(
@@ -78,6 +82,8 @@ def _catalog_resolver(
             properties=properties,
             relations=relations,
             rules=rules,
+            data_sources=data_sources,
+            mappings=mappings,
         ),
         _data_nt="",
         _shapes_nt="",
@@ -345,6 +351,8 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         "resolve_property": ("self", "concept_id", "property_id"),
         "list_relations": ("self", "concept_id"),
         "list_rules": ("self", "concept_id"),
+        "list_data_sources": ("self",),
+        "list_mappings": ("self", "semantic_element_uri", "data_source_uri"),
     }
     public_methods = {
         name: method
@@ -369,12 +377,20 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         },
         "list_relations": {"concept_id": str, "return": tuple[Relation, ...]},
         "list_rules": {"concept_id": str, "return": tuple[BusinessRule, ...]},
+        "list_data_sources": {"return": tuple[DataSource, ...]},
+        "list_mappings": {
+            "semantic_element_uri": str,
+            "data_source_uri": str | None,
+            "return": tuple[PhysicalMapping, ...],
+        },
     }
     assert isinstance(resolver.list_concepts(), tuple)
     assert isinstance(resolver.search_concepts("record"), tuple)
     assert isinstance(resolver.list_properties("Record"), tuple)
     assert isinstance(resolver.list_relations("Record"), tuple)
     assert isinstance(resolver.list_rules("Record"), tuple)
+    assert isinstance(resolver.list_data_sources(), tuple)
+    assert isinstance(resolver.list_mappings("https://example.invalid/ontology/Metric"), tuple)
 
     indexes = (
         resolver._concepts_by_uri,
@@ -383,11 +399,60 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         resolver._properties_by_concept,
         resolver._relations_by_source,
         resolver._rules_by_concept,
+        resolver._mappings_by_element,
     )
     assert all(isinstance(index, MappingProxyType) for index in indexes)
     assert all(isinstance(value, tuple) for index in indexes for value in index.values())
     assert not isinstance(resolver, Graph)
     assert not any(isinstance(value, Graph) for value in vars(resolver).values())
+
+
+def test_resolver_lists_sources_and_enabled_mappings_by_priority() -> None:
+    concept = _concept("Customer", label="客户")
+    property_ = Property(
+        uri="https://example.invalid/ontology/CustomerId",
+        short_name="CustomerId",
+        label="客户编号",
+        labels=(LocalizedText(value="客户编号", language="zh-CN"),),
+        concept_uri=concept.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    source = DataSource(
+        uri="https://example.invalid/ontology/Warehouse",
+        short_name="Warehouse",
+        label="分析仓库",
+        labels=(LocalizedText(value="分析仓库", language="zh-CN"),),
+        platform_type="generic",
+        dialect="generic",
+    )
+
+    def mapping(short_name: str, priority: int, *, enabled: bool = True) -> PhysicalMapping:
+        return PhysicalMapping(
+            uri=f"https://example.invalid/ontology/{short_name}",
+            short_name=short_name,
+            label=short_name,
+            labels=(LocalizedText(value=short_name, language="en"),),
+            semantic_element_uri=property_.uri,
+            data_source_uri=source.uri,
+            field_name=f"field_{priority}",
+            priority=priority,
+            enabled=enabled,
+        )
+
+    resolver = _catalog_resolver(
+        concepts=(concept,),
+        properties=(property_,),
+        data_sources=(source,),
+        mappings=(mapping("Low", 10), mapping("Disabled", 30, enabled=False), mapping("High", 20)),
+    )
+
+    assert tuple(item.short_name for item in resolver.list_data_sources()) == ("Warehouse",)
+    assert tuple(item.priority for item in resolver.list_mappings(property_.uri)) == (20, 10)
+    assert tuple(item.priority for item in resolver.list_mappings(property_.uri, source.uri)) == (
+        20,
+        10,
+    )
+    assert resolver.list_mappings(property_.uri, "https://example.invalid/ontology/Other") == ()
 
 
 def test_search_concepts_prefers_rank_over_alphabetical_order_with_competing_matches() -> None:

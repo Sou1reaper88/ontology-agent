@@ -42,3 +42,19 @@ class InvalidRuleExpressionError(OntologyError):
 
 class InvalidOntologyReferenceError(OntologyError):
     code = "invalid_ontology_reference"
+
+
+class QueryPlanningError(OntologyError):
+    code = "query_planning_error"
+
+
+class NoMatchingConceptError(QueryPlanningError):
+    code = "no_matching_concept"
+
+
+class AmbiguousQueryConceptError(QueryPlanningError):
+    code = "ambiguous_query_concept"
+
+
+class UnsupportedQueryPlanError(QueryPlanningError):
+    code = "unsupported_query_plan"

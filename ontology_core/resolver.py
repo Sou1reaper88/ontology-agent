@@ -14,6 +14,8 @@ from ontology_core.repository import OntologySnapshot
 from ontology_core.semantic_models import (
     BusinessRule,
     Concept,
+    DataSource,
+    PhysicalMapping,
     Property,
     Relation,
     SemanticElement,
@@ -64,6 +66,22 @@ class OntologyResolver:
         self._rules_by_concept = _index(
             catalog.rules,
             lambda rule: rule.applies_to_uri,
+        )
+        self._data_sources = tuple(sorted(catalog.data_sources, key=_sort_key))
+        grouped_mappings: dict[str, list[PhysicalMapping]] = {}
+        for mapping in catalog.mappings:
+            if mapping.enabled:
+                grouped_mappings.setdefault(mapping.semantic_element_uri, []).append(mapping)
+        self._mappings_by_element = MappingProxyType(
+            {
+                element_uri: tuple(
+                    sorted(
+                        mappings,
+                        key=lambda item: (-item.priority, *_sort_key(item)),
+                    )
+                )
+                for element_uri, mappings in grouped_mappings.items()
+            }
         )
 
     def list_concepts(self) -> tuple[Concept, ...]:
@@ -159,6 +177,20 @@ class OntologyResolver:
     def list_rules(self, concept_id: str) -> tuple[BusinessRule, ...]:
         concept = self.get_concept(concept_id)
         return self._rules_by_concept.get(concept.uri, ())
+
+    def list_data_sources(self) -> tuple[DataSource, ...]:
+        return self._data_sources
+
+    def list_mappings(
+        self,
+        semantic_element_uri: str,
+        data_source_uri: str | None = None,
+    ) -> tuple[PhysicalMapping, ...]:
+        mappings = self._mappings_by_element.get(semantic_element_uri.strip(), ())
+        if data_source_uri is None:
+            return mappings
+        source_uri = data_source_uri.strip()
+        return tuple(item for item in mappings if item.data_source_uri == source_uri)
 
     @staticmethod
     def _concept_rank(concept: Concept, normalized: str) -> int | None:

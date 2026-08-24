@@ -1,14 +1,18 @@
 from ontology_core.authoring import initialize_package
 from ontology_core.errors import (
     AmbiguousIdentifierError,
+    AmbiguousQueryConceptError,
     ConceptNotFoundError,
     InvalidOntologyReferenceError,
     InvalidRuleExpressionError,
+    NoMatchingConceptError,
     OntologyError,
     OntologyParseError,
     OntologyValidationError,
     PackageNotFoundError,
     PropertyNotFoundError,
+    QueryPlanningError,
+    UnsupportedQueryPlanError,
 )
 from ontology_core.inspection import inspect_package
 from ontology_core.manifest import load_manifest, resolve_package_files
@@ -19,6 +23,8 @@ from ontology_core.models import (
     PackageManifest,
     ValidationReport,
 )
+from ontology_core.planner import OntologyPlanner
+from ontology_core.query_plan import BoundProperty, QueryPlan
 from ontology_core.repository import OntologyRepository, OntologySnapshot
 from ontology_core.resolver import OntologyResolver
 from ontology_core.semantic_models import (
@@ -42,18 +48,22 @@ from ontology_core.validator import OntologyValidator
 
 __all__ = [
     "AmbiguousIdentifierError",
+    "AmbiguousQueryConceptError",
+    "BoundProperty",
     "BusinessRule",
     "Concept",
     "ConceptNotFoundError",
     "DataSource",
     "InvalidOntologyReferenceError",
     "InvalidRuleExpressionError",
+    "NoMatchingConceptError",
     "inspect_package",
     "InspectedPackage",
     "initialize_package",
     "LocalizedText",
     "OntologyError",
     "OntologyParseError",
+    "OntologyPlanner",
     "OntologyRepository",
     "OntologyResolver",
     "OntologySnapshot",
@@ -68,6 +78,8 @@ __all__ = [
     "PhysicalMapping",
     "Property",
     "PropertyNotFoundError",
+    "QueryPlan",
+    "QueryPlanningError",
     "RdfLiteral",
     "Relation",
     "RuleExpression",
@@ -75,6 +87,7 @@ __all__ = [
     "SemanticCatalog",
     "SemanticCounts",
     "SemanticElement",
+    "UnsupportedQueryPlanError",
     "ValidationReport",
     "load_manifest",
     "resolve_package_files",
