@@ -22,3 +22,10 @@ class QueryPlan(FrozenModel):
     selections: tuple[BoundProperty, ...]
     property_bindings: tuple[BoundProperty, ...]
     rules: tuple[BusinessRule, ...] = ()
+
+
+class CompiledQuery(FrozenModel):
+    sql: str
+    tables: tuple[str, ...]
+    fields: tuple[str, ...]
+    predicates: tuple[str, ...] = ()

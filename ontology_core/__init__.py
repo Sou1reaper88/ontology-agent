@@ -1,4 +1,5 @@
 from ontology_core.authoring import initialize_package
+from ontology_core.compiler import CompilerRegistry, GenericSqlCompiler, SqlCompiler
 from ontology_core.errors import (
     AmbiguousIdentifierError,
     AmbiguousQueryConceptError,
@@ -6,6 +7,7 @@ from ontology_core.errors import (
     InvalidOntologyReferenceError,
     InvalidRuleExpressionError,
     NoMatchingConceptError,
+    OntologyCompileError,
     OntologyError,
     OntologyParseError,
     OntologyValidationError,
@@ -24,7 +26,7 @@ from ontology_core.models import (
     ValidationReport,
 )
 from ontology_core.planner import OntologyPlanner
-from ontology_core.query_plan import BoundProperty, QueryPlan
+from ontology_core.query_plan import BoundProperty, CompiledQuery, QueryPlan
 from ontology_core.repository import OntologyRepository, OntologySnapshot
 from ontology_core.resolver import OntologyResolver
 from ontology_core.semantic_models import (
@@ -50,6 +52,8 @@ __all__ = [
     "AmbiguousIdentifierError",
     "AmbiguousQueryConceptError",
     "BoundProperty",
+    "CompiledQuery",
+    "CompilerRegistry",
     "BusinessRule",
     "Concept",
     "ConceptNotFoundError",
@@ -57,11 +61,13 @@ __all__ = [
     "InvalidOntologyReferenceError",
     "InvalidRuleExpressionError",
     "NoMatchingConceptError",
+    "GenericSqlCompiler",
     "inspect_package",
     "InspectedPackage",
     "initialize_package",
     "LocalizedText",
     "OntologyError",
+    "OntologyCompileError",
     "OntologyParseError",
     "OntologyPlanner",
     "OntologyRepository",
@@ -87,6 +93,7 @@ __all__ = [
     "SemanticCatalog",
     "SemanticCounts",
     "SemanticElement",
+    "SqlCompiler",
     "UnsupportedQueryPlanError",
     "ValidationReport",
     "load_manifest",

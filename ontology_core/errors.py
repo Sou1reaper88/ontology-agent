@@ -58,3 +58,7 @@ class AmbiguousQueryConceptError(QueryPlanningError):
 
 class UnsupportedQueryPlanError(QueryPlanningError):
     code = "unsupported_query_plan"
+
+
+class OntologyCompileError(OntologyError):
+    code = "ontology_compile_error"
