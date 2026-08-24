@@ -8,9 +8,16 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from ontology_core.authoring import initialize_package
-from ontology_core.errors import OntologyError
+from ontology_core.errors import OntologyError, OntologyImportError
 from ontology_core.inspection import inspect_package, inspection_from_snapshot
+from ontology_core.metadata_package import PackageGenerationOptions, generate_metadata_package
 from ontology_core.repository import OntologyRepository
+from ontology_core.tabular_metadata import (
+    DiagnosticSeverity,
+    apply_metadata_overrides,
+    load_metadata_overrides,
+    parse_tabular_metadata,
+)
 
 
 def _write_json(payload: dict[str, Any], *, stream: TextIO | None = None) -> None:
@@ -95,6 +102,81 @@ def _handle_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_utf8(path: Path, *, role: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise OntologyImportError(
+            "元数据导入文件读取失败",
+            details={"role": role, "reason": type(exc).__name__},
+        ) from exc
+
+
+def _import_payload(result) -> dict[str, Any]:
+    inspection = result.inspection
+    diagnostics = [item.model_dump(mode="json", exclude_none=True) for item in result.diagnostics]
+    counts = {
+        severity.value: sum(item.severity is severity for item in result.diagnostics)
+        for severity in DiagnosticSeverity
+    }
+    return {
+        "status": "imported",
+        "target": str(result.target),
+        "package": inspection.package.model_dump(mode="json"),
+        "counts": inspection.counts.model_dump(mode="json"),
+        "diagnostic_counts": counts,
+        "diagnostics": diagnostics,
+    }
+
+
+def _write_report(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError as exc:
+        raise OntologyImportError(
+            "元数据导入报告写入失败",
+            details={"reason": type(exc).__name__},
+        ) from exc
+
+
+def _handle_import_tabular(args: argparse.Namespace) -> int:
+    draft = parse_tabular_metadata(_read_utf8(Path(args.input), role="input"))
+    if args.overrides:
+        draft = apply_metadata_overrides(
+            draft,
+            load_metadata_overrides(Path(args.overrides)),
+        )
+    result = generate_metadata_package(
+        draft,
+        Path(args.target),
+        PackageGenerationOptions(
+            package_id=args.package_id,
+            base_uri=args.base_uri,
+            version=args.version,
+            physical_namespace=args.physical_namespace,
+            platform_type=args.platform_type,
+            dialect=args.dialect,
+        ),
+        replace=args.replace,
+    )
+    payload = _import_payload(result)
+    if args.report:
+        _write_report(Path(args.report), payload)
+    if args.json:
+        _write_json(payload)
+    else:
+        print(
+            f"imported: {result.inspection.package.package_id}@"
+            f"{result.inspection.package.version}"
+        )
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ontology-core")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -117,6 +199,21 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--json", action="store_true")
     inspect_parser.add_argument("--list-identifiers", action="store_true")
     inspect_parser.set_defaults(handler=_handle_inspect)
+
+    import_parser = commands.add_parser("import-tabular")
+    import_parser.add_argument("input")
+    import_parser.add_argument("target")
+    import_parser.add_argument("--package-id", required=True)
+    import_parser.add_argument("--base-uri", required=True)
+    import_parser.add_argument("--version", default="0.1.0")
+    import_parser.add_argument("--physical-namespace", required=True)
+    import_parser.add_argument("--platform-type", default="generic")
+    import_parser.add_argument("--dialect", default="generic")
+    import_parser.add_argument("--overrides")
+    import_parser.add_argument("--report")
+    import_parser.add_argument("--replace", action="store_true")
+    import_parser.add_argument("--json", action="store_true")
+    import_parser.set_defaults(handler=_handle_import_tabular)
     return parser
 
 

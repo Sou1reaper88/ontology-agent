@@ -74,6 +74,137 @@ def _all_keys(value: object) -> set[str]:
     return set(value) | {key for item in value.values() for key in _all_keys(item)}
 
 
+def _write_tabular_fixture(path: Path) -> None:
+    path.write_text(
+        "对象英文名称\t对象中文名称\t对象描述\t属性英文名\t属性中文名\t属性类型\t属性描述\n"
+        "DEMO_ENTITY\t演示实体\t合成测试对象\tENTITY_ID\t实体编码\tstring\t实体编码的稳定说明\n"
+        "DEMO_ENTITY\t\t\tTOTAL_VALUE\t累计值\tdecimal\t合成累计值\n",
+        encoding="utf-8",
+    )
+
+
+def _import_tabular_args(input_path: Path, target: Path) -> list[str]:
+    return [
+        "import-tabular",
+        str(input_path),
+        str(target),
+        "--package-id",
+        "tests.cli-import",
+        "--base-uri",
+        "https://example.invalid/tests/cli-import/",
+        "--version",
+        "1.0.0",
+        "--physical-namespace",
+        "demo_warehouse",
+        "--platform-type",
+        "synthetic",
+        "--dialect",
+        "generic",
+        "--json",
+    ]
+
+
+def test_import_tabular_json_generates_package_and_report(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "metadata.tsv"
+    target = tmp_path / "package"
+    report = tmp_path / "report.json"
+    _write_tabular_fixture(input_path)
+
+    args = _import_tabular_args(input_path, target)
+    args[2:2] = ["--report", str(report)]
+    assert main(args) == 0
+
+    output = capsys.readouterr()
+    assert output.err == ""
+    payload = json.loads(output.out)
+    assert payload["status"] == "imported"
+    assert payload["target"] == str(target)
+    assert payload["package"]["package_id"] == "tests.cli-import"
+    assert payload["counts"] == {
+        "concepts": 1,
+        "properties": 2,
+        "relations": 0,
+        "rules": 0,
+        "data_sources": 1,
+        "mappings": 3,
+    }
+    assert payload["diagnostic_counts"] == {
+        "error": 0,
+        "warning": 0,
+        "confirmation_required": 0,
+    }
+    assert json.loads(report.read_text(encoding="utf-8")) == payload
+    assert inspect_package(target).counts.properties == 2
+
+
+def test_import_tabular_json_returns_safe_blocking_diagnostics(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "metadata.tsv"
+    target = tmp_path / "package"
+    secret_row = "SAFE_TABLE\tBAD-NAME\tfictional-sensitive-description"
+    input_path.write_text(
+        "对象英文名称\t属性英文名\t属性描述\n" + secret_row + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(_import_tabular_args(input_path, target)) == 1
+
+    output = capsys.readouterr()
+    payload = json.loads(output.err)
+    assert payload["code"] == "ontology_import_error"
+    assert payload["details"]["diagnostics"][0]["code"] == "invalid_field_identifier"
+    assert secret_row not in output.err
+    assert "traceback" not in output.err.casefold()
+    assert not target.exists()
+
+
+def test_import_tabular_rejects_unknown_override_field(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "metadata.tsv"
+    target = tmp_path / "package"
+    overrides = tmp_path / "overrides.json"
+    _write_tabular_fixture(input_path)
+    overrides.write_text(
+        json.dumps({"fields": {"UNKNOWN_FIELD": {"description": "合成修正"}}}),
+        encoding="utf-8",
+    )
+    args = _import_tabular_args(input_path, target)
+    args[2:2] = ["--overrides", str(overrides)]
+
+    assert main(args) == 1
+
+    output = capsys.readouterr()
+    payload = json.loads(output.err)
+    assert payload["code"] == "ontology_import_error"
+    assert payload["message"] == "覆盖配置引用了未知字段"
+    assert not target.exists()
+
+
+def test_import_tabular_requires_replace_for_existing_target(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "metadata.tsv"
+    target = tmp_path / "package"
+    _write_tabular_fixture(input_path)
+    args = _import_tabular_args(input_path, target)
+    assert main(args) == 0
+    capsys.readouterr()
+
+    assert main(args) == 1
+
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["code"] == "ontology_import_error"
+    assert payload["message"] == "目标本体包已存在"
+
+
 def test_init_creates_package_and_refuses_to_overwrite(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
