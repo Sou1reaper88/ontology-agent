@@ -59,6 +59,14 @@ def _snapshot(*, duplicate: bool = False, missing_field_mapping: bool = False) -
         concept_uri=customer.uri,
         datatype_uri=XSD_STRING,
     )
+    segment = Property(
+        uri="https://example.invalid/ontology/Segment",
+        short_name="Segment",
+        label="客户分群",
+        labels=_text("客户分群"),
+        concept_uri=customer.uri,
+        datatype_uri=XSD_STRING,
+    )
     source = DataSource(
         uri="https://example.invalid/ontology/Warehouse",
         short_name="Warehouse",
@@ -86,6 +94,15 @@ def _snapshot(*, duplicate: bool = False, missing_field_mapping: bool = False) -
             semantic_element_uri=status.uri,
             data_source_uri=source.uri,
             field_name="status_code",
+        ),
+        PhysicalMapping(
+            uri="https://example.invalid/ontology/SegmentField",
+            short_name="SegmentField",
+            label="分群字段映射",
+            labels=_text("分群字段映射"),
+            semantic_element_uri=segment.uri,
+            data_source_uri=source.uri,
+            field_name="segment_code",
         ),
     ]
     if not missing_field_mapping:
@@ -125,7 +142,7 @@ def _snapshot(*, duplicate: bool = False, missing_field_mapping: bool = False) -
         ),
         catalog=SemanticCatalog(
             concepts=tuple(concepts),
-            properties=(customer_id, status),
+            properties=(customer_id, segment, status),
             rules=(rule,),
             data_sources=(source,),
             mappings=tuple(mappings),
@@ -166,6 +183,11 @@ def test_shadow_generates_sql_and_evidence_without_reading_legacy_sql() -> None:
     assert first.evidence.concepts == ("Customer",)
     assert first.evidence.properties == ("CustomerId",)
     assert first.evidence.rules == ("ActiveCustomer",)
+    assert first.evidence.mappings == (
+        "CustomerTable",
+        "CustomerIdField",
+        "StatusField",
+    )
     assert first.package is not None and first.package.sha256 == "a" * 12
 
 

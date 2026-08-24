@@ -128,6 +128,15 @@ class OntologyShadowService:
             compiled = self._registry.get(dialect).compile(plan)
             changed = _normalize_sql(legacy_sql) != _normalize_sql(compiled.sql)
             summary = "本体 SQL 与现有 SQL 存在差异" if changed else "本体 SQL 与现有 SQL 一致"
+            evidence_property_uris = {
+                *(item.semantic.uri for item in plan.selections),
+                *(uri for rule in plan.rules for uri in rule.property_uris),
+            }
+            evidence_bindings = tuple(
+                item
+                for item in plan.property_bindings
+                if item.semantic.uri in evidence_property_uris
+            )
             return OntologyShadowResult(
                 status="generated",
                 ontology_sql=compiled.sql,
@@ -146,7 +155,7 @@ class OntologyShadowService:
                         dict.fromkeys(
                             (
                                 plan.object_binding.short_name,
-                                *(item.binding.short_name for item in plan.property_bindings),
+                                *(item.binding.short_name for item in evidence_bindings),
                             )
                         )
                     ),
