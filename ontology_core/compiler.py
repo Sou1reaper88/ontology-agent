@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Protocol
 
 from ontology_core.errors import OntologyCompileError
-from ontology_core.query_plan import CompiledQuery, QueryPlan
+from ontology_core.query_plan import CompiledQuery, QueryPlan, ResolvedFilter
 from ontology_core.semantic_models import RdfLiteral, RuleExpression, RuleOperator
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
@@ -121,13 +121,18 @@ class GenericSqlCompiler:
         field_bindings = {
             item.semantic.uri: item.binding.field_name for item in plan.property_bindings
         }
-        predicates = tuple(
+        rule_predicates = tuple(
             self._expression(rule.condition, field_bindings)
             for rule in sorted(
                 (item for item in plan.rules if item.condition is not None),
                 key=lambda item: (-item.priority, item.short_name.casefold(), item.uri),
             )
         )
+        self._validate_temporal_guard(plan)
+        filter_predicates = tuple(
+            self._expression(self._filter_expression(item), field_bindings) for item in plan.filters
+        )
+        predicates = (*rule_predicates, *filter_predicates)
         where = ""
         if predicates:
             where = " WHERE " + " AND ".join(predicates)
@@ -138,6 +143,30 @@ class GenericSqlCompiler:
             fields=tuple(str(item) for item in selection_names),
             predicates=predicates,
         )
+
+    @staticmethod
+    def _filter_expression(item: ResolvedFilter) -> RuleExpression:
+        return RuleExpression(
+            operator=item.operator,
+            property_uri=item.property.semantic.uri,
+            values=item.values,
+        )
+
+    @staticmethod
+    def _validate_temporal_guard(plan: QueryPlan) -> None:
+        policy = plan.temporal_policy
+        if policy is None:
+            return
+        if plan.temporal_decision is None:
+            raise _compile_error("查询计划缺少时间决策")
+        bounded_partition_filters = tuple(
+            item
+            for item in plan.filters
+            if item.property.semantic.uri == policy.partition_property_uri
+            and item.operator in {RuleOperator.EQ, RuleOperator.BETWEEN}
+        )
+        if len(bounded_partition_filters) != 1:
+            raise _compile_error("查询计划缺少有界分区过滤")
 
     def _expression(
         self,

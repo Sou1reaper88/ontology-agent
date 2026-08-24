@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from ontology_core.compiler import CompilerRegistry, GenericSqlCompiler
 from ontology_core.errors import OntologyCompileError
-from ontology_core.query_plan import BoundProperty, QueryPlan
+from ontology_core.query_plan import (
+    BoundProperty,
+    QueryPlan,
+    ResolvedFilter,
+    TemporalDecision,
+)
 from ontology_core.semantic_models import (
     BusinessRule,
     Concept,
@@ -15,7 +22,11 @@ from ontology_core.semantic_models import (
     RdfLiteral,
     RuleExpression,
     RuleOperator,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+    TemporalPartitionPolicy,
 )
+from ontology_core.temporal import TemporalIntentSource
 
 XSD = "http://www.w3.org/2001/XMLSchema#"
 
@@ -118,6 +129,106 @@ def _leaf(
         property_uri="https://example.invalid/ontology/Status",
         values=tuple(RdfLiteral(lexical_form=value, datatype_uri=datatype) for value in values),
     )
+
+
+def _temporal_plan(
+    start: str = "202607",
+    end: str = "202607",
+    *,
+    include_policy: bool = True,
+    include_decision: bool = True,
+    property_uri: str = "https://example.invalid/ontology/AccountingMonth",
+) -> QueryPlan:
+    plan = _plan()
+    month = Property(
+        uri=property_uri,
+        short_name="AccountingMonth",
+        label="Accounting month",
+        labels=_text("Accounting month"),
+        concept_uri=plan.concept.uri,
+        datatype_uri=f"{XSD}string",
+    )
+    month_binding = BoundProperty(
+        semantic=month,
+        binding=PhysicalMapping(
+            uri="https://example.invalid/ontology/AccountingMonthField",
+            short_name="AccountingMonthField",
+            label="Accounting month field",
+            labels=_text("Accounting month field"),
+            semantic_element_uri=month.uri,
+            data_source_uri=plan.data_source.uri,
+            field_name="accounting_month",
+        ),
+    )
+    operator = RuleOperator.EQ if start == end else RuleOperator.BETWEEN
+    values = (start,) if start == end else (start, end)
+    policy = TemporalPartitionPolicy(
+        uri="https://example.invalid/ontology/MonthlyPolicy",
+        short_name="MonthlyPolicy",
+        label="Monthly policy",
+        labels=_text("Monthly policy"),
+        applies_to_uri=plan.concept.uri,
+        partition_property_uri="https://example.invalid/ontology/AccountingMonth",
+        grain=TemporalGrain.MONTH,
+        default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+    )
+    decision = TemporalDecision(
+        partition_property_uri=policy.partition_property_uri,
+        grain=TemporalGrain.MONTH,
+        source=TemporalIntentSource.ONTOLOGY_DEFAULT,
+        system_date=date(2026, 8, 24),
+        resolved_start=start,
+        resolved_end=end,
+        default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+        explanation="默认取上一个完整自然月",
+    )
+    return plan.model_copy(
+        update={
+            "property_bindings": (*plan.property_bindings, month_binding),
+            "filters": (
+                ResolvedFilter(
+                    property=month_binding,
+                    operator=operator,
+                    values=tuple(
+                        RdfLiteral(lexical_form=value, datatype_uri=f"{XSD}string")
+                        for value in values
+                    ),
+                    source="ontology_default",
+                    explanation="默认取上一个完整自然月",
+                ),
+            ),
+            "temporal_policy": policy if include_policy else None,
+            "temporal_decision": decision if include_decision else None,
+        }
+    )
+
+
+def test_generic_compiler_compiles_resolved_temporal_filters() -> None:
+    single = GenericSqlCompiler().compile(_temporal_plan())
+    ranged = GenericSqlCompiler().compile(_temporal_plan("202604", "202606"))
+
+    assert "\"accounting_month\" = '202607'" in single.sql
+    assert "\"accounting_month\" BETWEEN '202604' AND '202606'" in ranged.sql
+    assert single.fields == ("customer_id",)
+
+
+def test_generic_compiler_joins_rules_and_resolved_filters() -> None:
+    plan = _temporal_plan().model_copy(
+        update={"rules": _plan(_leaf(RuleOperator.EQ, "ACTIVE")).rules}
+    )
+
+    compiled = GenericSqlCompiler().compile(plan)
+
+    assert "\"status_code\" = 'ACTIVE' AND \"accounting_month\" = '202607'" in compiled.sql
+
+
+def test_compiler_rejects_incomplete_temporal_guard() -> None:
+    with pytest.raises(OntologyCompileError, match="缺少时间决策"):
+        GenericSqlCompiler().compile(_temporal_plan(include_decision=False))
+
+    wrong_filter = _temporal_plan(property_uri="https://example.invalid/ontology/OtherMonth")
+    with pytest.raises(OntologyCompileError, match="缺少有界分区过滤"):
+        GenericSqlCompiler().compile(wrong_filter)
 
 
 def test_generic_compiler_uses_only_query_plan_bindings() -> None:
