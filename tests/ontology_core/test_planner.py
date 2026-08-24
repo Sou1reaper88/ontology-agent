@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from ontology_core.compiler import GenericSqlCompiler
 from ontology_core.errors import (
     AmbiguousQueryConceptError,
     NoMatchingConceptError,
+    TemporalIntentError,
     UnsupportedQueryPlanError,
 )
 from ontology_core.models import PackageInfo
@@ -20,6 +22,9 @@ from ontology_core.semantic_models import (
     PhysicalMapping,
     Property,
     SemanticCatalog,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+    TemporalPartitionPolicy,
 )
 
 
@@ -28,7 +33,12 @@ def _text(value: str) -> tuple[LocalizedText, ...]:
 
 
 def _resolver(
-    *, duplicate: bool = False, missing_property_mapping: bool = False
+    *,
+    duplicate: bool = False,
+    missing_property_mapping: bool = False,
+    with_temporal_policy: bool = False,
+    missing_partition_mapping: bool = False,
+    missing_business_date_mapping: bool = False,
 ) -> OntologyResolver:
     customer = Concept(
         uri="https://example.invalid/ontology/Customer",
@@ -61,6 +71,22 @@ def _resolver(
         labels=_text("客户状态"),
         concept_uri=customer.uri,
         datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    accounting_month = Property(
+        uri="https://example.invalid/ontology/AccountingMonth",
+        short_name="AccountingMonth",
+        label="业务账期",
+        labels=_text("业务账期"),
+        concept_uri=customer.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    registration_date = Property(
+        uri="https://example.invalid/ontology/RegistrationDate",
+        short_name="RegistrationDate",
+        label="入网日期",
+        labels=_text("入网日期"),
+        concept_uri=customer.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#date",
     )
     source = DataSource(
         uri="https://example.invalid/ontology/Warehouse",
@@ -106,6 +132,46 @@ def _resolver(
                 priority=20,
             )
         )
+    if with_temporal_policy and not missing_partition_mapping:
+        mappings.append(
+            PhysicalMapping(
+                uri="https://example.invalid/ontology/AccountingMonthField",
+                short_name="AccountingMonthField",
+                label="业务账期字段映射",
+                labels=_text("业务账期字段映射"),
+                semantic_element_uri=accounting_month.uri,
+                data_source_uri=source.uri,
+                field_name="p_mon",
+                priority=20,
+            )
+        )
+    if not missing_business_date_mapping:
+        mappings.append(
+            PhysicalMapping(
+                uri="https://example.invalid/ontology/RegistrationDateField",
+                short_name="RegistrationDateField",
+                label="入网日期字段映射",
+                labels=_text("入网日期字段映射"),
+                semantic_element_uri=registration_date.uri,
+                data_source_uri=source.uri,
+                field_name="registration_date",
+                priority=20,
+            )
+        )
+    temporal_policies = ()
+    if with_temporal_policy:
+        temporal_policies = (
+            TemporalPartitionPolicy(
+                uri="https://example.invalid/ontology/CustomerMonthPolicy",
+                short_name="CustomerMonthPolicy",
+                label="客户月分区策略",
+                labels=_text("客户月分区策略"),
+                applies_to_uri=customer.uri,
+                partition_property_uri=accounting_month.uri,
+                grain=TemporalGrain.MONTH,
+                default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+            ),
+        )
     snapshot = OntologySnapshot(
         info=PackageInfo(
             package_id="example.planner",
@@ -116,9 +182,10 @@ def _resolver(
         ),
         catalog=SemanticCatalog(
             concepts=tuple(concepts),
-            properties=(customer_id, status),
+            properties=(customer_id, status, accounting_month, registration_date),
             data_sources=(source,),
             mappings=tuple(mappings),
+            temporal_policies=temporal_policies,
         ),
         _data_nt="",
         _shapes_nt="",
@@ -260,3 +327,72 @@ def test_planner_rejects_property_inference_tie_between_concepts() -> None:
 def test_planner_rejects_direct_concept_match_without_known_property() -> None:
     with pytest.raises(UnsupportedQueryPlanError, match="未匹配到查询属性"):
         OntologyPlanner(_resolver()).plan("查询客户的火星指标")
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_predicate", "expected_source"),
+    (
+        ("查询客户编号", "\"p_mon\" = '202607'", "ontology_default"),
+        ("查询2026年6月客户编号", "\"p_mon\" = '202606'", "explicit_absolute"),
+        (
+            "查询2026年4月至2026年6月客户编号",
+            "\"p_mon\" BETWEEN '202604' AND '202606'",
+            "explicit_absolute",
+        ),
+        ("查询最近3个月客户编号", "\"p_mon\" BETWEEN '202605' AND '202607'", "explicit_relative"),
+    ),
+)
+def test_planner_applies_ontology_temporal_policy(
+    query: str,
+    expected_predicate: str,
+    expected_source: str,
+) -> None:
+    plan = OntologyPlanner(_resolver(with_temporal_policy=True)).plan(
+        query,
+        system_time="2026-08-24",
+    )
+    compiled = GenericSqlCompiler().compile(plan)
+
+    assert expected_predicate in compiled.sql
+    assert tuple(item.binding.field_name for item in plan.selections) == ("customer_id",)
+    assert plan.temporal_decision is not None
+    assert plan.temporal_decision.source == expected_source
+
+
+def test_planner_temporal_policy_fails_closed() -> None:
+    planner = OntologyPlanner(_resolver(with_temporal_policy=True))
+
+    with pytest.raises(TemporalIntentError, match="多个冲突账期"):
+        planner.plan("查询2026年5月和2026年6月客户编号", system_time="2026-08-24")
+    with pytest.raises(TemporalIntentError, match="明确账期"):
+        planner.plan("查询全部历史客户编号", system_time="2026-08-24")
+    with pytest.raises(TemporalIntentError, match="系统时间格式无效"):
+        planner.plan("查询客户编号", system_time="20260824")
+    with pytest.raises(UnsupportedQueryPlanError, match="分区属性缺少可用的字段映射"):
+        OntologyPlanner(_resolver(with_temporal_policy=True, missing_partition_mapping=True)).plan(
+            "查询客户编号", system_time="2026-08-24"
+        )
+
+    with pytest.raises(UnsupportedQueryPlanError, match="查询属性缺少可用的字段映射"):
+        OntologyPlanner(
+            _resolver(with_temporal_policy=True, missing_business_date_mapping=True)
+        ).plan("查询2026年6月入网日期的客户编号", system_time="2026-08-24")
+
+
+def test_planner_keeps_default_partition_with_business_date_filter() -> None:
+    plan = OntologyPlanner(_resolver(with_temporal_policy=True)).plan(
+        "查询2026年6月入网日期的客户编号",
+        system_time="2026-08-24",
+    )
+    compiled = GenericSqlCompiler().compile(plan)
+
+    assert "\"p_mon\" = '202607'" in compiled.sql
+    assert "\"registration_date\" BETWEEN '2026-06-01' AND '2026-06-30'" in compiled.sql
+
+
+def test_planner_without_temporal_policy_preserves_legacy_plan() -> None:
+    plan = OntologyPlanner(_resolver()).plan("查询客户编号", system_time="2026-08-24")
+
+    assert plan.filters == ()
+    assert plan.temporal_policy is None
+    assert plan.temporal_decision is None

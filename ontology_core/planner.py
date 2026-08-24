@@ -8,9 +8,28 @@ from ontology_core.errors import (
     UnsupportedQueryPlanError,
 )
 from ontology_core.normalization import normalize_text
-from ontology_core.query_plan import BoundProperty, QueryPlan
+from ontology_core.query_plan import (
+    BoundProperty,
+    QueryPlan,
+    ResolvedFilter,
+    TemporalDecision,
+)
 from ontology_core.resolver import OntologyResolver
-from ontology_core.semantic_models import Concept, Property, SemanticElement
+from ontology_core.semantic_models import (
+    Concept,
+    Property,
+    RdfLiteral,
+    RuleOperator,
+    SemanticElement,
+)
+from ontology_core.temporal import (
+    TemporalIntent,
+    TemporalTarget,
+    parse_system_date,
+    parse_temporal_intents,
+)
+
+_XSD_DATE = "http://www.w3.org/2001/XMLSchema#date"
 
 
 def _aliases(element: SemanticElement) -> tuple[str, ...]:
@@ -21,6 +40,39 @@ def _aliases(element: SemanticElement) -> tuple[str, ...]:
 def _match_score(query: str, element: SemanticElement) -> int | None:
     matches = [len(alias) for alias in _aliases(element) if alias in query]
     return max(matches) if matches else None
+
+
+def _target(property_: Property) -> TemporalTarget:
+    return TemporalTarget(
+        property_uri=property_.uri,
+        aliases=_aliases(property_),
+        datatype_uri=property_.datatype_uri,
+    )
+
+
+def _could_be_business_date(property_: Property) -> bool:
+    aliases = _aliases(property_)
+    return property_.datatype_uri == _XSD_DATE or any(
+        marker in alias for alias in aliases for marker in ("日期", "时间")
+    )
+
+
+def _resolved_filter(intent: TemporalIntent, binding: BoundProperty) -> ResolvedFilter:
+    operator = RuleOperator.EQ if intent.start == intent.end else RuleOperator.BETWEEN
+    values = (intent.start,) if operator is RuleOperator.EQ else (intent.start, intent.end)
+    return ResolvedFilter(
+        property=binding,
+        operator=operator,
+        values=tuple(
+            RdfLiteral(
+                lexical_form=value,
+                datatype_uri=binding.semantic.datatype_uri,
+            )
+            for value in values
+        ),
+        source=intent.source.value,
+        explanation=intent.explanation,
+    )
 
 
 def _best_concept(query: str, concepts: Iterable[Concept]) -> Concept:
@@ -83,7 +135,7 @@ class OntologyPlanner:
     def __init__(self, resolver: OntologyResolver) -> None:
         self._resolver = resolver
 
-    def plan(self, query: str) -> QueryPlan:
+    def plan(self, query: str, *, system_time: str | None = None) -> QueryPlan:
         normalized_query = normalize_text(query)
         concepts = self._resolver.list_concepts()
         try:
@@ -138,6 +190,52 @@ class OntologyPlanner:
         rules = tuple(
             item for item in self._resolver.list_rules(concept.uri) if item.status == "active"
         )
+        policy = self._resolver.get_temporal_policy(concept.uri)
+        filters: tuple[ResolvedFilter, ...] = ()
+        temporal_decision = None
+        if policy is not None:
+            partition_binding = by_property_uri.get(policy.partition_property_uri)
+            if partition_binding is None:
+                raise UnsupportedQueryPlanError(
+                    "分区属性缺少可用的字段映射",
+                    details={"property_uri": policy.partition_property_uri},
+                )
+            parsed_system_date = parse_system_date(system_time)
+            business_targets = tuple(
+                _target(property_)
+                for property_ in properties
+                if property_.uri != policy.partition_property_uri
+                and _could_be_business_date(property_)
+            )
+            parsed = parse_temporal_intents(
+                query,
+                system_date=parsed_system_date,
+                grain=policy.grain,
+                default_strategy=policy.default_strategy,
+                partition_target=_target(partition_binding.semantic),
+                other_targets=business_targets,
+            )
+            resolved_filters = [_resolved_filter(parsed.partition, partition_binding)]
+            for intent in parsed.property_intents:
+                business_binding = by_property_uri.get(intent.target_property_uri)
+                if business_binding is None:
+                    raise UnsupportedQueryPlanError(
+                        "业务日期属性缺少可用的字段映射",
+                        details={"property_uri": intent.target_property_uri},
+                    )
+                resolved_filters.append(_resolved_filter(intent, business_binding))
+            filters = tuple(resolved_filters)
+            temporal_decision = TemporalDecision(
+                partition_property_uri=policy.partition_property_uri,
+                grain=policy.grain,
+                source=parsed.partition.source,
+                system_date=parsed_system_date,
+                matched_text=parsed.partition.matched_text,
+                resolved_start=parsed.partition.start,
+                resolved_end=parsed.partition.end,
+                default_strategy=policy.default_strategy,
+                explanation=parsed.partition.explanation,
+            )
         return QueryPlan(
             concept=concept,
             data_source=source,
@@ -145,4 +243,7 @@ class OntologyPlanner:
             selections=selections,
             property_bindings=tuple(bindings),
             rules=rules,
+            filters=filters,
+            temporal_policy=policy,
+            temporal_decision=temporal_decision,
         )
