@@ -31,3 +31,14 @@ def test_tabular_metadata_import_interfaces_are_exported_from_package_root() -> 
 
     assert expected <= set(ontology_core.__all__)
     assert all(hasattr(ontology_core, name) for name in expected)
+
+
+def test_temporal_policy_interfaces_are_exported_from_package_root() -> None:
+    expected = {
+        "TemporalDefaultStrategy",
+        "TemporalGrain",
+        "TemporalPartitionPolicy",
+    }
+
+    assert expected <= set(ontology_core.__all__)
+    assert all(hasattr(ontology_core, name) for name in expected)

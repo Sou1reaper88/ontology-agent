@@ -8,6 +8,7 @@ oa:Relation a owl:Class ; rdfs:label "Relation marker" .
 oa:BusinessRule a owl:Class ; rdfs:label "Business rule marker" .
 oa:DataSource a owl:Class ; rdfs:label "Data source marker" .
 oa:PhysicalMapping a owl:Class ; rdfs:label "Physical mapping marker" .
+oa:TemporalPartitionPolicy a owl:Class ; rdfs:label "Temporal partition policy marker" .
 
 oa:AllOf a owl:Class ; rdfs:label "All of" .
 oa:AnyOf a owl:Class ; rdfs:label "Any of" .
@@ -44,3 +45,7 @@ oa:leftProperty a owl:ObjectProperty ; rdfs:label "Left property" .
 oa:value a owl:DatatypeProperty ; rdfs:label "Value" .
 oa:values a owl:ObjectProperty ; rdfs:label "Values" .
 oa:parameter a owl:DatatypeProperty ; rdfs:label "Parameter" .
+oa:partitionProperty a owl:ObjectProperty ; rdfs:label "Partition property" .
+oa:partitionGrain a owl:DatatypeProperty ; rdfs:label "Partition grain" .
+oa:defaultStrategy a owl:DatatypeProperty ; rdfs:label "Default temporal strategy" .
+oa:allowQueryOverride a owl:DatatypeProperty ; rdfs:label "Allow query override" .

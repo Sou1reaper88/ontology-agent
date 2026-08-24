@@ -19,6 +19,7 @@ from ontology_core.semantic_models import (
     Property,
     Relation,
     SemanticElement,
+    TemporalPartitionPolicy,
 )
 
 _Element = TypeVar("_Element", bound=SemanticElement)
@@ -66,6 +67,10 @@ class OntologyResolver:
         self._rules_by_concept = _index(
             catalog.rules,
             lambda rule: rule.applies_to_uri,
+        )
+        self._temporal_policies_by_concept = _index(
+            catalog.temporal_policies,
+            lambda policy: policy.applies_to_uri,
         )
         self._data_sources = tuple(sorted(catalog.data_sources, key=_sort_key))
         grouped_mappings: dict[str, list[PhysicalMapping]] = {}
@@ -177,6 +182,15 @@ class OntologyResolver:
     def list_rules(self, concept_id: str) -> tuple[BusinessRule, ...]:
         concept = self.get_concept(concept_id)
         return self._rules_by_concept.get(concept.uri, ())
+
+    def get_temporal_policy(self, concept_id: str) -> TemporalPartitionPolicy | None:
+        concept = self.get_concept(concept_id)
+        active = tuple(
+            item
+            for item in self._temporal_policies_by_concept.get(concept.uri, ())
+            if item.status == "active"
+        )
+        return active[0] if active else None
 
     def list_data_sources(self) -> tuple[DataSource, ...]:
         return self._data_sources

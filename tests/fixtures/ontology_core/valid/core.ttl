@@ -21,5 +21,8 @@ oa:DataSource a owl:Class ;
 oa:PhysicalMapping a owl:Class ;
     rdfs:label "Physical mapping marker" .
 
+oa:TemporalPartitionPolicy a owl:Class ;
+    rdfs:label "Temporal partition policy marker" .
+
 ex:SemanticElement a owl:Class ;
     rdfs:label "Semantic element" .

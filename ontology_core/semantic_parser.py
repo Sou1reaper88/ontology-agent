@@ -27,8 +27,12 @@ from ontology_core.semantic_models import (
     RuleExpression,
     RuleOperator,
     SemanticCatalog,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+    TemporalPartitionPolicy,
 )
 from ontology_core.vocabulary import (
+    ALLOW_QUERY_OVERRIDE,
     APPLIES_TO,
     ARGUMENT,
     BUSINESS_RULE,
@@ -38,6 +42,7 @@ from ontology_core.vocabulary import (
     CONFIGURATION,
     DATA_SOURCE,
     DATA_SOURCE_REF,
+    DEFAULT_STRATEGY,
     DIALECT,
     ENABLED,
     FIELD_NAME,
@@ -46,6 +51,8 @@ from ontology_core.vocabulary import (
     OA,
     OBJECT_NAME,
     PARAMETER,
+    PARTITION_GRAIN,
+    PARTITION_PROPERTY,
     PHYSICAL_MAPPING,
     PHYSICAL_NAMESPACE,
     PLATFORM_TYPE,
@@ -55,6 +62,7 @@ from ontology_core.vocabulary import (
     SEMANTIC_ELEMENT,
     SHORT_NAME,
     STATUS,
+    TEMPORAL_PARTITION_POLICY,
     USES_PROPERTY,
     USES_RELATION,
     VALUE,
@@ -62,7 +70,15 @@ from ontology_core.vocabulary import (
 )
 
 _Element = TypeVar("_Element")
-_MARKERS = (CONCEPT, PROPERTY, RELATION, BUSINESS_RULE, DATA_SOURCE, PHYSICAL_MAPPING)
+_MARKERS = (
+    CONCEPT,
+    PROPERTY,
+    RELATION,
+    BUSINESS_RULE,
+    DATA_SOURCE,
+    PHYSICAL_MAPPING,
+    TEMPORAL_PARTITION_POLICY,
+)
 _STANDARD_TYPES = {
     CONCEPT: OWL.Class,
     PROPERTY: OWL.DatatypeProperty,
@@ -890,6 +906,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
     rule_subjects = by_marker[BUSINESS_RULE]
     source_subjects = by_marker[DATA_SOURCE]
     mapping_subjects = by_marker[PHYSICAL_MAPPING]
+    temporal_policy_subjects = by_marker[TEMPORAL_PARTITION_POLICY]
     credential_roots = tuple(sorted(set(source_subjects) | set(mapping_subjects), key=str))
     _scan_forbidden_credentials(
         graph,
@@ -1189,6 +1206,195 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                 )
             )
 
+    property_domains = {uri: domain for uri, _, _, _, _, domain, _ in property_data}
+    temporal_policy_data: list[
+        tuple[
+            str,
+            str,
+            str,
+            tuple[LocalizedText, ...],
+            str | None,
+            str,
+            str,
+            TemporalGrain,
+            TemporalDefaultStrategy,
+            bool,
+            str,
+            int,
+        ]
+    ] = []
+    for subject in temporal_policy_subjects:
+        uri = str(subject)
+        fields = _element_fields(graph, subject, violations)
+        applies_to = _capture(
+            lambda subject=subject: _single_uri(graph, subject, APPLIES_TO, "applies to"),
+            violations=violations,
+            code="missing_applies_to",
+            uri=uri,
+            path=APPLIES_TO,
+        )
+        partition_property = _capture(
+            lambda subject=subject: _single_uri(
+                graph, subject, PARTITION_PROPERTY, "partition property"
+            ),
+            violations=violations,
+            code="missing_partition_property",
+            uri=uri,
+            path=PARTITION_PROPERTY,
+        )
+        grain_text = _capture(
+            lambda subject=subject: str(
+                _single_literal(graph, subject, PARTITION_GRAIN, "partition grain")
+            ),
+            violations=violations,
+            code="invalid_partition_grain",
+            uri=uri,
+            path=PARTITION_GRAIN,
+        )
+        strategy_text = _capture(
+            lambda subject=subject: str(
+                _single_literal(graph, subject, DEFAULT_STRATEGY, "default strategy")
+            ),
+            violations=violations,
+            code="invalid_temporal_strategy",
+            uri=uri,
+            path=DEFAULT_STRATEGY,
+        )
+        override_text = _capture(
+            lambda subject=subject: str(
+                _single_literal(graph, subject, ALLOW_QUERY_OVERRIDE, "allow query override")
+            ),
+            violations=violations,
+            code="invalid_query_override",
+            uri=uri,
+            path=ALLOW_QUERY_OVERRIDE,
+        )
+        status = _capture(
+            lambda subject=subject: _optional_literal(graph, subject, STATUS, "status") or "active",
+            violations=violations,
+            code="invalid_status",
+            uri=uri,
+            path=STATUS,
+        )
+        priority_text = _capture(
+            lambda subject=subject: _optional_literal(graph, subject, PRIORITY, "priority") or "0",
+            violations=violations,
+            code="invalid_priority",
+            uri=uri,
+            path=PRIORITY,
+        )
+        _validate_concept_reference(
+            uri=uri,
+            concept_uri=applies_to,
+            path=APPLIES_TO,
+            marked_concept_uris=marked_concept_uris,
+            violations=violations,
+        )
+        _validate_reference(
+            uri=uri,
+            reference=partition_property,
+            path=PARTITION_PROPERTY,
+            known=marked_property_uris,
+            violations=violations,
+        )
+        if (
+            applies_to is not None
+            and partition_property is not None
+            and property_domains.get(partition_property) != applies_to
+        ):
+            violations.append(
+                _violation(
+                    "invalid_temporal_property",
+                    uri,
+                    PARTITION_PROPERTY,
+                    "Partition property must belong to the policy concept",
+                )
+            )
+        try:
+            grain = TemporalGrain(grain_text) if grain_text is not None else None
+        except ValueError:
+            violations.append(
+                _violation("invalid_partition_grain", uri, PARTITION_GRAIN, "Invalid grain")
+            )
+            grain = None
+        try:
+            strategy = TemporalDefaultStrategy(strategy_text) if strategy_text is not None else None
+        except ValueError:
+            violations.append(
+                _violation("invalid_temporal_strategy", uri, DEFAULT_STRATEGY, "Invalid strategy")
+            )
+            strategy = None
+        valid_pairs = {
+            (TemporalGrain.DAY, TemporalDefaultStrategy.T_MINUS_2),
+            (TemporalGrain.MONTH, TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH),
+        }
+        if grain is not None and strategy is not None and (grain, strategy) not in valid_pairs:
+            violations.append(
+                _violation(
+                    "invalid_temporal_strategy",
+                    uri,
+                    DEFAULT_STRATEGY,
+                    "Temporal grain and strategy do not match",
+                )
+            )
+        if override_text is None or override_text.casefold() not in {"true", "false"}:
+            violations.append(
+                _violation(
+                    "invalid_query_override",
+                    uri,
+                    ALLOW_QUERY_OVERRIDE,
+                    "Allow query override must be boolean",
+                )
+            )
+            allow_query_override = True
+        else:
+            allow_query_override = override_text.casefold() == "true"
+        try:
+            priority = int(priority_text) if priority_text is not None else 0
+        except ValueError:
+            violations.append(
+                _violation("invalid_priority", uri, PRIORITY, "Priority must be an integer")
+            )
+            priority = 0
+        if (
+            fields
+            and applies_to
+            and partition_property
+            and grain is not None
+            and strategy is not None
+            and status is not None
+            and _validate_short_name(short_name=fields[0], uri=uri, violations=violations)
+        ):
+            temporal_policy_data.append(
+                (
+                    uri,
+                    *fields,
+                    applies_to,
+                    partition_property,
+                    grain,
+                    strategy,
+                    allow_query_override,
+                    status,
+                    priority,
+                )
+            )
+
+    active_temporal_policies: dict[str, list[str]] = defaultdict(list)
+    for uri, _, _, _, _, applies_to, _, _, _, _, status, _ in temporal_policy_data:
+        if status == "active":
+            active_temporal_policies[applies_to].append(uri)
+    for policy_uris in active_temporal_policies.values():
+        if len(policy_uris) > 1:
+            for uri in policy_uris:
+                violations.append(
+                    _violation(
+                        "duplicate_temporal_policy",
+                        uri,
+                        APPLIES_TO,
+                        "Concept has multiple active temporal policies",
+                    )
+                )
+
     mapping_data: list[
         tuple[
             str,
@@ -1456,6 +1662,36 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             enabled,
         ) in mapping_data
     )
+    temporal_policies = tuple(
+        TemporalPartitionPolicy(
+            uri=uri,
+            short_name=short_name,
+            label=label,
+            labels=labels,
+            description=description,
+            applies_to_uri=applies_to,
+            partition_property_uri=partition_property,
+            grain=grain,
+            default_strategy=strategy,
+            allow_query_override=allow_query_override,
+            status=status,
+            priority=priority,
+        )
+        for (
+            uri,
+            short_name,
+            label,
+            labels,
+            description,
+            applies_to,
+            partition_property,
+            grain,
+            strategy,
+            allow_query_override,
+            status,
+            priority,
+        ) in temporal_policy_data
+    )
     return SemanticCatalog(
         concepts=tuple(sorted(concepts, key=_sort_key)),
         properties=tuple(sorted(properties, key=_sort_key)),
@@ -1463,4 +1699,5 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         rules=tuple(sorted(rules, key=_sort_key)),
         data_sources=tuple(sorted(sources, key=_sort_key)),
         mappings=tuple(sorted(mappings, key=_sort_key)),
+        temporal_policies=tuple(sorted(temporal_policies, key=_sort_key)),
     )

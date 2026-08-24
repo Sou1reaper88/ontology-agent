@@ -26,6 +26,9 @@ from ontology_core.semantic_models import (
     Property,
     Relation,
     SemanticCatalog,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+    TemporalPartitionPolicy,
 )
 
 
@@ -68,6 +71,7 @@ def _catalog_resolver(
     rules: tuple[BusinessRule, ...] = (),
     data_sources: tuple[DataSource, ...] = (),
     mappings: tuple[PhysicalMapping, ...] = (),
+    temporal_policies: tuple[TemporalPartitionPolicy, ...] = (),
 ) -> OntologyResolver:
     snapshot = OntologySnapshot(
         info=PackageInfo(
@@ -84,11 +88,29 @@ def _catalog_resolver(
             rules=rules,
             data_sources=data_sources,
             mappings=mappings,
+            temporal_policies=temporal_policies,
         ),
         _data_nt="",
         _shapes_nt="",
     )
     return OntologyResolver(snapshot)
+
+
+def test_resolver_returns_the_active_temporal_policy_for_a_concept() -> None:
+    record = _concept("Record")
+    policy = TemporalPartitionPolicy(
+        uri="https://example.invalid/ontology/MonthlyPolicy",
+        short_name="MonthlyPolicy",
+        label="Monthly policy",
+        labels=(LocalizedText(value="Monthly policy", language="en"),),
+        applies_to_uri=record.uri,
+        partition_property_uri="https://example.invalid/ontology/AccountingMonth",
+        grain=TemporalGrain.MONTH,
+        default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+    )
+    resolver = _catalog_resolver(concepts=(record,), temporal_policies=(policy,))
+
+    assert resolver.get_temporal_policy("Record") == policy
 
 
 def test_resolver_looks_up_concepts_by_uri_short_name_and_preferred_label(
@@ -351,6 +373,7 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         "resolve_property": ("self", "concept_id", "property_id"),
         "list_relations": ("self", "concept_id"),
         "list_rules": ("self", "concept_id"),
+        "get_temporal_policy": ("self", "concept_id"),
         "list_data_sources": ("self",),
         "list_mappings": ("self", "semantic_element_uri", "data_source_uri"),
     }
@@ -377,6 +400,10 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         },
         "list_relations": {"concept_id": str, "return": tuple[Relation, ...]},
         "list_rules": {"concept_id": str, "return": tuple[BusinessRule, ...]},
+        "get_temporal_policy": {
+            "concept_id": str,
+            "return": TemporalPartitionPolicy | None,
+        },
         "list_data_sources": {"return": tuple[DataSource, ...]},
         "list_mappings": {
             "semantic_element_uri": str,
@@ -389,6 +416,7 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
     assert isinstance(resolver.list_properties("Record"), tuple)
     assert isinstance(resolver.list_relations("Record"), tuple)
     assert isinstance(resolver.list_rules("Record"), tuple)
+    assert resolver.get_temporal_policy("Record") is None
     assert isinstance(resolver.list_data_sources(), tuple)
     assert isinstance(resolver.list_mappings("https://example.invalid/ontology/Metric"), tuple)
 
@@ -399,6 +427,7 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         resolver._properties_by_concept,
         resolver._relations_by_source,
         resolver._rules_by_concept,
+        resolver._temporal_policies_by_concept,
         resolver._mappings_by_element,
     )
     assert all(isinstance(index, MappingProxyType) for index in indexes)

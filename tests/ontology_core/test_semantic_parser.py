@@ -7,7 +7,12 @@ from rdflib.namespace import OWL, RDF, RDFS
 
 from ontology_core import semantic_parser
 from ontology_core.errors import OntologyValidationError
-from ontology_core.semantic_models import LocalizedText, RuleOperator
+from ontology_core.semantic_models import (
+    LocalizedText,
+    RuleOperator,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+)
 from ontology_core.semantic_parser import parse_catalog
 from ontology_core.vocabulary import ARGUMENT, CONDITION, LEFT_PROPERTY, OA, VALUE, VALUES
 
@@ -21,6 +26,70 @@ def _catalog_graph(valid_package_dir: Path) -> Graph:
 
 def _graph(data: str) -> Graph:
     return Graph().parse(data=data, format="turtle")
+
+
+def _temporal_policy_graph(extra_policy: str = "") -> Graph:
+    return _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ; rdfs:label "Record" .
+        ex:AccountingMonth a owl:DatatypeProperty, oa:Property ;
+            oa:shortName "AccountingMonth" ; rdfs:label "Accounting month" ;
+            rdfs:domain ex:Record ; rdfs:range xsd:string .
+        ex:MonthlyPolicy a oa:TemporalPartitionPolicy ;
+            oa:shortName "MonthlyPolicy" ; rdfs:label "Monthly policy" ;
+            oa:appliesTo ex:Record ; oa:partitionProperty ex:AccountingMonth ;
+            oa:partitionGrain "month" ;
+            oa:defaultStrategy "previous_complete_month" ;
+            oa:allowQueryOverride true ; oa:status "active" ; oa:priority 100 .
+        """ + extra_policy)
+
+
+def test_parse_catalog_builds_temporal_partition_policy() -> None:
+    catalog = parse_catalog(_temporal_policy_graph())
+
+    assert len(catalog.temporal_policies) == 1
+    policy = catalog.temporal_policies[0]
+    assert policy.partition_property_uri.endswith("/AccountingMonth")
+    assert policy.grain is TemporalGrain.MONTH
+    assert policy.default_strategy is TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH
+    assert policy.allow_query_override is True
+
+
+def test_parse_catalog_rejects_invalid_temporal_strategy_pair() -> None:
+    graph = _temporal_policy_graph()
+    graph.set(
+        (
+            URIRef("https://example.invalid/ontology/MonthlyPolicy"),
+            OA.defaultStrategy,
+            Literal("t_minus_2"),
+        )
+    )
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert "invalid_temporal_strategy" in str(caught.value.details)
+
+
+def test_parse_catalog_rejects_multiple_active_temporal_policies() -> None:
+    graph = _temporal_policy_graph("""
+        ex:OtherPolicy a oa:TemporalPartitionPolicy ;
+            oa:shortName "OtherPolicy" ; rdfs:label "Other policy" ;
+            oa:appliesTo ex:Record ; oa:partitionProperty ex:AccountingMonth ;
+            oa:partitionGrain "month" ;
+            oa:defaultStrategy "previous_complete_month" ;
+            oa:allowQueryOverride true ; oa:status "active" ; oa:priority 50 .
+        """)
+
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(graph)
+
+    assert "duplicate_temporal_policy" in str(caught.value.details)
 
 
 def test_parse_catalog_builds_marked_domain_elements(valid_package_dir: Path) -> None:

@@ -23,6 +23,16 @@ class RuleOperator(StrEnum):
     IS_NULL = "is_null"
 
 
+class TemporalGrain(StrEnum):
+    DAY = "day"
+    MONTH = "month"
+
+
+class TemporalDefaultStrategy(StrEnum):
+    T_MINUS_2 = "t_minus_2"
+    PREVIOUS_COMPLETE_MONTH = "previous_complete_month"
+
+
 class LocalizedText(FrozenModel):
     value: str = Field(min_length=1)
     language: str | None = None
@@ -74,6 +84,16 @@ class BusinessRule(SemanticElement):
     priority: int = 0
 
 
+class TemporalPartitionPolicy(SemanticElement):
+    applies_to_uri: str
+    partition_property_uri: str
+    grain: TemporalGrain
+    default_strategy: TemporalDefaultStrategy
+    allow_query_override: bool = True
+    status: str = "active"
+    priority: int = 0
+
+
 class DataSource(SemanticElement):
     platform_type: str
     dialect: str | None = None
@@ -98,6 +118,7 @@ class SemanticCatalog(FrozenModel):
     rules: tuple[BusinessRule, ...] = ()
     data_sources: tuple[DataSource, ...] = ()
     mappings: tuple[PhysicalMapping, ...] = ()
+    temporal_policies: tuple[TemporalPartitionPolicy, ...] = ()
 
 
 class SemanticCounts(FrozenModel):
@@ -107,6 +128,7 @@ class SemanticCounts(FrozenModel):
     rules: int = 0
     data_sources: int = 0
     mappings: int = 0
+    temporal_policies: int = 0
 
 
 class InspectedPackage(FrozenModel):

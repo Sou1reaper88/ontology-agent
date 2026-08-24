@@ -19,6 +19,7 @@ def _counts(catalog: SemanticCatalog) -> SemanticCounts:
         rules=len(catalog.rules),
         data_sources=len(catalog.data_sources),
         mappings=len(catalog.mappings),
+        temporal_policies=len(catalog.temporal_policies),
     )
 
 
@@ -40,6 +41,7 @@ def inspection_from_snapshot(
                     catalog.rules,
                     catalog.data_sources,
                     catalog.mappings,
+                    catalog.temporal_policies,
                 )
                 for element in elements
             )

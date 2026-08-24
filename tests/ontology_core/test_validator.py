@@ -100,6 +100,25 @@ def test_shacl_contract_requires_xsd_property_range(valid_package_dir: Path) -> 
         )
 
 
+def test_shacl_contract_requires_complete_temporal_partition_policy(
+    valid_package_dir: Path,
+) -> None:
+    data = Graph().parse(
+        data=(
+            "@prefix ex: <https://example.invalid/ontology/> .\n"
+            "@prefix oa: <urn:ontology-agent:core#> .\n"
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+            'ex:Policy a oa:TemporalPartitionPolicy ; oa:shortName "Policy" ; '
+            'rdfs:label "Policy" .\n'
+        ),
+        format="turtle",
+    )
+
+    for shapes_path in _shape_paths(valid_package_dir):
+        report = OntologyValidator().validate(data, _graph(shapes_path))
+        assert report.conforms is False
+
+
 def test_shacl_contract_rejects_unknown_datatype_in_xsd_namespace(
     valid_package_dir: Path,
 ) -> None:

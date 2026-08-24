@@ -53,6 +53,7 @@ def _write_text_inspection(inspection, *, include_identifiers: bool) -> None:
         f"  rules: {inspection.counts.rules}",
         f"  data_sources: {inspection.counts.data_sources}",
         f"  mappings: {inspection.counts.mappings}",
+        f"  temporal_policies: {inspection.counts.temporal_policies}",
     ]
     if include_identifiers:
         lines.append("identifiers:")

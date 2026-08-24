@@ -51,6 +51,9 @@ from ontology_core.semantic_models import (
     SemanticCatalog,
     SemanticCounts,
     SemanticElement,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+    TemporalPartitionPolicy,
 )
 from ontology_core.tabular_metadata import (
     DiagnosticSeverity,
@@ -120,6 +123,9 @@ __all__ = [
     "SemanticCatalog",
     "SemanticCounts",
     "SemanticElement",
+    "TemporalDefaultStrategy",
+    "TemporalGrain",
+    "TemporalPartitionPolicy",
     "SourceLocation",
     "SqlCompiler",
     "UnsupportedQueryPlanError",

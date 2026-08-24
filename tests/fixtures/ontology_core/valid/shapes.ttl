@@ -7,7 +7,7 @@
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 ex:MarkedSemanticElementShape a sh:NodeShape ;
-    sh:targetClass oa:Concept, oa:Property, oa:Relation, oa:BusinessRule, oa:DataSource, oa:PhysicalMapping ;
+    sh:targetClass oa:Concept, oa:Property, oa:Relation, oa:BusinessRule, oa:DataSource, oa:PhysicalMapping, oa:TemporalPartitionPolicy ;
     sh:nodeKind sh:IRI ;
     sh:property [
         sh:path oa:shortName ;
@@ -66,3 +66,20 @@ ex:PhysicalMappingShape a sh:NodeShape ;
     sh:targetClass oa:PhysicalMapping ;
     sh:property [ sh:path oa:semanticElement ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
     sh:property [ sh:path oa:dataSource ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+ex:TemporalPartitionPolicyShape a sh:NodeShape ;
+    sh:targetClass oa:TemporalPartitionPolicy ;
+    sh:property [ sh:path oa:appliesTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:partitionProperty ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [
+        sh:path oa:partitionGrain ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:nodeKind sh:Literal ; sh:in ("day" "month")
+    ] ;
+    sh:property [
+        sh:path oa:defaultStrategy ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:nodeKind sh:Literal ; sh:in ("t_minus_2" "previous_complete_month")
+    ] ;
+    sh:property [
+        sh:path oa:allowQueryOverride ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:datatype xsd:boolean
+    ] .

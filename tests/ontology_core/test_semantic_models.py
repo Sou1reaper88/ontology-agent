@@ -19,6 +19,9 @@ from ontology_core.semantic_models import (
     Relation,
     RuleExpression,
     RuleOperator,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+    TemporalPartitionPolicy,
 )
 from ontology_core.vocabulary import CONCEPT, OA, SHORT_NAME
 
@@ -38,6 +41,27 @@ def test_concept_and_catalog_are_immutable() -> None:
         concept.short_name = "Changed"
     with pytest.raises(ValidationError):
         catalog.concepts = ()
+
+
+def test_temporal_partition_policy_is_typed_and_frozen() -> None:
+    policy = TemporalPartitionPolicy(
+        uri="https://example.invalid/ontology/MonthlyPolicy",
+        short_name="MonthlyPolicy",
+        label="月分区策略",
+        labels=(LocalizedText(value="月分区策略", language="zh-CN"),),
+        applies_to_uri="https://example.invalid/ontology/Record",
+        partition_property_uri="https://example.invalid/ontology/AccountingMonth",
+        grain=TemporalGrain.MONTH,
+        default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+        allow_query_override=True,
+        status="active",
+        priority=100,
+    )
+
+    assert policy.grain is TemporalGrain.MONTH
+    assert policy.default_strategy is TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH
+    with pytest.raises(ValidationError):
+        policy.priority = 1
 
 
 def test_semantic_collections_coerce_to_tuples_and_preserve_input_order() -> None:

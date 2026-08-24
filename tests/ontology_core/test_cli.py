@@ -61,6 +61,7 @@ def _assert_valid_payload(payload: dict[str, object], *, package_path: Path) -> 
         "rules": 1,
         "data_sources": 1,
         "mappings": 1,
+        "temporal_policies": 0,
     }
     assert {"identifiers", "source_path", "source", "loaded_at", "timestamp"}.isdisjoint(
         _all_keys(payload)
@@ -130,6 +131,7 @@ def test_import_tabular_json_generates_package_and_report(
         "rules": 0,
         "data_sources": 1,
         "mappings": 3,
+        "temporal_policies": 0,
     }
     assert payload["diagnostic_counts"] == {
         "error": 0,
@@ -448,6 +450,7 @@ def test_inspect_text_prints_digest_and_counts_without_sensitive_details(
         "  rules: 1\n"
         "  data_sources: 1\n"
         "  mappings: 1\n"
+        "  temporal_policies: 0\n"
     )
     assert str(package_dir.resolve()) not in output
     assert "https://example.invalid/ontology/Record" not in output
@@ -479,6 +482,7 @@ def test_inspect_text_lists_sorted_identifiers_only_when_requested(
         "  rules: 1\n"
         "  data_sources: 1\n"
         "  mappings: 1\n"
+        "  temporal_policies: 0\n"
         "identifiers:\n"
         "  https://example.invalid/ontology/Metric\n"
         "  https://example.invalid/ontology/MetricMapping\n"

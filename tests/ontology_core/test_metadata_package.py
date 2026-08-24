@@ -52,6 +52,7 @@ def test_generate_metadata_package_builds_publishable_semantics(tmp_path: Path) 
         "rules": 0,
         "data_sources": 1,
         "mappings": 3,
+        "temporal_policies": 0,
     }
 
     repository = OntologyRepository()

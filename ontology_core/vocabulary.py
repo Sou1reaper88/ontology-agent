@@ -8,6 +8,7 @@ RELATION = OA.Relation
 BUSINESS_RULE = OA.BusinessRule
 DATA_SOURCE = OA.DataSource
 PHYSICAL_MAPPING = OA.PhysicalMapping
+TEMPORAL_PARTITION_POLICY = OA.TemporalPartitionPolicy
 
 SHORT_NAME = OA.shortName
 APPLIES_TO = OA.appliesTo
@@ -32,3 +33,7 @@ LEFT_PROPERTY = OA.leftProperty
 VALUE = OA.value
 VALUES = OA.values
 PARAMETER = OA.parameter
+PARTITION_PROPERTY = OA.partitionProperty
+PARTITION_GRAIN = OA.partitionGrain
+DEFAULT_STRATEGY = OA.defaultStrategy
+ALLOW_QUERY_OVERRIDE = OA.allowQueryOverride
