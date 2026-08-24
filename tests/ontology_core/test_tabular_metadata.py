@@ -111,6 +111,16 @@ DEMO_B\t另一对象\t\tOTHER_ID\t其他编码\tstring\t
     assert all("DEMO_A\t" not in item.message for item in diagnostics)
 
 
+def test_analyze_metadata_does_not_flag_related_chinese_synonyms_as_conflicts() -> None:
+    text = """对象英文名称\t对象描述\t属性英文名\t属性中文名\t属性类型\t属性描述
+DEMO_A\t合成对象\tBANK_CODE\t银行代码\tstring\t银行编号
+"""
+
+    diagnostics = analyze_metadata(parse_tabular_metadata(text))
+
+    assert "metadata_text_conflict" not in {item.code for item in diagnostics}
+
+
 def test_raise_for_blocking_diagnostics_returns_only_safe_structured_details() -> None:
     text = """对象英文名称\t属性英文名\t属性中文名
 DEMO_A\tBAD-NAME\t错误字段

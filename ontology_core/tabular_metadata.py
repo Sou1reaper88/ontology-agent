@@ -208,9 +208,8 @@ def _looks_conflicting(field: FieldMetadata) -> bool:
         return False
     if len(label) > 24 or len(description) > 24:
         return False
-    union = set(label) | set(description)
     overlap = set(label) & set(description)
-    return bool(union) and len(overlap) / len(union) < 0.4
+    return not overlap
 
 
 def analyze_metadata(draft: TabularMetadataDraft) -> tuple[ImportDiagnostic, ...]:
