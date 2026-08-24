@@ -17,6 +17,9 @@ from ontology_core.semantic_models import (
     RuleExpression,
     RuleOperator,
     SemanticCatalog,
+    TemporalDefaultStrategy,
+    TemporalGrain,
+    TemporalPartitionPolicy,
 )
 
 XSD_STRING = "http://www.w3.org/2001/XMLSchema#string"
@@ -26,7 +29,12 @@ def _text(value: str) -> tuple[LocalizedText, ...]:
     return (LocalizedText(value=value, language="zh-CN"),)
 
 
-def _snapshot(*, duplicate: bool = False, missing_field_mapping: bool = False) -> OntologySnapshot:
+def _snapshot(
+    *,
+    duplicate: bool = False,
+    missing_field_mapping: bool = False,
+    with_temporal_policy: bool = False,
+) -> OntologySnapshot:
     customer = Concept(
         uri="https://example.invalid/ontology/Customer",
         short_name="Customer",
@@ -64,6 +72,14 @@ def _snapshot(*, duplicate: bool = False, missing_field_mapping: bool = False) -
         short_name="Segment",
         label="客户分群",
         labels=_text("客户分群"),
+        concept_uri=customer.uri,
+        datatype_uri=XSD_STRING,
+    )
+    accounting_month = Property(
+        uri="https://example.invalid/ontology/AccountingMonth",
+        short_name="AccountingMonth",
+        label="业务账期",
+        labels=_text("业务账期"),
         concept_uri=customer.uri,
         datatype_uri=XSD_STRING,
     )
@@ -117,6 +133,31 @@ def _snapshot(*, duplicate: bool = False, missing_field_mapping: bool = False) -
                 field_name="customer_id",
             )
         )
+    temporal_policies = ()
+    if with_temporal_policy:
+        mappings.append(
+            PhysicalMapping(
+                uri="https://example.invalid/ontology/AccountingMonthField",
+                short_name="AccountingMonthField",
+                label="业务账期字段映射",
+                labels=_text("业务账期字段映射"),
+                semantic_element_uri=accounting_month.uri,
+                data_source_uri=source.uri,
+                field_name="accounting_month",
+            )
+        )
+        temporal_policies = (
+            TemporalPartitionPolicy(
+                uri="https://example.invalid/ontology/CustomerMonthPolicy",
+                short_name="CustomerMonthPolicy",
+                label="客户月分区策略",
+                labels=_text("客户月分区策略"),
+                applies_to_uri=customer.uri,
+                partition_property_uri=accounting_month.uri,
+                grain=TemporalGrain.MONTH,
+                default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+            ),
+        )
     rule = BusinessRule(
         uri="https://example.invalid/ontology/ActiveCustomer",
         short_name="ActiveCustomer",
@@ -142,10 +183,11 @@ def _snapshot(*, duplicate: bool = False, missing_field_mapping: bool = False) -
         ),
         catalog=SemanticCatalog(
             concepts=tuple(concepts),
-            properties=(customer_id, segment, status),
+            properties=(customer_id, segment, status, accounting_month),
             rules=(rule,),
             data_sources=(source,),
             mappings=tuple(mappings),
+            temporal_policies=temporal_policies,
         ),
         _data_nt="",
         _shapes_nt="",
@@ -205,6 +247,45 @@ def test_shadow_maps_planning_outcomes_without_guessing_sql() -> None:
     assert no_match.status == "no_match" and no_match.ontology_sql is None
     assert ambiguous.status == "ambiguous" and ambiguous.ontology_sql is None
     assert unsupported.status == "unsupported" and unsupported.ontology_sql is None
+
+
+def test_shadow_outputs_bounded_temporal_evidence() -> None:
+    service = OntologyShadowService(runtime=_StaticRuntime(_snapshot(with_temporal_policy=True)))
+
+    result = service.preview(
+        "查询客户编号",
+        "SELECT legacy_one FROM old_table;",
+        system_time="2026-08-24",
+    )
+
+    assert result.status == "generated"
+    assert "\"accounting_month\" = '202607'" in (result.ontology_sql or "")
+    assert result.temporal_decision is not None
+    assert result.temporal_decision.partition_field == "accounting_month"
+    assert result.temporal_decision.source == "ontology_default"
+    assert result.temporal_decision.resolved_start == "202607"
+    assert result.temporal_decision.safety_status == "bounded"
+
+
+def test_shadow_requests_clarification_for_unsafe_time_scope() -> None:
+    service = OntologyShadowService(runtime=_StaticRuntime(_snapshot(with_temporal_policy=True)))
+
+    conflict = service.preview(
+        "查询2026年5月和2026年6月客户编号",
+        "SELECT 1;",
+        system_time="2026-08-24",
+    )
+    unbounded = service.preview(
+        "查询全部历史客户编号",
+        "SELECT 1;",
+        system_time="2026-08-24",
+    )
+
+    assert conflict.status == "clarification_required"
+    assert unbounded.status == "clarification_required"
+    assert conflict.ontology_sql is None and unbounded.ontology_sql is None
+    assert "确认" in conflict.summary
+    assert "明确" in unbounded.summary
 
 
 def test_shadow_failure_and_disabled_mode_return_safe_unavailable_result() -> None:

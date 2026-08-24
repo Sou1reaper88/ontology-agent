@@ -1024,7 +1024,11 @@ def run_agent(
         if legacy_sql:
             started_at = time.time()
             try:
-                shadow = get_ontology_shadow_service().preview(user_query, legacy_sql)
+                shadow = get_ontology_shadow_service().preview(
+                    user_query,
+                    legacy_sql,
+                    system_time=system_time,
+                )
             except Exception as exc:
                 logger.warning("本体影子接入异常: %s", type(exc).__name__)
                 shadow = unavailable_shadow_result(legacy_sql)

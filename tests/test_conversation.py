@@ -67,6 +67,19 @@ def test_conversation_persists_and_returns_shadow_payload(
             "mappings": ["RecordTable", "MetricField"],
         },
         "package": {"package_id": "example.shadow", "version": "1.0.0", "sha256": "a" * 12},
+        "temporal_decision": {
+            "partition_field": "p_mon",
+            "grain": "month",
+            "policy_source": "ontology",
+            "system_time": "2026-08-24",
+            "user_time": None,
+            "source": "ontology_default",
+            "default_strategy": "previous_complete_month",
+            "resolved_start": "202607",
+            "resolved_end": "202607",
+            "safety_status": "bounded",
+            "explanation": "用户未指定账期，按本体策略取上一个完整自然月",
+        },
     }
 
     def fake_run_agent(query, **kwargs):

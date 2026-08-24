@@ -18,9 +18,15 @@ from tools.ontology_client import MockOntologyClient
 
 class _GeneratedShadowService:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str | None]] = []
+        self.calls: list[tuple[str, str | None, str | None]] = []
 
-    def preview(self, query: str, legacy_sql: str | None):
+    def preview(
+        self,
+        query: str,
+        legacy_sql: str | None,
+        *,
+        system_time: str | None = None,
+    ):
         from agent.ontology_shadow import (
             OntologyEvidence,
             OntologyShadowResult,
@@ -28,7 +34,7 @@ class _GeneratedShadowService:
             SqlDiff,
         )
 
-        self.calls.append((query, legacy_sql))
+        self.calls.append((query, legacy_sql, system_time))
         return OntologyShadowResult(
             status="generated",
             ontology_sql='SELECT "metric" FROM "semantic"."records";',
@@ -61,7 +67,7 @@ def test_run_agent_appends_shadow_without_changing_legacy_sql(monkeypatch) -> No
 
     assert output["success"] is True
     assert "D_BBZX_DW_PRODUCT_M" in output["sql"]
-    assert service.calls == [("查询6月沉默用户", output["sql"])]
+    assert service.calls == [("查询6月沉默用户", output["sql"], "2026-08-14")]
     assert output["ontology_shadow"]["status"] == "generated"
     assert output["trace"][-1]["node"] == "ontology_shadow"
     assert output["trace"][-1]["payload"] == output["ontology_shadow"]
@@ -72,7 +78,7 @@ def test_shadow_exception_does_not_fail_legacy_agent(monkeypatch) -> None:
     import agent.orchestrator as orchestrator
 
     class _RaisingService:
-        def preview(self, query: str, legacy_sql: str | None):
+        def preview(self, query: str, legacy_sql: str | None, *, system_time: str | None = None):
             raise RuntimeError("fictional-shadow-secret")
 
     monkeypatch.setattr(orchestrator, "get_ontology_shadow_service", lambda: _RaisingService())

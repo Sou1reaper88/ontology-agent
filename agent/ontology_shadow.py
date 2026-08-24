@@ -14,6 +14,7 @@ from ontology_core.errors import (
     NoMatchingConceptError,
     OntologyCompileError,
     OntologyError,
+    TemporalIntentError,
     UnsupportedQueryPlanError,
 )
 from ontology_core.models import FrozenModel
@@ -49,13 +50,35 @@ class ShadowPackage(FrozenModel):
     sha256: str
 
 
+class TemporalEvidence(FrozenModel):
+    partition_field: str
+    grain: str
+    policy_source: Literal["ontology"] = "ontology"
+    system_time: str
+    user_time: str | None = None
+    source: str
+    default_strategy: str
+    resolved_start: str
+    resolved_end: str
+    safety_status: Literal["bounded"] = "bounded"
+    explanation: str
+
+
 class OntologyShadowResult(FrozenModel):
-    status: Literal["generated", "no_match", "ambiguous", "unsupported", "unavailable"]
+    status: Literal[
+        "generated",
+        "no_match",
+        "ambiguous",
+        "unsupported",
+        "unavailable",
+        "clarification_required",
+    ]
     ontology_sql: str | None = None
     summary: str
     diff: SqlDiff
     evidence: OntologyEvidence
     package: ShadowPackage | None = None
+    temporal_decision: TemporalEvidence | None = None
 
 
 class _SnapshotRuntime(Protocol):
@@ -88,7 +111,13 @@ def _tables(value: str | None) -> tuple[str, ...]:
 
 
 def _empty_result(
-    status: Literal["no_match", "ambiguous", "unsupported", "unavailable"],
+    status: Literal[
+        "no_match",
+        "ambiguous",
+        "unsupported",
+        "unavailable",
+        "clarification_required",
+    ],
     summary: str,
     legacy_sql: str | None,
 ) -> OntologyShadowResult:
@@ -116,14 +145,23 @@ class OntologyShadowService:
         self._enabled = enabled
         self._registry = registry or CompilerRegistry.default()
 
-    def preview(self, query: str, legacy_sql: str | None) -> OntologyShadowResult:
+    def preview(
+        self,
+        query: str,
+        legacy_sql: str | None,
+        *,
+        system_time: str | None = None,
+    ) -> OntologyShadowResult:
         if not self._enabled:
             return _empty_result("unavailable", "本体 SQL 影子模式未启用", legacy_sql)
         if self._runtime is None:
             return _empty_result("unavailable", "尚未配置外部本体包", legacy_sql)
         try:
             snapshot = self._runtime.snapshot()
-            plan = OntologyPlanner(OntologyResolver(snapshot)).plan(query)
+            plan = OntologyPlanner(OntologyResolver(snapshot)).plan(
+                query,
+                system_time=system_time,
+            )
             dialect = plan.data_source.dialect or plan.data_source.platform_type
             compiled = self._registry.get(dialect).compile(plan)
             changed = _normalize_sql(legacy_sql) != _normalize_sql(compiled.sql)
@@ -131,12 +169,31 @@ class OntologyShadowService:
             evidence_property_uris = {
                 *(item.semantic.uri for item in plan.selections),
                 *(uri for rule in plan.rules for uri in rule.property_uris),
+                *(item.property.semantic.uri for item in plan.filters),
             }
             evidence_bindings = tuple(
                 item
                 for item in plan.property_bindings
                 if item.semantic.uri in evidence_property_uris
             )
+            temporal_evidence = None
+            if plan.temporal_decision is not None:
+                partition_binding = next(
+                    item
+                    for item in plan.property_bindings
+                    if item.semantic.uri == plan.temporal_decision.partition_property_uri
+                )
+                temporal_evidence = TemporalEvidence(
+                    partition_field=str(partition_binding.binding.field_name),
+                    grain=plan.temporal_decision.grain.value,
+                    system_time=plan.temporal_decision.system_date.isoformat(),
+                    user_time=plan.temporal_decision.matched_text,
+                    source=plan.temporal_decision.source.value,
+                    default_strategy=plan.temporal_decision.default_strategy.value,
+                    resolved_start=plan.temporal_decision.resolved_start,
+                    resolved_end=plan.temporal_decision.resolved_end,
+                    explanation=plan.temporal_decision.explanation,
+                )
             return OntologyShadowResult(
                 status="generated",
                 ontology_sql=compiled.sql,
@@ -165,11 +222,27 @@ class OntologyShadowService:
                     version=snapshot.info.version,
                     sha256=snapshot.info.sha256[:12],
                 ),
+                temporal_decision=temporal_evidence,
             )
         except NoMatchingConceptError:
             return _empty_result("no_match", "当前本体包未匹配到查询概念", legacy_sql)
         except AmbiguousQueryConceptError:
             return _empty_result("ambiguous", "查询命中了多个同等本体概念", legacy_sql)
+        except TemporalIntentError as exc:
+            reason = exc.details.get("reason")
+            if reason == "conflicting_partition_time":
+                return _empty_result(
+                    "clarification_required",
+                    "需求中存在多个冲突账期，请确认最终账期",
+                    legacy_sql,
+                )
+            if reason == "unbounded_time":
+                return _empty_result(
+                    "clarification_required",
+                    "需求未限定安全时间范围，请明确账期",
+                    legacy_sql,
+                )
+            return _empty_result("unsupported", "时间条件无法安全解析", legacy_sql)
         except (UnsupportedQueryPlanError, OntologyCompileError):
             return _empty_result("unsupported", "当前本体映射不足以生成安全 SQL", legacy_sql)
         except OntologyError as exc:
