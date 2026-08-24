@@ -62,3 +62,7 @@ class UnsupportedQueryPlanError(QueryPlanningError):
 
 class OntologyCompileError(OntologyError):
     code = "ontology_compile_error"
+
+
+class OntologyImportError(OntologyError):
+    code = "ontology_import_error"
