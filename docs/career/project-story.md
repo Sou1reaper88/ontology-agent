@@ -13,13 +13,16 @@
 - 已完成纯 Python 正式本体内核设计。
 - 已实现 RDFLib + pySHACL 本体包内核、不可变 DTO、安全清单加载、内容摘要和失败重载保护。
 - 已交付本体包解析、不可变语义目录、快照绑定的 Python `OntologyResolver`，以及外部空白包 `init` / `validate` / `inspect` CLI。
-- `MappingRegistry`、`QueryPlan`、现有 Agent integration、REST API 和前端仍处于后续阶段，尚未实现或接入；现有 Agent 在本里程碑继续使用 legacy path。
+- 已实现平台无关 `QueryPlan`、确定性 Planner、可替换 `SqlCompiler` 协议和 SQL 影子服务，并接入现有 Agent、对话 API 与前端对比面板。
+- 当前采用影子模式保留 legacy 可执行 SQL；本体 SQL 仅预览和复制，真实业务准确率等待用户测试集评估。
 
 ## 可用于阶段汇报的表述
 
 主导本体驱动查询 Agent 的语义层重构设计，将业务概念、物理数据映射和查询编译拆分为独立边界；选型 Python RDFLib 与 pySHACL 构建 RDF/OWL 本体及约束验证体系，并设计统一 QueryPlan 契约，为后续多数据库、多 SQL 方言扩展奠定基础。
 
 实现纯 Python 本体包与语义解析边界，支持版本化 RDF/OWL 加载、SHACL 约束校验、内容摘要、失败重载保护、冻结 DTO 和确定性 Resolver；通过 `init` / `validate` / `inspect` 支持外部私有包的最小编辑闭环。Task 7 最终回归为 `228 passed, 2 skipped`；该数字是该阶段执行结果，不代表后续规划能力已完成。
+
+将正式本体内核接入存量 SQL Agent：以 `OntologyPlanner -> QueryPlan -> SqlCompiler` 解耦自然语言语义选择与数据库方言编译，通过影子模式在同一聊天消息中展示 legacy SQL、本体 SQL、差异和可追溯证据，同时保持原执行链路不变。该阶段全量回归为 `424 passed, 2 skipped`，前端 production build 通过；业务准确率将在用户测试集上单独量化。
 
 ## 面试故事草稿：从元数据增强到正式本体
 
@@ -38,13 +41,15 @@
 - 对比 Python RDF 工具、Java 本体服务、MySQL-first 和 GraphRAG 路线。
 - 选择 RDFLib + pySHACL，交付不可变快照、结构化错误契约和 Python `OntologyResolver`；将 REST API、MappingRegistry 与 QueryPlan 保留为后续边界。
 - 使用旁路接入策略控制重构风险，保留后续兼容适配空间。
+- 将旁路策略落地为可见的 SQL 影子模式：本体链路独立生成 SQL，结果写入现有 trace JSON，并在前端展示概念、属性、规则、数据源和物理映射证据。
+- 设计平台无关查询计划与 `SqlCompiler` 协议，使新增数据库方言不需要修改自然语言 Planner 或 Agent API。
 - 通过 TDD 实现安全清单加载、SHACL 报告 DTO 化、内容寻址摘要、原子快照发布、标记型语义解析与确定性 Resolver。
 - 针对嵌套字典可变性和路径穿越边界进行独立代码审查，增加修复前失败、修复后通过的回归测试。
 - 在审查中继续识别 RDFLib lexical form 规范化、URN 形式凭据谓词绕过、外部包初始化 TOCTOU 与 Windows junction 风险；用独立 lexical sink、URI local-name 归一化、随机 staging、原子 rename 和 fail-closed 清理策略补齐回归测试。
 
 ### Result
 
-已完成本体包编辑与解析里程碑：外部空白包、RDF/OWL + SHACL 校验、不可变语义目录、原子发布、确定性 Python Resolver 与安全 CLI 已交付；Task 7 最终全量回归为 `228 passed, 2 skipped`，新增范围 Ruff 与 Black 通过。实现保持旁路，不改变现有 Agent 和 HiveSQL 链路。尚未实现 MappingRegistry、QueryPlan、数据库适配器、多方言编译器、Agent integration、REST 或前端，因此简历表述仅覆盖已交付的语义内核。
+已完成从正式本体内核到 SQL 产品链路的首个闭环：外部本体包、确定性 Resolver、平台无关 QueryPlan、可替换编译器、Agent 影子接入和前端双 SQL 对比均已交付；全量回归为 `424 passed, 2 skipped`。本体 SQL 暂不自动执行，当前成果证明架构闭环和可解释性，不把本机演示结果表述为真实业务准确率。
 
 ## 转型能力映射
 
