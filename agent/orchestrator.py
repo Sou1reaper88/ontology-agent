@@ -16,6 +16,7 @@ from typing import Any, Callable, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agent.ontology_shadow import get_ontology_shadow_service, unavailable_shadow_result
 from tools.llm_client import PLACEHOLDER_KEY, get_llm_client
 from tools.ontology_client import IRRELEVANT_MESSAGE, get_ontology_client
 
@@ -72,10 +73,41 @@ def _db_prefix(table: str) -> str:
 
 # 裁剪触发业务词：问题命中任一 → 启动裁剪
 _FIELD_KEYWORDS = (
-    "号码", "用户", "地市", "城市", "账期", "日期", "时间", "通话", "流量", "沉默",
-    "投诉", "家庭", "决策者", "全球通", "集团", "订购", "套餐", "免打扰", "状态",
-    "类型", "名称", "金额", "费用", "生效", "失效", "到期", "宽带", "账单", "年龄",
-    "性别", "身份证", "5G", "发展", "办理", "安全管家",
+    "号码",
+    "用户",
+    "地市",
+    "城市",
+    "账期",
+    "日期",
+    "时间",
+    "通话",
+    "流量",
+    "沉默",
+    "投诉",
+    "家庭",
+    "决策者",
+    "全球通",
+    "集团",
+    "订购",
+    "套餐",
+    "免打扰",
+    "状态",
+    "类型",
+    "名称",
+    "金额",
+    "费用",
+    "生效",
+    "失效",
+    "到期",
+    "宽带",
+    "账单",
+    "年龄",
+    "性别",
+    "身份证",
+    "5G",
+    "发展",
+    "办理",
+    "安全管家",
 )
 # 触发词命中时额外保留的字段子集（业务口径依赖的字段，如"沉默"需通话/流量字段）
 _TRIGGER_EXTRA: dict[str, tuple[str, ...]] = {
@@ -217,9 +249,33 @@ def _build_rules_prompt(state: AgentState) -> str:
     objs = ttl.get("object_classes", {})
     field_meta = ttl.get("field_meta", {})
     biz_words = (
-        "通话", "流量", "费用", "金额", "次数", "时长", "状态", "标识", "类型",
-        "订购", "套餐", "生效", "失效", "日期", "账期", "号码", "编码", "名称",
-        "GPRS", "5G", "4G", "免费", "漫游", "投诉", "家庭", "集团", "宽带",
+        "通话",
+        "流量",
+        "费用",
+        "金额",
+        "次数",
+        "时长",
+        "状态",
+        "标识",
+        "类型",
+        "订购",
+        "套餐",
+        "生效",
+        "失效",
+        "日期",
+        "账期",
+        "号码",
+        "编码",
+        "名称",
+        "GPRS",
+        "5G",
+        "4G",
+        "免费",
+        "漫游",
+        "投诉",
+        "家庭",
+        "集团",
+        "宽带",
     )
     items: list[tuple[str, str, str, str]] = []
     for tname, obj in objs.items():
@@ -238,10 +294,7 @@ def _build_rules_prompt(state: AgentState) -> str:
     items.sort(key=_score, reverse=True)
     items = items[:80]
     items.sort(key=lambda x: (x[0], x[1]))  # 裁剪后按表恢复稳定顺序
-    lines = [
-        f"{t}.{f}（{comment}{'；描述：' + d if d else ''}）"
-        for t, f, comment, d in items
-    ]
+    lines = [f"{t}.{f}（{comment}{'；描述：' + d if d else ''}）" for t, f, comment, d in items]
     if not lines:
         lines.append("（无候选字段）")
     logdefs = _render_logical_defs(ttl, state)
@@ -279,11 +332,7 @@ def _parse_rules(raw: str) -> dict[str, Any] | None:
         return None
     br = (data.get("business_rules") or "").strip()
     cond = (data.get("rule_condition") or "").strip()
-    fields = [
-        str(f).strip().upper()
-        for f in (data.get("rule_fields") or [])
-        if str(f).strip()
-    ]
+    fields = [str(f).strip().upper() for f in (data.get("rule_fields") or []) if str(f).strip()]
     if not br and not cond:
         return None
     return {"business_rules": br, "rule_fields": fields, "rule_condition": cond}
@@ -423,7 +472,9 @@ def _build_system_prompt(state: AgentState) -> str:
         prompt += f"对话上下文（常驻约束，必须遵守）：{ctx}\n"
     history = state.get("history") or []
     if history:
-        prompt += "历史对话（用户之前的提问与已生成的 SQL，供继续完善参考，仅作上下文不要重复回答）：\n"
+        prompt += (
+            "历史对话（用户之前的提问与已生成的 SQL，供继续完善参考，仅作上下文不要重复回答）：\n"
+        )
         for h in history[-6:]:
             role = "用户" if h.get("role") == "user" else "助手"
             prompt += f"{role}：{h.get('content', '')}\n"
@@ -842,8 +893,13 @@ def _step_summary(node: str, out: dict[str, Any], state: AgentState) -> str:
     return ""
 
 
-def _traced(node: str, fn: Callable[[AgentState], dict[str, Any]], on_step: Callable[[dict[str, Any]], None] | None):
+def _traced(
+    node: str,
+    fn: Callable[[AgentState], dict[str, Any]],
+    on_step: Callable[[dict[str, Any]], None] | None,
+):
     """节点包装器：自动记录步骤（名称/状态/耗时/摘要）并累计进 state.trace。"""
+
     def wrapped(state: AgentState) -> dict[str, Any]:
         start = time.time()
         try:
@@ -866,20 +922,28 @@ def _traced(node: str, fn: Callable[[AgentState], dict[str, Any]], on_step: Call
             except Exception:
                 logger.warning("trace 回调异常", exc_info=True)
         return out
+
     return wrapped
 
 
 def build_graph(on_step: Callable[[dict[str, Any]], None] | None = None):
     g = StateGraph(AgentState)
-    g.add_node("get_ttl_definition", _traced("get_ttl_definition", node_get_ttl_definition, on_step))
-    g.add_node("parse_external_tables", _traced("parse_external_tables", node_parse_external_tables, on_step))
+    g.add_node(
+        "get_ttl_definition", _traced("get_ttl_definition", node_get_ttl_definition, on_step)
+    )
+    g.add_node(
+        "parse_external_tables",
+        _traced("parse_external_tables", node_parse_external_tables, on_step),
+    )
     g.add_node("get_attr_mapping", _traced("get_attr_mapping", node_get_attr_mapping, on_step))
     g.add_node("transform_fields", _traced("transform_fields", node_transform_fields, on_step))
     g.add_node("calc_dates", _traced("calc_dates", node_calc_dates, on_step))
     g.add_node("derive_rules", _traced("derive_rules", node_derive_rules, on_step))
     g.add_node("build_sql", _traced("build_sql", node_build_sql, on_step))
     g.add_node("validate_syntax", _traced("validate_syntax", node_validate_syntax, on_step))
-    g.add_node("validate_semantics", _traced("validate_semantics", node_validate_semantics, on_step))
+    g.add_node(
+        "validate_semantics", _traced("validate_semantics", node_validate_semantics, on_step)
+    )
     g.add_node("fix_sql", _traced("fix_sql", node_fix_sql, on_step))
     g.add_node("format_output", _traced("format_output", node_format_output, on_step))
     g.add_node("format_failure", _traced("format_failure", node_format_failure, on_step))
@@ -955,5 +1019,34 @@ def run_agent(
     )
     output = result.get("output", {})
     if isinstance(output, dict):
-        output["trace"] = result.get("trace", [])
+        trace = list(result.get("trace", []))
+        legacy_sql = output.get("sql")
+        if legacy_sql:
+            started_at = time.time()
+            try:
+                shadow = get_ontology_shadow_service().preview(user_query, legacy_sql)
+            except Exception as exc:
+                logger.warning("本体影子接入异常: %s", type(exc).__name__)
+                shadow = unavailable_shadow_result(legacy_sql)
+            payload = shadow.model_dump(mode="json")
+            step_status = {
+                "generated": "success",
+                "unavailable": "error",
+            }.get(shadow.status, "skipped")
+            step = {
+                "node": "ontology_shadow",
+                "label": "本体规划与编译",
+                "status": step_status,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "summary": shadow.summary,
+                "payload": payload,
+            }
+            trace.append(step)
+            output["ontology_shadow"] = payload
+            if on_step is not None:
+                try:
+                    on_step(step)
+                except Exception:
+                    logger.warning("本体影子 trace 回调异常", exc_info=True)
+        output["trace"] = trace
     return output

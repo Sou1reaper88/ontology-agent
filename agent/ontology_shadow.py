@@ -100,6 +100,10 @@ def _empty_result(
     )
 
 
+def unavailable_shadow_result(legacy_sql: str | None) -> OntologyShadowResult:
+    return _empty_result("unavailable", "本体影子链路当前不可用", legacy_sql)
+
+
 class OntologyShadowService:
     def __init__(
         self,

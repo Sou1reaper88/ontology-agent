@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-import api.routes.conversation as conv_route
 from fastapi.testclient import TestClient
 
+import api.routes.conversation as conv_route
 from tests.conftest import last_assistant_message, send_and_wait
 
 
@@ -30,8 +30,11 @@ def test_create_conversation(client: TestClient, admin_token: str) -> None:
 def test_send_message_generates_sql(client: TestClient, admin_token: str) -> None:
     conv = _create_conv(client, admin_token)
     _, msg_id = send_and_wait(
-        client, admin_token, conv["id"],
-        "查询6月沉默用户", system_time="2026-08-14",
+        client,
+        admin_token,
+        conv["id"],
+        "查询6月沉默用户",
+        system_time="2026-08-14",
     )
     # 生成的 SQL 落库到 assistant 消息，并关联 query_history 供执行
     asst = last_assistant_message(client, admin_token, conv["id"])
@@ -40,6 +43,60 @@ def test_send_message_generates_sql(client: TestClient, admin_token: str) -> Non
     assert asst["query_id"] is not None
     # 链路 trace 已采集（含检索/映射/生成/校验步骤）
     assert asst["trace"] and any(s["node"] == "build_sql" for s in asst["trace"])
+
+
+def test_conversation_persists_and_returns_shadow_payload(
+    client: TestClient,
+    admin_token: str,
+    monkeypatch,
+) -> None:
+    shadow = {
+        "status": "generated",
+        "ontology_sql": 'SELECT "metric" FROM "semantic"."records";',
+        "summary": "本体 SQL 与现有 SQL 存在差异",
+        "diff": {
+            "changed": True,
+            "legacy_tables": ["legacy.table"],
+            "ontology_tables": ["semantic.records"],
+        },
+        "evidence": {
+            "concepts": ["Record"],
+            "properties": ["Metric"],
+            "rules": [],
+            "data_sources": ["Warehouse"],
+            "mappings": ["RecordTable", "MetricField"],
+        },
+        "package": {"package_id": "example.shadow", "version": "1.0.0", "sha256": "a" * 12},
+    }
+
+    def fake_run_agent(query, **kwargs):
+        step = {
+            "node": "ontology_shadow",
+            "label": "本体规划与编译",
+            "status": "success",
+            "duration_ms": 1,
+            "summary": shadow["summary"],
+            "payload": shadow,
+        }
+        kwargs["on_step"](step)
+        return {
+            "success": True,
+            "sql": "SELECT 1;",
+            "markdown": "ok",
+            "trace": [step],
+            "ontology_shadow": shadow,
+        }
+
+    monkeypatch.setattr(conv_route, "run_agent", fake_run_agent)
+    conv = _create_conv(client, admin_token)
+
+    status, _ = send_and_wait(client, admin_token, conv["id"], "查询记录指标")
+    message = last_assistant_message(client, admin_token, conv["id"])
+
+    assert status["ontology_shadow"] == shadow
+    assert message["ontology_shadow"] == shadow
+    assert message["sql"] == "SELECT 1;"
+    assert message["query_id"] is not None
 
 
 def test_send_message_status_steps_progress(client: TestClient, admin_token: str) -> None:
@@ -55,6 +112,7 @@ def test_send_message_status_steps_progress(client: TestClient, admin_token: str
     msg_id = resp.json()["message_id"]
     data = None
     import time
+
     deadline = time.time() + 15
     while time.time() < deadline:
         r = client.get(
@@ -153,8 +211,13 @@ def test_context_update(client: TestClient, admin_token: str) -> None:
 
 def test_delete_conversation(client: TestClient, admin_token: str) -> None:
     conv = _create_conv(client, admin_token)
-    assert client.delete(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code == 204
-    assert client.get(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code == 404
+    assert (
+        client.delete(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code
+        == 204
+    )
+    assert (
+        client.get(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code == 404
+    )
 
 
 def test_conversation_requires_auth(client: TestClient) -> None:

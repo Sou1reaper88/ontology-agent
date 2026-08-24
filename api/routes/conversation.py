@@ -61,6 +61,7 @@ class MessageOut(BaseModel):
     sql: str | None = None
     query_id: int | None = None
     trace: list[dict] | None = None
+    ontology_shadow: dict | None = None
     created_at: str
 
 
@@ -71,6 +72,17 @@ class ConversationOut(BaseModel):
     created_at: str
     updated_at: str
     messages: list[MessageOut] = []
+
+
+def _extract_ontology_shadow(trace: list[dict] | None) -> dict | None:
+    return next(
+        (
+            item.get("payload")
+            for item in reversed(trace or [])
+            if item.get("node") == "ontology_shadow"
+        ),
+        None,
+    )
 
 
 def _own_conversation(conv_id: int, user: User, db: Session) -> Conversation:
@@ -143,6 +155,7 @@ def get_conversation(
             sql=m.sql,
             query_id=m.query_id,
             trace=m.trace,
+            ontology_shadow=_extract_ontology_shadow(m.trace),
             created_at=m.created_at.isoformat(),
         )
         for m in conv.messages
@@ -212,11 +225,7 @@ def clear_all_conversations(
     db: Session = Depends(get_db),
 ) -> dict:
     """清空当前用户全部对话（级联删除消息）。"""
-    convs = (
-        db.query(Conversation)
-        .filter(Conversation.user_id == user.id)
-        .all()
-    )
+    convs = db.query(Conversation).filter(Conversation.user_id == user.id).all()
     count = len(convs)
     for c in convs:
         db.delete(c)  # cascade 删除消息
@@ -245,6 +254,7 @@ def message_status(
             "status": tr["status"],
             "steps": tr["steps"],
             "error": tr["error"],
+            "ontology_shadow": _extract_ontology_shadow(tr["steps"]),
         }
     # 进程重启后内存 trace 丢失：从 DB 读最终态
     if msg.sql or msg.trace:
@@ -254,10 +264,23 @@ def message_status(
             "status": "success",
             "steps": msg.trace or [],
             "error": None,
+            "ontology_shadow": _extract_ontology_shadow(msg.trace),
         }
     if msg.content and msg.content != "生成中…":
-        return {"message_id": msg_id, "status": "failed", "steps": msg.trace or [], "error": msg.content}
-    return {"message_id": msg_id, "status": "failed", "steps": [], "error": "服务重启，生成中断"}
+        return {
+            "message_id": msg_id,
+            "status": "failed",
+            "steps": msg.trace or [],
+            "error": msg.content,
+            "ontology_shadow": _extract_ontology_shadow(msg.trace),
+        }
+    return {
+        "message_id": msg_id,
+        "status": "failed",
+        "steps": [],
+        "error": "服务重启，生成中断",
+        "ontology_shadow": None,
+    }
 
 
 def _generate_async(
@@ -359,9 +382,7 @@ def send_message(
         raise HTTPException(status_code=400, detail="消息内容不能为空")
 
     # 用户消息落库
-    user_msg = ConversationMessage(
-        conversation_id=conv.id, role="user", content=content
-    )
+    user_msg = ConversationMessage(conversation_id=conv.id, role="user", content=content)
     db.add(user_msg)
 
     # 预创建 assistant 消息（生成中占位）

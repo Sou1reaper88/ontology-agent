@@ -16,6 +16,75 @@ from agent.orchestrator import (
 from tools.ontology_client import MockOntologyClient
 
 
+class _GeneratedShadowService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    def preview(self, query: str, legacy_sql: str | None):
+        from agent.ontology_shadow import (
+            OntologyEvidence,
+            OntologyShadowResult,
+            ShadowPackage,
+            SqlDiff,
+        )
+
+        self.calls.append((query, legacy_sql))
+        return OntologyShadowResult(
+            status="generated",
+            ontology_sql='SELECT "metric" FROM "semantic"."records";',
+            summary="本体 SQL 与现有 SQL 存在差异",
+            diff=SqlDiff(
+                changed=True,
+                legacy_tables=("legacy.table",),
+                ontology_tables=("semantic.records",),
+            ),
+            evidence=OntologyEvidence(
+                concepts=("Record",),
+                properties=("Metric",),
+            ),
+            package=ShadowPackage(package_id="example.shadow", version="1.0.0", sha256="a" * 12),
+        )
+
+
+def test_run_agent_appends_shadow_without_changing_legacy_sql(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+
+    service = _GeneratedShadowService()
+    steps: list[dict] = []
+    monkeypatch.setattr(orchestrator, "get_ontology_shadow_service", lambda: service)
+
+    output = orchestrator.run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        on_step=steps.append,
+    )
+
+    assert output["success"] is True
+    assert "D_BBZX_DW_PRODUCT_M" in output["sql"]
+    assert service.calls == [("查询6月沉默用户", output["sql"])]
+    assert output["ontology_shadow"]["status"] == "generated"
+    assert output["trace"][-1]["node"] == "ontology_shadow"
+    assert output["trace"][-1]["payload"] == output["ontology_shadow"]
+    assert steps[-1]["node"] == "ontology_shadow"
+
+
+def test_shadow_exception_does_not_fail_legacy_agent(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+
+    class _RaisingService:
+        def preview(self, query: str, legacy_sql: str | None):
+            raise RuntimeError("fictional-shadow-secret")
+
+    monkeypatch.setattr(orchestrator, "get_ontology_shadow_service", lambda: _RaisingService())
+
+    output = orchestrator.run_agent("查询6月沉默用户", system_time="2026-08-14")
+
+    assert output["success"] is True
+    assert "D_BBZX_DW_PRODUCT_M" in output["sql"]
+    assert output["ontology_shadow"]["status"] == "unavailable"
+    assert "fictional-shadow-secret" not in str(output["ontology_shadow"])
+
+
 def test_irrelevant_question_short_circuits(monkeypatch) -> None:
     """无关问题：检索器返回 irrelevant → 编排短路输出友好提示，不生成 SQL。"""
 
@@ -68,7 +137,11 @@ def test_derive_rules_parses_json(monkeypatch) -> None:
     assert out2["derived_rules"] is None
 
     # 无 API Key → 跳过
-    monkeypatch.setattr(orch, "get_llm_client", lambda: type("X", (), {"api_key": "", "generate_sql": lambda *a: "{}"})())
+    monkeypatch.setattr(
+        orch,
+        "get_llm_client",
+        lambda: type("X", (), {"api_key": "", "generate_sql": lambda *a: "{}"})(),
+    )
     out3 = orch.node_derive_rules({"user_query": "查询5G用户", "ttl_def": ttl})
     assert out3["derived_rules"] is None
 
@@ -79,7 +152,12 @@ def test_derive_rules_injected_into_prompt() -> None:
 
     state = {
         "user_query": "查询5G用户",
-        "ttl_def": {"object_classes": {"D_X": {"table_name": "D_X", "db_prefix": "bddwd_hive_db", "attributes": {}}}, "logical_definitions": {}},
+        "ttl_def": {
+            "object_classes": {
+                "D_X": {"table_name": "D_X", "db_prefix": "bddwd_hive_db", "attributes": {}}
+            },
+            "logical_definitions": {},
+        },
         "derived_rules": {
             "business_rules": "5G用户=有GPRS流量",
             "rule_fields": ["GPRS_VOLUME"],
@@ -164,10 +242,7 @@ def test_date_calculation_month_boundary() -> None:
 def test_syntax_validation_and_fix() -> None:
     """语法校验失败 → fix 受限修复（补分号）→ 重跑通过。"""
     client = MockOntologyClient()
-    bad_sql = (
-        "SELECT SUBS_NUMBER FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M "
-        "WHERE P_MON='202607'"
-    )
+    bad_sql = "SELECT SUBS_NUMBER FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M " "WHERE P_MON='202607'"
     result = client.validate_sql(bad_sql)
     assert result["valid"] is False
 
@@ -187,8 +262,7 @@ def test_semantics_validation() -> None:
     assert client.validate_sql_semantics(ok_sql)["valid"] is True
 
     bad_sql = (
-        "SELECT NOT_EXIST_FIELD "
-        "FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M WHERE P_MON='202607';"
+        "SELECT NOT_EXIST_FIELD " "FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M WHERE P_MON='202607';"
     )
     assert client.validate_sql_semantics(bad_sql)["valid"] is False
 
@@ -255,7 +329,11 @@ def test_build_system_prompt_renders_logical_defs() -> None:
         "p_mon": "202607",
         "ttl_def": {
             "object_classes": {
-                "D_CRM_INS_OFFER_D": {"table_name": "D_CRM_INS_OFFER_D", "db_prefix": "bddwd_hive_db", "attributes": {}}
+                "D_CRM_INS_OFFER_D": {
+                    "table_name": "D_CRM_INS_OFFER_D",
+                    "db_prefix": "bddwd_hive_db",
+                    "attributes": {},
+                }
             },
             "logical_definitions": {
                 "来信免打扰订购用户": "已订购来信免打扰的用户（条件：{OFFER_ID='610000149732' AND P_DAY='{月末分区}'}{B: AND EFFECTIVE_DATE<='{结束}' AND EXPIRE_DATE>'{开始}'}{C: AND CREATE_DATE>='{开始}' AND CREATE_DATE<='{结束}'}）"
