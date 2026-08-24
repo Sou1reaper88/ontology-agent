@@ -60,6 +60,10 @@ class UnsupportedQueryPlanError(QueryPlanningError):
     code = "unsupported_query_plan"
 
 
+class TemporalIntentError(QueryPlanningError):
+    code = "temporal_intent_error"
+
+
 class OntologyCompileError(OntologyError):
     code = "ontology_compile_error"
 
