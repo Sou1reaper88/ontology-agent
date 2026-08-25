@@ -44,8 +44,8 @@ class DraftValidator:
         blocking = tuple(
             item
             for item in diagnostics
-            if item.severity in {"error", "confirmation_required"}
-            and not self._is_resolved(draft, item)
+            if item.severity == "error"
+            or (item.severity == "confirmation_required" and not self._is_resolved(draft, item))
         )
         if blocking:
             raise DraftNotPublishableError(diagnostics=blocking)

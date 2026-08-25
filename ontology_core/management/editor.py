@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 
+from ontology_core.errors import OntologyError
 from ontology_core.management.models import (
     DiagnosticDisposition,
+    DraftField,
     DraftObject,
     DraftRelation,
     DraftTemporalPolicy,
@@ -18,6 +20,46 @@ from ontology_core.management.validation import DraftValidator
 _UNSET = object()
 
 
+class DraftEditValidationError(OntologyError):
+    """Raised for invalid public draft-edit input without exposing internal state."""
+
+    code = "draft_edit_validation_error"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("草稿编辑请求无效")
+
+
+class DraftEditReferenceConflictError(OntologyError):
+    """Raised when a draft element remains referenced by another element."""
+
+    code = "draft_edit_reference_conflict"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("草稿元素仍被引用，不能删除")
+
+
+class DraftEditPublishedIdentifierError(OntologyError):
+    """Raised when ordinary editing targets a published stable identifier."""
+
+    code = "draft_edit_published_identifier"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("已发布标识不能通过普通编辑删除")
+
+
+class DraftDiagnosticDispositionError(OntologyError):
+    """Raised when a non-confirmation diagnostic is submitted for disposition."""
+
+    code = "draft_diagnostic_disposition_invalid"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("仅确认类诊断可处置")
+
+
 class DraftEditor:
     """Apply constrained descriptive and structural mutations through ``DraftStore``."""
 
@@ -26,10 +68,12 @@ class DraftEditor:
         store: DraftStore,
         *,
         published_object_ids: Iterable[str] = (),
+        published_field_ids: Iterable[str] = (),
         validator: DraftValidator | None = None,
     ) -> None:
         self._store = store
         self._published_object_ids = frozenset(published_object_ids)
+        self._published_field_ids = frozenset(published_field_ids)
         self.validator = validator or DraftValidator()
 
     def update_object(
@@ -42,10 +86,10 @@ class DraftEditor:
         description: str | None | object = _UNSET,
     ) -> WorkspaceDraft:
         """Update only descriptive object metadata, retaining its stable identity."""
+        changes = _descriptive_changes(label=label, description=description)
 
         def mutate(draft: WorkspaceDraft) -> WorkspaceDraft:
             target = _object_by_id(draft, object_id)
-            changes = _descriptive_changes(label=label, description=description)
             updated = target.model_copy(update=changes)
             return draft.model_copy(
                 update={
@@ -68,13 +112,12 @@ class DraftEditor:
         description: str | None | object = _UNSET,
     ) -> WorkspaceDraft:
         """Update only descriptive field metadata, retaining physical identifiers."""
+        changes = _descriptive_changes(label=label, description=description)
 
         def mutate(draft: WorkspaceDraft) -> WorkspaceDraft:
             target_object = _object_by_id(draft, object_id)
             target_field = _field_by_id(target_object, field_id)
-            updated_field = target_field.model_copy(
-                update=_descriptive_changes(label=label, description=description)
-            )
+            updated_field = target_field.model_copy(update=changes)
             updated_object = target_object.model_copy(
                 update={
                     "fields": tuple(
@@ -157,6 +200,36 @@ class DraftEditor:
 
         return self._store.commit(workspace_id, expected_revision, mutate)
 
+    def delete_draft_field(
+        self,
+        workspace_id: str,
+        object_id: str,
+        field_id: str,
+        *,
+        expected_revision: int,
+    ) -> WorkspaceDraft:
+        """Delete only an unreferenced, unpublished field in one draft mutation."""
+
+        def mutate(draft: WorkspaceDraft) -> WorkspaceDraft:
+            object_ = _object_by_id(draft, object_id)
+            _field_by_id(object_, field_id)
+            if object_id in self._published_object_ids or field_id in self._published_field_ids:
+                raise DraftEditPublishedIdentifierError()
+            if _field_is_referenced(draft, field_id):
+                raise DraftEditReferenceConflictError()
+            updated_object = object_.model_copy(
+                update={"fields": tuple(item for item in object_.fields if item.id != field_id)}
+            )
+            return draft.model_copy(
+                update={
+                    "objects": tuple(
+                        updated_object if item.id == object_id else item for item in draft.objects
+                    )
+                }
+            )
+
+        return self._store.commit(workspace_id, expected_revision, mutate)
+
     def resolve_diagnostic(
         self,
         workspace_id: str,
@@ -177,8 +250,14 @@ class DraftEditor:
             raise ValueError("诊断处置状态无效")
 
         def mutate(draft: WorkspaceDraft) -> WorkspaceDraft:
-            if diagnostic_id not in {item.id for item in self.validator.validate(draft)}:
+            diagnostic = next(
+                (item for item in self.validator.validate(draft) if item.id == diagnostic_id),
+                None,
+            )
+            if diagnostic is None:
                 raise ValueError("未找到当前诊断")
+            if diagnostic.severity != "confirmation_required":
+                raise DraftDiagnosticDispositionError()
             disposition = DiagnosticDisposition(
                 diagnostic_id=diagnostic_id,
                 status=status,
@@ -215,11 +294,9 @@ def _descriptive_changes(
 ) -> dict[str, str | None]:
     changes: dict[str, str | None] = {}
     if label is not _UNSET:
-        changes["label"] = label if isinstance(label, str) or label is None else None
+        changes["label"] = _descriptive_value(label)
     if description is not _UNSET:
-        changes["description"] = (
-            description if isinstance(description, str) or description is None else None
-        )
+        changes["description"] = _descriptive_value(description)
     return changes
 
 
@@ -230,7 +307,7 @@ def _object_by_id(draft: WorkspaceDraft, object_id: str) -> DraftObject:
     raise ValueError("未找到对象")
 
 
-def _field_by_id(object_: DraftObject, field_id: str):
+def _field_by_id(object_: DraftObject, field_id: str) -> DraftField:
     for field in object_.fields:
         if field.id == field_id:
             return field
@@ -239,3 +316,16 @@ def _field_by_id(object_: DraftObject, field_id: str):
 
 def _validated(draft: WorkspaceDraft) -> WorkspaceDraft:
     return WorkspaceDraft.model_validate(draft.model_dump())
+
+
+def _descriptive_value(value: str | None | object) -> str | None:
+    if isinstance(value, str) or value is None:
+        return value
+    raise DraftEditValidationError()
+
+
+def _field_is_referenced(draft: WorkspaceDraft, field_id: str) -> bool:
+    return any(
+        field_id in {relation.source_field_id, relation.target_field_id}
+        for relation in draft.relations
+    ) or any(policy.partition_field_id == field_id for policy in draft.temporal_policies)

@@ -136,6 +136,42 @@ def test_disposition_unblocks_only_the_same_stable_confirmation_diagnostic() -> 
     assert changed_confirmation.id != confirmation.id
 
 
+def test_error_diagnostics_remain_publish_blocking_despite_a_disposition() -> None:
+    relation = DraftRelation(
+        id="relation/order-customer",
+        source_object_id="object/order",
+        source_field_id="field/order/customer_id",
+        target_object_id="object/customer",
+        target_field_id="field/customer/id",
+        cardinality="many_to_one",
+    )
+    draft = workspace(relation=relation)
+    validator = DraftValidator()
+    error = next(
+        item
+        for item in validator.validate(draft)
+        if item.code == "relation_incompatible_field_types"
+    )
+    disposed = draft.model_copy(
+        update={
+            "dispositions": (
+                DiagnosticDisposition(
+                    diagnostic_id=error.id,
+                    status="dismissed",
+                    note="attempted dismissal",
+                    actor="maintainer",
+                    resolved_at=datetime(2026, 8, 25, tzinfo=UTC),
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(DraftNotPublishableError) as exc_info:
+        validator.assert_publishable(disposed)
+
+    assert error.id in {item.id for item in exc_info.value.diagnostics}
+
+
 def test_diagnostic_ids_ignore_mutable_messages_and_report_description_warnings() -> None:
     validator = DraftValidator()
     first = workspace(description="")
