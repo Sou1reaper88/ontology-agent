@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from ontology_core.errors import OntologyError
 from ontology_core.management.models import DraftDataSource, ImportSession, WorkspaceDraft
+from ontology_core.management.paths import OntologyManagementConfigurationError
 from ontology_core.management.store import DraftRevisionConflict, FileDraftStore
 
 
@@ -26,6 +28,13 @@ def synthetic_workspace() -> WorkspaceDraft:
             physical_namespace="evaluation",
         ),
     )
+
+
+def test_store_rejects_a_root_inside_the_discovered_git_worktree() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+
+    with pytest.raises(OntologyManagementConfigurationError, match="Git 工作树之外"):
+        FileDraftStore(repository_root / ".management-data")
 
 
 def initialized_store(tmp_path: Path) -> FileDraftStore:
@@ -108,15 +117,46 @@ def test_replace_failure_keeps_original_draft_and_removes_temporary_file(
     before = draft_bytes(tmp_path)
 
     def fail_replace(_: Path, __: Path) -> None:
-        raise OSError("replace failed")
+        raise OSError(f"replace failed for {tmp_path}")
 
     monkeypatch.setattr("ontology_core.management.store.os.replace", fail_replace)
 
-    with pytest.raises(OSError, match="replace failed"):
+    with pytest.raises(OntologyError) as exc_info:
         store.commit("evaluation", 0, lambda draft: draft)
 
+    assert exc_info.value.code == "ontology_management_store_error"
+    assert exc_info.value.message == "本体管理存储操作失败"
+    assert exc_info.value.details == {"operation": "write"}
+    assert str(tmp_path) not in str(exc_info.value)
+    assert str(tmp_path) not in str(exc_info.value.details)
+    assert isinstance(exc_info.value.__cause__, OSError)
     assert draft_bytes(tmp_path) == before
     assert list((tmp_path / "workspaces" / "evaluation").glob(".draft.json.*.tmp")) == []
+
+
+def test_read_filesystem_failure_is_a_path_free_store_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = initialized_store(tmp_path)
+    before = draft_bytes(tmp_path)
+    original_read_bytes = Path.read_bytes
+
+    def fail_read(_: Path) -> bytes:
+        raise OSError(f"read failed for {tmp_path}")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    with pytest.raises(OntologyError) as exc_info:
+        store.read("evaluation")
+
+    assert exc_info.value.code == "ontology_management_store_error"
+    assert exc_info.value.message == "本体管理存储操作失败"
+    assert exc_info.value.details == {"operation": "read"}
+    assert str(tmp_path) not in str(exc_info.value)
+    assert str(tmp_path) not in str(exc_info.value.details)
+    assert isinstance(exc_info.value.__cause__, OSError)
+    monkeypatch.setattr(Path, "read_bytes", original_read_bytes)
+    assert before == (tmp_path / "workspaces" / "evaluation" / "draft.json").read_bytes()
 
 
 def test_concurrent_writers_allow_exactly_one_commit_per_revision(tmp_path: Path) -> None:
