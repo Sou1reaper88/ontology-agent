@@ -13,11 +13,10 @@ from ontology_core.management.models import (
     DraftObject,
     WorkspaceDraft,
 )
-from ontology_core.management.validation import DraftValidator
+from ontology_core.management.validation import DraftValidator, managed_short_name
 from ontology_core.metadata_package import (
     _add_element_text,
     _datatype,
-    _semantic_short_name,
     _uri,
     _write_graph,
 )
@@ -33,10 +32,6 @@ def _graph(base_uri: str) -> Graph:
     graph.bind("xsd", XSD)
     graph.add((URIRef(base_uri), RDF.type, OWL.Ontology))
     return graph
-
-
-def _short_name(kind: str, stable_id: str) -> str:
-    return _semantic_short_name(f"{kind}_{stable_id}", kind)
 
 
 def _concept_uri(draft: WorkspaceDraft, object_: DraftObject) -> URIRef:
@@ -74,8 +69,7 @@ class PackageBuilder:
         repository.publish(target)
         return repository.current()
 
-    @staticmethod
-    def _domain_graph(draft: WorkspaceDraft) -> Graph:
+    def _domain_graph(self, draft: WorkspaceDraft) -> Graph:
         graph = _graph(draft.base_uri)
         objects_by_id = {object_.id: object_ for object_ in draft.objects}
         fields_by_id = {field.id: field for object_ in draft.objects for field in object_.fields}
@@ -87,7 +81,7 @@ class PackageBuilder:
             _add_element_text(
                 graph,
                 concept_uri,
-                short_name=_short_name("Concept", object_.id),
+                short_name=managed_short_name("Concept", object_.id),
                 label=object_.label,
                 description=object_.description,
             )
@@ -102,7 +96,7 @@ class PackageBuilder:
                 _add_element_text(
                     graph,
                     property_uri,
-                    short_name=_short_name("Property", field.id),
+                    short_name=managed_short_name("Property", field.id),
                     label=field.label,
                     description=field.description,
                 )
@@ -121,7 +115,7 @@ class PackageBuilder:
             _add_element_text(
                 graph,
                 relation_uri,
-                short_name=_short_name("Relation", relation.id),
+                short_name=managed_short_name("Relation", relation.id),
                 label=relation.label or None,
             )
             graph.add(
@@ -141,7 +135,13 @@ class PackageBuilder:
             graph.add((relation_uri, OA.cardinality, Literal(relation.cardinality)))
             graph.add((relation_uri, OA.status, Literal(relation.status)))
             graph.add((relation_uri, OA.priority, Literal(relation.priority, datatype=XSD.integer)))
-            graph.add((relation_uri, OA.confirmed, Literal(relation.confirmed)))
+            graph.add(
+                (
+                    relation_uri,
+                    OA.confirmed,
+                    Literal(self._validator.relation_is_effectively_confirmed(draft, relation)),
+                )
+            )
         return graph
 
     @staticmethod
@@ -153,7 +153,7 @@ class PackageBuilder:
         _add_element_text(
             graph,
             source_uri,
-            short_name=_short_name("DataSource", source.id),
+            short_name=managed_short_name("DataSource", source.id),
             label=source.label,
         )
         graph.add((source_uri, OA.platformType, Literal(source.platform_type)))
@@ -166,7 +166,7 @@ class PackageBuilder:
             _add_element_text(
                 graph,
                 object_mapping_uri,
-                short_name=_short_name("ObjectMapping", object_.id),
+                short_name=managed_short_name("ObjectMapping", object_.id),
                 label=f"{object_.label or object_.physical_name} mapping",
             )
             graph.add((object_mapping_uri, OA.semanticElement, _concept_uri(draft, object_)))
@@ -186,7 +186,7 @@ class PackageBuilder:
                 _add_element_text(
                     graph,
                     field_mapping_uri,
-                    short_name=_short_name("FieldMapping", field.id),
+                    short_name=managed_short_name("FieldMapping", field.id),
                     label=f"{field.label or field.physical_name} mapping",
                 )
                 graph.add((field_mapping_uri, OA.semanticElement, _property_uri(draft, field)))
@@ -216,7 +216,7 @@ class PackageBuilder:
             _add_element_text(
                 graph,
                 policy_uri,
-                short_name=_short_name("TemporalPolicy", policy_id),
+                short_name=managed_short_name("TemporalPolicy", policy_id),
                 label=f"{object_.label or object_.physical_name} temporal policy",
             )
             graph.add((policy_uri, OA.appliesTo, _concept_uri(draft, object_)))

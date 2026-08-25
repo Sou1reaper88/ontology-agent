@@ -1,4 +1,5 @@
 import json
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -338,6 +339,44 @@ def test_snapshot_data_graph_copy_preserves_typed_literal_lexical_form(
 
     assert str(literal) == "001"
     assert str(literal.datatype) == "http://www.w3.org/2001/XMLSchema#integer"
+
+
+@pytest.mark.parametrize(("lexical_form", "expected"), (("1", True), ("0", False)))
+def test_publish_parses_full_xsd_boolean_lexical_space_without_normalizing_bytes(
+    valid_package_dir: Path,
+    tmp_path: Path,
+    lexical_form: str,
+    expected: bool,
+) -> None:
+    package_dir = tmp_path / f"boolean-{lexical_form}"
+    _copy_package(valid_package_dir, package_dir)
+    package_dir.joinpath("shapes.ttl").write_text(
+        files("ontology_core.resources").joinpath("shapes.ttl").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    domain_path = package_dir / "domain.ttl"
+    domain_path.write_text(
+        domain_path.read_text(encoding="utf-8") + f"""
+
+ex:RelatedMetric a owl:DatatypeProperty, oa:Property ;
+    oa:shortName "RelatedMetric" ; rdfs:label "Related metric" ;
+    rdfs:domain ex:RelatedRecord ; rdfs:range xsd:integer .
+
+ex:relatesTo oa:sourceProperty ex:Metric ;
+    oa:targetProperty ex:RelatedMetric ;
+    oa:cardinality "one_to_many" ; oa:status "active" ;
+    oa:priority 100 ; oa:confirmed "{lexical_form}"^^xsd:boolean .
+""",
+        encoding="utf-8",
+    )
+
+    repository = OntologyRepository()
+    repository.publish(package_dir)
+
+    relation = repository.current().catalog.relations[0]
+    assert relation.confirmed is expected
+    authored = next(repository.current().copy_data_graph().objects(None, OA.confirmed))
+    assert str(authored) == lexical_form
 
 
 def test_same_bytes_produce_same_digest(valid_package_dir: Path) -> None:

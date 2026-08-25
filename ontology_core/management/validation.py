@@ -7,7 +7,9 @@ import re
 from collections import Counter
 
 from ontology_core.errors import OntologyError
-from ontology_core.management.models import DraftDiagnostic, WorkspaceDraft
+from ontology_core.management.models import DraftDiagnostic, DraftRelation, WorkspaceDraft
+from ontology_core.metadata_package import _semantic_short_name
+from ontology_core.normalization import normalize_text
 from ontology_core.semantic_models import TemporalDefaultStrategy, TemporalGrain
 
 _IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -32,6 +34,7 @@ class DraftValidator:
         """Return deterministic diagnostics for the draft's current semantic IDs."""
         diagnostics: list[DraftDiagnostic] = []
         diagnostics.extend(self._identity_diagnostics(draft))
+        diagnostics.extend(self._managed_short_name_diagnostics(draft))
         diagnostics.extend(self._metadata_diagnostics(draft))
         fields_by_id = self._fields_by_id(draft)
         diagnostics.extend(self._relation_diagnostics(draft, fields_by_id))
@@ -50,6 +53,16 @@ class DraftValidator:
         if blocking:
             raise DraftNotPublishableError(diagnostics=blocking)
         return diagnostics
+
+    def relation_is_effectively_confirmed(
+        self, draft: WorkspaceDraft, relation: DraftRelation
+    ) -> bool:
+        """Return whether an active relation has direct or exact disposed confirmation."""
+        if relation.confirmed:
+            return True
+        if relation.status != "active":
+            return False
+        return self._is_resolved(draft, _relation_confirmation_diagnostic(relation))
 
     def _identity_diagnostics(self, draft: WorkspaceDraft) -> list[DraftDiagnostic]:
         diagnostics: list[DraftDiagnostic] = []
@@ -127,6 +140,73 @@ class DraftValidator:
             )
         return diagnostics
 
+    @staticmethod
+    def _managed_short_name_diagnostics(draft: WorkspaceDraft) -> list[DraftDiagnostic]:
+        derived: list[tuple[str, tuple[str, str], tuple[str, ...]]] = []
+
+        def add(
+            kind: str,
+            stable_id: str,
+            subject_key: tuple[str, str],
+            related_ids: tuple[str, ...],
+        ) -> None:
+            derived.append(
+                (normalize_text(managed_short_name(kind, stable_id)), subject_key, related_ids)
+            )
+
+        add(
+            "DataSource",
+            draft.data_source.id,
+            ("source", draft.data_source.id),
+            (draft.data_source.id,),
+        )
+        for object_ in draft.objects:
+            add("Concept", object_.id, ("concept", object_.id), (object_.id,))
+            add(
+                "ObjectMapping",
+                object_.id,
+                ("mapping", f"object/{object_.id}"),
+                (object_.id,),
+            )
+            for field in object_.fields:
+                add("Property", field.id, ("property", field.id), (field.id,))
+                add(
+                    "FieldMapping",
+                    field.id,
+                    ("mapping", f"field/{field.id}"),
+                    (field.id,),
+                )
+        for relation in draft.relations:
+            add("Relation", relation.id, ("relation", relation.id), (relation.id,))
+        for policy in draft.temporal_policies:
+            policy_id = f"{policy.object_id}/{policy.partition_field_id}"
+            add(
+                "TemporalPolicy",
+                policy_id,
+                ("policy", policy_id),
+                (policy.object_id, policy.partition_field_id),
+            )
+
+        groups: dict[str, dict[tuple[str, str], set[str]]] = {}
+        for normalized_name, subject_key, related_ids in derived:
+            groups.setdefault(normalized_name, {}).setdefault(subject_key, set()).update(
+                related_ids
+            )
+        diagnostics: dict[str, DraftDiagnostic] = {}
+        for subjects in groups.values():
+            if len(subjects) <= 1:
+                continue
+            diagnostic = _diagnostic(
+                "duplicate_managed_short_name",
+                "派生语义短名称冲突",
+                "error",
+                tuple(
+                    related_id for related_ids in subjects.values() for related_id in related_ids
+                ),
+            )
+            diagnostics[diagnostic.id] = diagnostic
+        return list(diagnostics.values())
+
     def _relation_diagnostics(
         self, draft: WorkspaceDraft, fields_by_id: dict[str, str]
     ) -> list[DraftDiagnostic]:
@@ -166,14 +246,7 @@ class DraftValidator:
             if relation.status != "active":
                 continue
             if not relation.confirmed:
-                diagnostics.append(
-                    _diagnostic(
-                        "relation_confirmation_required",
-                        "启用关系需要明确确认",
-                        "confirmation_required",
-                        (relation.id, *endpoint_ids),
-                    )
-                )
+                diagnostics.append(_relation_confirmation_diagnostic(relation))
             if (
                 fields[relation.source_field_id].xsd_type
                 != fields[relation.target_field_id].xsd_type
@@ -266,6 +339,26 @@ def stable_diagnostic_id(code: str, related_ids: tuple[str, ...]) -> str:
     """Return a message-independent stable diagnostic ID."""
     identity = "\x00".join((code, *sorted(set(related_ids))))
     return f"diagnostic/{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
+
+
+def managed_short_name(kind: str, stable_id: str) -> str:
+    """Derive the exact short name used by managed package construction."""
+    return _semantic_short_name(f"{kind}_{stable_id}", kind)
+
+
+def _relation_confirmation_diagnostic(relation: DraftRelation) -> DraftDiagnostic:
+    return _diagnostic(
+        "relation_confirmation_required",
+        "启用关系需要明确确认",
+        "confirmation_required",
+        (
+            relation.id,
+            relation.source_object_id,
+            relation.source_field_id,
+            relation.target_object_id,
+            relation.target_field_id,
+        ),
+    )
 
 
 def _diagnostic(

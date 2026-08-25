@@ -190,9 +190,21 @@ def test_relation_preserves_confirmed_physical_join_semantics() -> None:
         ),
         (
             "ex:OrderCustomerId",
-            "ex:CustomerId",
+            "ex:OrderCustomerId",
             "invalid_relation_property",
             "urn:ontology-agent:core#sourceProperty",
+        ),
+        (
+            "ex:CustomerId",
+            "ex:UnknownProperty",
+            "invalid_ontology_reference",
+            "urn:ontology-agent:core#targetProperty",
+        ),
+        (
+            "ex:CustomerId",
+            "ex:CustomerId",
+            "invalid_relation_property",
+            "urn:ontology-agent:core#targetProperty",
         ),
     ),
 )

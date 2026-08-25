@@ -11,6 +11,7 @@ from rdflib.namespace import RDFS
 from ontology_core.errors import OntologyParseError
 from ontology_core.management.builder import PackageBuilder
 from ontology_core.management.models import (
+    DiagnosticDisposition,
     DraftDataSource,
     DraftField,
     DraftObject,
@@ -18,8 +19,13 @@ from ontology_core.management.models import (
     DraftTemporalPolicy,
     WorkspaceDraft,
 )
-from ontology_core.management.validation import DraftNotPublishableError
+from ontology_core.management.validation import (
+    DraftNotPublishableError,
+    DraftValidator,
+    stable_diagnostic_id,
+)
 from ontology_core.semantic_models import TemporalDefaultStrategy, TemporalGrain
+from ontology_core.vocabulary import OA
 
 
 def _workspace(*, relation_confirmed: bool = True) -> WorkspaceDraft:
@@ -158,9 +164,28 @@ def test_builder_generates_deterministic_multi_object_six_file_package(
     assert len(first.catalog.relations) == 1
     assert len(first.catalog.temporal_policies) == 2
     relation = first.catalog.relations[0]
+    assert relation.uri.endswith("/relation/relation%2Fcustomer-orders")
+    assert relation.source_concept_uri.endswith("/concept/object%2Fcustomer_m")
+    assert relation.target_concept_uri.endswith("/concept/object%2Forder_d")
+    assert relation.source_property_uri is not None
+    assert relation.source_property_uri.endswith("/property/field%2Fcustomer_m%2Fcustomer_id")
+    assert relation.target_property_uri is not None
+    assert relation.target_property_uri.endswith("/property/field%2Forder_d%2Fcustomer_id")
     assert relation.cardinality == "one_to_many"
+    assert relation.status == "active"
     assert relation.priority == 100
     assert relation.confirmed is True
+
+    mappings_by_element = {
+        mapping.semantic_element_uri: mapping for mapping in first.catalog.mappings
+    }
+    source_mapping = mappings_by_element[relation.source_property_uri]
+    target_mapping = mappings_by_element[relation.target_property_uri]
+    assert source_mapping.uri.endswith("/mapping/field%2Ffield%2Fcustomer_m%2Fcustomer_id")
+    assert target_mapping.uri.endswith("/mapping/field%2Ffield%2Forder_d%2Fcustomer_id")
+    assert source_mapping.field_name == "CUSTOMER_ID"
+    assert target_mapping.field_name == "CUSTOMER_ID"
+    assert source_mapping.data_source_uri == target_mapping.data_source_uri
 
     graph = first.copy_data_graph()
     assert Literal('客户" ; oa:password "never-serialize', lang="zh-CN") in set(
@@ -179,6 +204,101 @@ def test_builder_validates_before_creating_target(tmp_path: Path) -> None:
     with pytest.raises(DraftNotPublishableError):
         PackageBuilder().build(_workspace(relation_confirmed=False), target, "1.0.0")
 
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("disposition_status", ("resolved", "dismissed"))
+def test_builder_publishes_exact_relation_disposition_as_effective_confirmation(
+    tmp_path: Path,
+    disposition_status: str,
+) -> None:
+    draft = _workspace(relation_confirmed=False)
+    validator = DraftValidator()
+    confirmation = next(
+        item for item in validator.validate(draft) if item.code == "relation_confirmation_required"
+    )
+    draft = draft.model_copy(
+        update={
+            "dispositions": (
+                DiagnosticDisposition(
+                    diagnostic_id=confirmation.id,
+                    status=disposition_status,
+                    note="Relation endpoints reviewed",
+                    actor="reviewer",
+                    resolved_at=datetime(2026, 8, 25, tzinfo=UTC),
+                ),
+            )
+        }
+    )
+    target = tmp_path / disposition_status
+
+    snapshot = PackageBuilder(validator).build(draft, target, "1.0.0")
+
+    assert snapshot.catalog.relations[0].confirmed is True
+    assert Literal(True) in set(snapshot.copy_data_graph().objects(None, OA.confirmed))
+
+
+def test_builder_does_not_treat_unrelated_disposition_as_relation_confirmation(
+    tmp_path: Path,
+) -> None:
+    draft = _workspace(relation_confirmed=False).model_copy(
+        update={
+            "dispositions": (
+                DiagnosticDisposition(
+                    diagnostic_id="diagnostic/unrelated",
+                    status="resolved",
+                    note="Different diagnostic",
+                    actor="reviewer",
+                    resolved_at=datetime(2026, 8, 25, tzinfo=UTC),
+                ),
+            )
+        }
+    )
+    target = tmp_path / "unrelated"
+
+    with pytest.raises(DraftNotPublishableError):
+        PackageBuilder().build(draft, target, "1.0.0")
+
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "colliding_ids",
+    (
+        ("object/CaseCollision", "object/casecollision"),
+        ("object/punctuation/a/b", "object/punctuation/a?b"),
+    ),
+)
+def test_builder_blocks_normalized_short_name_collisions_before_target_write(
+    tmp_path: Path,
+    colliding_ids: tuple[str, str],
+) -> None:
+    draft = _workspace()
+    colliding_objects = tuple(
+        DraftObject(
+            id=object_id,
+            physical_name=f"COLLISION_{index}",
+            label=f"Collision {index}",
+            description="Synthetic collision",
+        )
+        for index, object_id in enumerate(colliding_ids)
+    )
+    draft = draft.model_copy(update={"objects": (*draft.objects, *colliding_objects)})
+    validator = DraftValidator()
+
+    collisions = [
+        item for item in validator.validate(draft) if item.code == "duplicate_managed_short_name"
+    ]
+
+    assert len(collisions) == 1
+    collision = collisions[0]
+    assert collision.severity == "error"
+    assert collision.related_ids == tuple(sorted(colliding_ids))
+    assert collision.id == stable_diagnostic_id("duplicate_managed_short_name", colliding_ids)
+    target = tmp_path / "collision"
+    with pytest.raises(DraftNotPublishableError) as caught:
+        PackageBuilder(validator).build(draft, target, "1.0.0")
+    assert collision.id in {item.id for item in caught.value.diagnostics}
     assert not target.exists()
 
 

@@ -1121,13 +1121,14 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                 _violation("invalid_priority", uri, PRIORITY, "Priority must be an integer")
             )
             priority = 0
-        if confirmed_text is None or confirmed_text.casefold() not in {"true", "false"}:
+        confirmed_values = {"true": True, "1": True, "false": False, "0": False}
+        if confirmed_text is None or confirmed_text.casefold() not in confirmed_values:
             violations.append(
                 _violation("invalid_confirmed", uri, CONFIRMED, "Confirmed must be boolean")
             )
             confirmed = False
         else:
-            confirmed = confirmed_text.casefold() == "true"
+            confirmed = confirmed_values[confirmed_text.casefold()]
         if (
             fields
             and source
