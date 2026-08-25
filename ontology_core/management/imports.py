@@ -23,6 +23,7 @@ from ontology_core.management.models import (
 )
 from ontology_core.management.parsers import parse_metadata_upload
 from ontology_core.management.store import DraftRevisionConflict, FileDraftStore
+from ontology_core.management.validation import stable_diagnostic_id
 from ontology_core.models import FrozenModel
 from ontology_core.normalization import normalize_text
 
@@ -242,7 +243,6 @@ def _duplicate_diagnostics(
         _diagnostic(
             "duplicate_object_in_batch",
             "导入批次包含重复对象",
-            identity,
             related_ids=candidate_ids[identity],
         )
         for identity, count in counts.items()
@@ -258,7 +258,6 @@ def _duplicate_diagnostics(
         _diagnostic(
             "duplicate_object_in_draft",
             "导入对象已存在于草稿",
-            identity,
             related_ids=_unique_ids((*candidate_ids[identity], *existing_ids[identity])),
         )
         for identity in counts
@@ -268,19 +267,17 @@ def _duplicate_diagnostics(
 
 
 def _parser_error_diagnostic(code: str, file_name: str) -> DraftDiagnostic:
-    return _diagnostic(code, f"{file_name}：上传文件解析失败", ())
+    return _diagnostic(code, f"{file_name}：上传文件解析失败")
 
 
 def _diagnostic(
     code: str,
     message: str,
-    identity: tuple[str, str, str] | tuple[()],
     *,
     related_ids: tuple[str, ...] = (),
 ) -> DraftDiagnostic:
-    fingerprint = "|".join((code, message, *identity, *related_ids))
     return DraftDiagnostic(
-        id=f"diagnostic/{hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()}",
+        id=stable_diagnostic_id(code, related_ids),
         code=code,
         severity="error",
         message=message,

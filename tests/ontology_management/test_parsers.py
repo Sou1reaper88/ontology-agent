@@ -104,6 +104,30 @@ def test_tsv_parser_preserves_source_row_locations_in_diagnostics() -> None:
     assert diagnostic.related_ids == ("object/demo_account_m", "field/demo_account_m/bad-name")
 
 
+def test_diagnostic_identity_ignores_the_mutable_source_location_message() -> None:
+    first = parse_metadata_upload(
+        "objects.tsv",
+        ("对象英文名称\t属性英文名\nDEMO_ACCOUNT\tBAD-NAME\n").encode(),
+        LIMITS,
+    )
+    second = parse_metadata_upload(
+        "objects.tsv",
+        ("对象英文名称\t属性英文名\n" "DEMO_OTHER\tOTHER_ID\n" "DEMO_ACCOUNT\tBAD-NAME\n").encode(),
+        LIMITS,
+    )
+
+    first_diagnostic = next(
+        item for item in first.diagnostics if item.code == "invalid_field_identifier"
+    )
+    second_diagnostic = next(
+        item for item in second.diagnostics if item.code == "invalid_field_identifier"
+    )
+
+    assert first_diagnostic.related_ids == second_diagnostic.related_ids
+    assert first_diagnostic.message != second_diagnostic.message
+    assert first_diagnostic.id == second_diagnostic.id
+
+
 def test_tsv_parser_keeps_missing_object_name_as_a_global_diagnostic() -> None:
     payload = (
         "对象英文名称\t属性英文名\n" "\tORPHAN_FIELD\n" "DEMO_ACCOUNT_M\tACCOUNT_ID\n"

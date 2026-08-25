@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 
 from ontology_core.errors import OntologyImportError
 from ontology_core.management.models import DraftDiagnostic, DraftField, DraftObject, UploadLimits
+from ontology_core.management.validation import stable_diagnostic_id
 from ontology_core.models import FrozenModel
 from ontology_core.normalization import normalize_text
 from ontology_core.tabular_metadata import (
@@ -250,16 +251,8 @@ def _draft_diagnostic(
     if location is not None:
         origin = f"{source_name} " if source_name else ""
         message = f"{message}（{origin}第 {location.line} 行，列“{location.column}”）"
-    identity = "|".join(
-        (
-            diagnostic.code,
-            diagnostic.severity.value,
-            message,
-            *related_ids,
-        )
-    )
     return DraftDiagnostic(
-        id=f"diagnostic/{hashlib.sha256(identity.encode('utf-8')).hexdigest()}",
+        id=stable_diagnostic_id(diagnostic.code, tuple(related_ids)),
         code=diagnostic.code,
         severity=diagnostic.severity.value,
         message=message,
