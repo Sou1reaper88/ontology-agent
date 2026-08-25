@@ -8,7 +8,7 @@ import secrets
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
-from pathlib import PurePosixPath
+from pathlib import PureWindowsPath
 from typing import Literal
 
 from pydantic import Field
@@ -289,7 +289,7 @@ def _diagnostic(
 
 
 def _safe_upload_name(file_name: str) -> str:
-    return PurePosixPath(file_name.replace("\\", "/")).name
+    return PureWindowsPath(file_name.replace("/", "\\")).name
 
 
 def _unique_ids(ids: Iterable[str]) -> tuple[str, ...]:

@@ -207,7 +207,7 @@ def test_parser_error_blocks_whole_preview_without_a_token(tmp_path: Path) -> No
     assert store.read("evaluation").revision == 0
 
 
-@pytest.mark.parametrize("file_name", (r"C:\private\file.tsv", "../../file.tsv"))
+@pytest.mark.parametrize("file_name", (r"C:\private\file.tsv", "../../file.tsv", "C:file.tsv"))
 def test_preview_diagnostics_keep_only_a_safe_upload_basename(
     tmp_path: Path, file_name: str
 ) -> None:
@@ -226,6 +226,7 @@ def test_preview_diagnostics_keep_only_a_safe_upload_basename(
         item for item in preview.diagnostics if item.code == "invalid_field_identifier"
     )
     assert "file.tsv" in diagnostic.message
+    assert "C:" not in diagnostic.message
     assert "private" not in diagnostic.message
     assert ".." not in diagnostic.message
     assert "RAW_ROW_SECRET" not in diagnostic.message
@@ -388,6 +389,9 @@ def test_used_token_preserves_draft_bytes_and_revision(tmp_path: Path) -> None:
         lambda: service.confirm("evaluation", preview.token or "", expected_revision=1),
         code="import_token_used",
     )
+    final_draft = store.read("evaluation")
+    assert final_draft.revision == 1
+    assert len(final_draft.objects) == 1
 
 
 def test_commit_failure_preserves_draft_bytes_and_revision(
@@ -420,6 +424,7 @@ def test_marker_write_failure_preserves_draft_bytes_and_revision(
         "evaluation", expected_revision=0, uploads=(upload("accounts.tsv", TABLE_A),)
     )
     assert preview.token is not None
+    original_write = store.write_import_session
 
     def fail_marker_write(_: str, __: object) -> object:
         raise OntologyManagementStoreError(operation="write")
@@ -432,6 +437,20 @@ def test_marker_write_failure_preserves_draft_bytes_and_revision(
         lambda: service.confirm("evaluation", preview.token or "", expected_revision=0),
         code="ontology_management_store_error",
     )
+    monkeypatch.setattr(store, "write_import_session", original_write)
+    updated = service.confirm("evaluation", preview.token, expected_revision=0)
+
+    assert updated.revision == 1
+    assert len(updated.objects) == 1
+    assert_failure_preserves_draft(
+        tmp_path,
+        store,
+        lambda: service.confirm("evaluation", preview.token or "", expected_revision=1),
+        code="import_token_used",
+    )
+    final_draft = store.read("evaluation")
+    assert final_draft.revision == 1
+    assert len(final_draft.objects) == 1
 
 
 def test_draft_replace_failure_after_marker_burns_the_token(
