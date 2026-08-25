@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zipfile
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -38,6 +39,7 @@ def synthetic_xlsx(*sheets: tuple[str, list[list[object]]]) -> bytes:
 
 
 def synthetic_xlsx_with_member(name: str, data: bytes) -> bytes:
+    archive_name = name.replace("\\", "/")
     payload = synthetic_xlsx(
         (
             "对象",
@@ -51,8 +53,11 @@ def synthetic_xlsx_with_member(name: str, data: bytes) -> bytes:
     with ZipFile(BytesIO(payload)) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
         for item in source.infolist():
             target.writestr(item, source.read(item.filename))
-        target.writestr(name, data)
-    return output.getvalue()
+        target.writestr(archive_name, data)
+    content = output.getvalue()
+    if archive_name == name:
+        return content
+    return content.replace(archive_name.encode(), name.encode())
 
 
 def synthetic_xlsx_with_encrypted_member() -> bytes:
@@ -166,6 +171,42 @@ def test_xlsx_rejects_external_links_before_workbook_load(monkeypatch: pytest.Mo
 
 
 @pytest.mark.parametrize(
+    ("member", "message"),
+    [
+        (r"..\evil.xml", "不安全"),
+        (r"xl\externalLinks\externalLink1.xml", "外部链接"),
+        (r"xl\vbaProject.bin", "宏"),
+        (r"C:\evil.xml", "不安全"),
+        ("/evil.xml", "不安全"),
+        ("./evil.xml", "不安全"),
+        ("nested/../evil.xml", "不安全"),
+    ],
+    ids=[
+        "backslash-traversal",
+        "backslash-external-link",
+        "backslash-macro",
+        "drive",
+        "absolute",
+        "dot",
+        "nested-traversal",
+    ],
+)
+def test_xlsx_rejects_unsafe_backslash_or_dot_member_before_workbook_load(
+    monkeypatch: pytest.MonkeyPatch,
+    member: str,
+    message: str,
+) -> None:
+    if "\\" in member:
+        monkeypatch.setattr(zipfile.os, "sep", "/")
+    monkeypatch.setattr(
+        parsers, "load_workbook", lambda *args, **kwargs: pytest.fail("已加载工作簿")
+    )
+
+    with pytest.raises(UnsafeUploadError, match=message):
+        parse_metadata_upload("objects.xlsx", synthetic_xlsx_with_member(member, b"unsafe"), LIMITS)
+
+
+@pytest.mark.parametrize(
     ("member", "data", "message"),
     [
         ("xl/vbaProject.bin", b"macro", "宏"),
@@ -200,3 +241,37 @@ def test_xlsm_is_rejected_even_when_payload_is_a_valid_xlsx() -> None:
 
     with pytest.raises(UnsafeUploadError, match="仅支持"):
         parse_metadata_upload("objects.xlsm", payload, LIMITS)
+
+
+def test_tsv_duplicate_fields_return_diagnostic_without_model_validation_error() -> None:
+    payload = (
+        "对象英文名称\t属性英文名\t属性描述\n"
+        "DEMO_ACCOUNT_M\tACCOUNT_ID\t账户编码\n"
+        "DEMO_ACCOUNT_M\taccount_id\t账户编码副本\n"
+    ).encode()
+
+    parsed = parse_metadata_upload("objects.tsv", payload, LIMITS)
+
+    assert [field.physical_name for field in parsed.objects[0].fields] == ["ACCOUNT_ID"]
+    diagnostic = next(item for item in parsed.diagnostics if item.code == "duplicate_field")
+    assert "objects.tsv 第 3 行，列“属性英文名”" in diagnostic.message
+    assert diagnostic.related_ids == ("object/demo_account_m", "field/demo_account_m/account_id")
+
+
+def test_xlsx_duplicate_fields_return_diagnostic_without_model_validation_error() -> None:
+    payload = synthetic_xlsx(
+        (
+            "对象",
+            [
+                ["对象英文名称", "属性英文名", "属性描述"],
+                ["DEMO_ACCOUNT_M", "ACCOUNT_ID", "账户编码"],
+                ["DEMO_ACCOUNT_M", "account_id", "账户编码副本"],
+            ],
+        )
+    )
+
+    parsed = parse_metadata_upload("objects.xlsx", payload, LIMITS)
+
+    assert [field.physical_name for field in parsed.objects[0].fields] == ["ACCOUNT_ID"]
+    diagnostic = next(item for item in parsed.diagnostics if item.code == "duplicate_field")
+    assert "objects.xlsx:对象 第 3 行，列“属性英文名”" in diagnostic.message

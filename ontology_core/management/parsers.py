@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import re
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from zipfile import BadZipFile, ZipFile
@@ -23,6 +24,7 @@ from ontology_core.tabular_metadata import (
 )
 
 _MAX_COMPRESSION_RATIO = 100
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 _TYPE_MAP = {
     "bigint": "integer",
     "bool": "boolean",
@@ -79,11 +81,19 @@ def _inspect_xlsx_archive(content: bytes, limits: UploadLimits) -> None:
         with ZipFile(io.BytesIO(content)) as archive:
             expanded_size = 0
             for item in archive.infolist():
-                name = item.filename.casefold()
-                path = PurePosixPath(item.filename)
+                normalized_name = item.filename.replace("\\", "/")
+                name = normalized_name.casefold()
+                path = PurePosixPath(normalized_name)
+                path_parts = normalized_name.split("/")
                 if item.flag_bits & 0x1:
                     raise UnsafeUploadError("XLSX 不支持加密条目")
-                if path.is_absolute() or ".." in path.parts:
+                if (
+                    not normalized_name
+                    or normalized_name.startswith("/")
+                    or _DRIVE_PREFIX.match(normalized_name)
+                    or path.is_absolute()
+                    or any(part in {".", ".."} for part in path_parts)
+                ):
                     raise UnsafeUploadError("XLSX 包含不安全的归档路径")
                 if name == "xl/vbaproject.bin" or name.endswith(".vba"):
                     raise UnsafeUploadError("XLSX 不支持宏内容")
@@ -177,6 +187,14 @@ def _to_parsed_upload(
     diagnostics: list[DraftDiagnostic] = []
     for draft in drafts:
         object_id = _object_id(draft.table.physical_name)
+        metadata_diagnostics = analyze_metadata(draft)
+        seen_fields: set[str] = set()
+        unique_source_fields = []
+        for field in draft.fields:
+            field_key = field.physical_name.casefold()
+            if field_key not in seen_fields:
+                unique_source_fields.append(field)
+                seen_fields.add(field_key)
         fields = tuple(
             DraftField(
                 id=_field_id(draft.table.physical_name, field.physical_name),
@@ -188,7 +206,7 @@ def _to_parsed_upload(
                 title=field.title,
                 aliases=field.aliases,
             )
-            for field in draft.fields
+            for field in unique_source_fields
         )
         objects.append(
             DraftObject(
@@ -202,7 +220,7 @@ def _to_parsed_upload(
         )
         diagnostics.extend(
             _draft_diagnostic(item, object_id, draft.table.physical_name, draft.source_name)
-            for item in analyze_metadata(draft)
+            for item in metadata_diagnostics
         )
         diagnostics.extend(
             _draft_diagnostic(item, None, None, draft.source_name)
