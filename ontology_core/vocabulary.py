@@ -37,3 +37,7 @@ PARTITION_PROPERTY = OA.partitionProperty
 PARTITION_GRAIN = OA.partitionGrain
 DEFAULT_STRATEGY = OA.defaultStrategy
 ALLOW_QUERY_OVERRIDE = OA.allowQueryOverride
+SOURCE_PROPERTY = OA.sourceProperty
+TARGET_PROPERTY = OA.targetProperty
+CARDINALITY = OA.cardinality
+CONFIRMED = OA.confirmed

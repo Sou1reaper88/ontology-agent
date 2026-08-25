@@ -37,9 +37,11 @@ from ontology_core.vocabulary import (
     ARGUMENT,
     BUSINESS_RULE,
     CAPABILITY,
+    CARDINALITY,
     CONCEPT,
     CONDITION,
     CONFIGURATION,
+    CONFIRMED,
     DATA_SOURCE,
     DATA_SOURCE_REF,
     DEFAULT_STRATEGY,
@@ -61,7 +63,9 @@ from ontology_core.vocabulary import (
     RELATION,
     SEMANTIC_ELEMENT,
     SHORT_NAME,
+    SOURCE_PROPERTY,
     STATUS,
+    TARGET_PROPERTY,
     TEMPORAL_PARTITION_POLICY,
     USES_PROPERTY,
     USES_RELATION,
@@ -287,6 +291,12 @@ def _single_uri(graph: Graph, subject: Identifier, predicate: URIRef, field: str
     if len(values) != 1:
         raise ValueError(f"Marked semantic element requires exactly one {field}")
     return references[0]
+
+
+def _optional_uri(graph: Graph, subject: Identifier, predicate: URIRef, field: str) -> str | None:
+    if not tuple(graph.objects(subject, predicate)):
+        return None
+    return _single_uri(graph, subject, predicate, field)
 
 
 def _single_literal(graph: Graph, subject: Identifier, predicate: URIRef, field: str) -> Literal:
@@ -981,7 +991,24 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
         ):
             property_data.append((uri, *fields, domain, value_range))
 
-    relation_data: list[tuple[str, str, str, tuple[LocalizedText, ...], str | None, str, str]] = []
+    property_domains = {uri: domain for uri, _, _, _, _, domain, _ in property_data}
+    relation_data: list[
+        tuple[
+            str,
+            str,
+            str,
+            tuple[LocalizedText, ...],
+            str | None,
+            str,
+            str,
+            str | None,
+            str | None,
+            str | None,
+            str,
+            int,
+            bool,
+        ]
+    ] = []
     for subject in relation_subjects:
         uri = str(subject)
         fields = _element_fields(graph, subject, violations)
@@ -999,6 +1026,53 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             uri=uri,
             path=RDFS.range,
         )
+        source_property = _capture(
+            lambda subject=subject: _optional_uri(
+                graph, subject, SOURCE_PROPERTY, "source property"
+            ),
+            violations=violations,
+            code="invalid_relation_property",
+            uri=uri,
+            path=SOURCE_PROPERTY,
+        )
+        target_property = _capture(
+            lambda subject=subject: _optional_uri(
+                graph, subject, TARGET_PROPERTY, "target property"
+            ),
+            violations=violations,
+            code="invalid_relation_property",
+            uri=uri,
+            path=TARGET_PROPERTY,
+        )
+        cardinality = _capture(
+            lambda subject=subject: _optional_literal(graph, subject, CARDINALITY, "cardinality"),
+            violations=violations,
+            code="invalid_cardinality",
+            uri=uri,
+            path=CARDINALITY,
+        )
+        status = _capture(
+            lambda subject=subject: _optional_literal(graph, subject, STATUS, "status") or "active",
+            violations=violations,
+            code="invalid_status",
+            uri=uri,
+            path=STATUS,
+        )
+        priority_text = _capture(
+            lambda subject=subject: _optional_literal(graph, subject, PRIORITY, "priority") or "0",
+            violations=violations,
+            code="invalid_priority",
+            uri=uri,
+            path=PRIORITY,
+        )
+        confirmed_text = _capture(
+            lambda subject=subject: _optional_literal(graph, subject, CONFIRMED, "confirmed")
+            or "false",
+            violations=violations,
+            code="invalid_confirmed",
+            uri=uri,
+            path=CONFIRMED,
+        )
         _validate_concept_reference(
             uri=uri,
             concept_uri=source,
@@ -1013,13 +1087,68 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             marked_concept_uris=marked_concept_uris,
             violations=violations,
         )
+        _validate_reference(
+            uri=uri,
+            reference=source_property,
+            path=SOURCE_PROPERTY,
+            known=marked_property_uris,
+            violations=violations,
+        )
+        _validate_reference(
+            uri=uri,
+            reference=target_property,
+            path=TARGET_PROPERTY,
+            known=marked_property_uris,
+            violations=violations,
+        )
+        for property_uri, concept_uri, path in (
+            (source_property, source, SOURCE_PROPERTY),
+            (target_property, target, TARGET_PROPERTY),
+        ):
+            if property_uri is not None and property_domains.get(property_uri) != concept_uri:
+                violations.append(
+                    _violation(
+                        "invalid_relation_property",
+                        uri,
+                        path,
+                        "Relation property must belong to its endpoint concept",
+                    )
+                )
+        try:
+            priority = int(priority_text) if priority_text is not None else 0
+        except ValueError:
+            violations.append(
+                _violation("invalid_priority", uri, PRIORITY, "Priority must be an integer")
+            )
+            priority = 0
+        if confirmed_text is None or confirmed_text.casefold() not in {"true", "false"}:
+            violations.append(
+                _violation("invalid_confirmed", uri, CONFIRMED, "Confirmed must be boolean")
+            )
+            confirmed = False
+        else:
+            confirmed = confirmed_text.casefold() == "true"
         if (
             fields
             and source
             and target
+            and status is not None
             and _validate_short_name(short_name=fields[0], uri=uri, violations=violations)
         ):
-            relation_data.append((uri, *fields, source, target))
+            relation_data.append(
+                (
+                    uri,
+                    *fields,
+                    source,
+                    target,
+                    source_property,
+                    target_property,
+                    cardinality,
+                    status,
+                    priority,
+                    confirmed,
+                )
+            )
 
     source_data: list[
         tuple[
@@ -1206,7 +1335,6 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                 )
             )
 
-    property_domains = {uri: domain for uri, _, _, _, _, domain, _ in property_data}
     temporal_policy_data: list[
         tuple[
             str,
@@ -1577,8 +1705,28 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
             description=description,
             source_concept_uri=source,
             target_concept_uri=target,
+            source_property_uri=source_property,
+            target_property_uri=target_property,
+            cardinality=cardinality,
+            status=status,
+            priority=priority,
+            confirmed=confirmed,
         )
-        for uri, short_name, label, labels, description, source, target in relation_data
+        for (
+            uri,
+            short_name,
+            label,
+            labels,
+            description,
+            source,
+            target,
+            source_property,
+            target_property,
+            cardinality,
+            status,
+            priority,
+            confirmed,
+        ) in relation_data
     )
     rules = tuple(
         BusinessRule(

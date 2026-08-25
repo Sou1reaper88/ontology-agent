@@ -65,6 +65,12 @@ class Property(SemanticElement):
 class Relation(SemanticElement):
     source_concept_uri: str
     target_concept_uri: str
+    source_property_uri: str | None = None
+    target_property_uri: str | None = None
+    cardinality: str | None = None
+    status: str = "active"
+    priority: int = 0
+    confirmed: bool = False
 
 
 class RuleExpression(FrozenModel):

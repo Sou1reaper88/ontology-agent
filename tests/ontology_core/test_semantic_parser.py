@@ -136,6 +136,85 @@ def test_parse_catalog_preserves_property_datatype_and_relation_direction(
     ]
 
 
+def _direct_relation_graph(
+    *,
+    source_property: str = "ex:CustomerId",
+    target_property: str = "ex:OrderCustomerId",
+) -> Graph:
+    return _graph(f"""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:Customer a owl:Class, oa:Concept ;
+            oa:shortName "Customer" ; rdfs:label "Customer" .
+        ex:Order a owl:Class, oa:Concept ;
+            oa:shortName "Order" ; rdfs:label "Order" .
+        ex:CustomerId a owl:DatatypeProperty, oa:Property ;
+            oa:shortName "CustomerId" ; rdfs:label "Customer ID" ;
+            rdfs:domain ex:Customer ; rdfs:range xsd:string .
+        ex:OrderCustomerId a owl:DatatypeProperty, oa:Property ;
+            oa:shortName "OrderCustomerId" ; rdfs:label "Order customer ID" ;
+            rdfs:domain ex:Order ; rdfs:range xsd:string .
+        ex:CustomerOrders a owl:ObjectProperty, oa:Relation ;
+            oa:shortName "CustomerOrders" ; rdfs:label "Customer orders" ;
+            rdfs:domain ex:Customer ; rdfs:range ex:Order ;
+            oa:sourceProperty {source_property} ;
+            oa:targetProperty {target_property} ;
+            oa:cardinality "one_to_many" ; oa:status "active" ;
+            oa:priority 100 ; oa:confirmed true .
+        """)
+
+
+def test_relation_preserves_confirmed_physical_join_semantics() -> None:
+    relation = parse_catalog(_direct_relation_graph()).relations[0]
+
+    assert relation.source_property_uri.endswith("/CustomerId")
+    assert relation.target_property_uri.endswith("/OrderCustomerId")
+    assert relation.cardinality == "one_to_many"
+    assert relation.status == "active"
+    assert relation.priority == 100
+    assert relation.confirmed is True
+
+
+@pytest.mark.parametrize(
+    ("source_property", "target_property", "expected_code", "expected_path"),
+    (
+        (
+            "ex:UnknownProperty",
+            "ex:OrderCustomerId",
+            "invalid_ontology_reference",
+            "urn:ontology-agent:core#sourceProperty",
+        ),
+        (
+            "ex:OrderCustomerId",
+            "ex:CustomerId",
+            "invalid_relation_property",
+            "urn:ontology-agent:core#sourceProperty",
+        ),
+    ),
+)
+def test_relation_rejects_unknown_or_misowned_join_properties(
+    source_property: str,
+    target_property: str,
+    expected_code: str,
+    expected_path: str,
+) -> None:
+    with pytest.raises(OntologyValidationError) as caught:
+        parse_catalog(
+            _direct_relation_graph(
+                source_property=source_property,
+                target_property=target_property,
+            )
+        )
+
+    assert (expected_code, expected_path) in {
+        (item["code"], item["path"]) for item in caught.value.details["violations"]
+    }
+
+
 def test_parse_catalog_ignores_unmarked_owl_elements(valid_package_dir: Path) -> None:
     graph = _catalog_graph(valid_package_dir)
     graph.parse(

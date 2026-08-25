@@ -51,7 +51,16 @@ oa:RelationShape a sh:NodeShape ;
     sh:targetClass oa:Relation ;
     sh:property [ sh:path rdf:type ; sh:hasValue owl:ObjectProperty ] ;
     sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
-    sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+    sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:sourceProperty ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:targetProperty ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [
+        sh:path oa:cardinality ; sh:maxCount 1 ; sh:nodeKind sh:Literal ;
+        sh:in ("one_to_one" "one_to_many" "many_to_one" "many_to_many")
+    ] ;
+    sh:property [ sh:path oa:status ; sh:maxCount 1 ; sh:nodeKind sh:Literal ] ;
+    sh:property [ sh:path oa:priority ; sh:maxCount 1 ; sh:datatype xsd:integer ] ;
+    sh:property [ sh:path oa:confirmed ; sh:maxCount 1 ; sh:datatype xsd:boolean ] .
 
 oa:BusinessRuleShape a sh:NodeShape ;
     sh:targetClass oa:BusinessRule ;

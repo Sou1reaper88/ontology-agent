@@ -49,3 +49,7 @@ oa:partitionProperty a owl:ObjectProperty ; rdfs:label "Partition property" .
 oa:partitionGrain a owl:DatatypeProperty ; rdfs:label "Partition grain" .
 oa:defaultStrategy a owl:DatatypeProperty ; rdfs:label "Default temporal strategy" .
 oa:allowQueryOverride a owl:DatatypeProperty ; rdfs:label "Allow query override" .
+oa:sourceProperty a owl:ObjectProperty ; rdfs:label "Source property" .
+oa:targetProperty a owl:ObjectProperty ; rdfs:label "Target property" .
+oa:cardinality a owl:DatatypeProperty ; rdfs:label "Cardinality" .
+oa:confirmed a owl:DatatypeProperty ; rdfs:label "Confirmed" .

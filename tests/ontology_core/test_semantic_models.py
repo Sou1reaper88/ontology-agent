@@ -117,6 +117,12 @@ def test_semantic_dtos_accept_their_public_contract_fields() -> None:
         labels=(),
         source_concept_uri="https://example.invalid/semantic/concept",
         target_concept_uri="https://example.invalid/semantic/target-concept",
+        source_property_uri=property_.uri,
+        target_property_uri="https://example.invalid/semantic/target-property",
+        cardinality="one_to_many",
+        status="active",
+        priority=100,
+        confirmed=True,
     )
     rule = BusinessRule(
         uri="https://example.invalid/semantic/rule",
@@ -153,6 +159,12 @@ def test_semantic_dtos_accept_their_public_contract_fields() -> None:
     assert rule.property_uris == (property_.uri,)
     assert rule.condition is not None
     assert rule.condition.values == (RdfLiteral(lexical_form="neutral"),)
+    assert relation.source_property_uri == property_.uri
+    assert relation.target_property_uri == "https://example.invalid/semantic/target-property"
+    assert relation.cardinality == "one_to_many"
+    assert relation.status == "active"
+    assert relation.priority == 100
+    assert relation.confirmed is True
     assert data_source.capabilities == ("read",)
     assert mapping.join_path == ("https://example.invalid/semantic/join",)
 
