@@ -73,7 +73,7 @@ def test_safe_child_returns_a_regular_child(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
 def test_windows_reparse_point_rejects_child_traversal_and_management_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     root = tmp_path / "root"
     repository = tmp_path / "repository"
@@ -96,8 +96,6 @@ def test_windows_reparse_point_rejects_child_traversal_and_management_root(
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-
-    monkeypatch.setattr(Path, "is_junction", None)
 
     with pytest.raises(OntologyPathError):
         safe_child(root, "junction", "draft.json")
