@@ -88,6 +88,13 @@ class OntologySettings(BaseSettings):
     retry_times: int = 2
     package_path: str = ""
     shadow_enabled: bool = True
+    management_root: str = ""
+    management_workspace: str = "evaluation"
+    import_token_ttl_seconds: int = 900
+    max_upload_bytes: int = 20 * 1024 * 1024
+    max_xlsx_uncompressed_bytes: int = 100 * 1024 * 1024
+    maintainer_roles: tuple[str, ...] = ("本体维护者", "全省管理员")
+    administrator_roles: tuple[str, ...] = ("全省管理员",)
 
 
 class Settings(BaseSettings):
