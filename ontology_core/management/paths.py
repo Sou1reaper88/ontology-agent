@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 from ontology_core.errors import OntologyError
@@ -70,14 +71,19 @@ def _contains_reparse_point(path: Path) -> bool:
     if not absolute_path.is_absolute():
         absolute_path = Path.cwd() / absolute_path
     for candidate in (absolute_path, *absolute_path.parents):
-        if candidate.is_symlink() or _is_junction(candidate):
+        if _is_reparse_point(candidate):
             return True
     return False
 
 
-def _is_junction(path: Path) -> bool:
-    checker = getattr(path, "is_junction", None)
-    return bool(checker()) if checker is not None else False
+def _is_reparse_point(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    try:
+        file_attributes = path.lstat().st_file_attributes
+    except (AttributeError, OSError):
+        return False
+    return bool(file_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
 
 def _is_within(candidate: Path, root: Path) -> bool:

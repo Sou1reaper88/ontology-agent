@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -70,33 +71,38 @@ def test_safe_child_returns_a_regular_child(tmp_path: Path) -> None:
     )
 
 
-def test_safe_child_rejects_symlink_traversal(tmp_path: Path) -> None:
-    target = tmp_path / "target"
-    link = tmp_path / "link"
-    target.mkdir()
-    try:
-        link.symlink_to(target, target_is_directory=True)
-    except OSError as exc:
-        pytest.skip(f"symlinks unavailable: {exc}")
-
-    with pytest.raises(OntologyPathError):
-        safe_child(tmp_path, "link", "draft.json")
-
-
-def test_safe_child_rejects_reparse_point_traversal_when_supported(
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
+def test_windows_reparse_point_rejects_child_traversal_and_management_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "root"
+    repository = tmp_path / "repository"
+    child_target = tmp_path / "child-target"
+    root_target = tmp_path / "root-target"
+    child_junction = root / "junction"
+    management_root_junction = tmp_path / "management-junction"
     root.mkdir()
-    candidate = root / "junction"
-    candidate.mkdir()
-    if not hasattr(Path, "is_junction"):
-        pytest.skip("Path.is_junction is unavailable on this Python version")
+    repository.mkdir()
+    child_target.mkdir()
+    root_target.mkdir()
 
-    monkeypatch.setattr(Path, "is_junction", lambda self: self == candidate)
+    for junction, target in (
+        (child_junction, child_target),
+        (management_root_junction, root_target),
+    ):
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(target)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    monkeypatch.setattr(Path, "is_junction", None)
 
     with pytest.raises(OntologyPathError):
         safe_child(root, "junction", "draft.json")
+    with pytest.raises(OntologyManagementConfigurationError):
+        resolve_management_root(str(management_root_junction), repository)
 
 
 def test_safe_child_rejects_windows_drive_relative_segment(tmp_path: Path) -> None:
