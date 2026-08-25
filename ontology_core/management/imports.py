@@ -6,8 +6,9 @@ import hashlib
 import json
 import secrets
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
 from typing import Literal
 
 from pydantic import Field
@@ -158,6 +159,11 @@ class BatchImportService:
             committed_session = self._store.read_import_session(token)
             self._validate_session(committed_session, workspace_id, expected_revision)
             self._assert_no_duplicates(current, committed_session.objects)
+            marked_session = committed_session.model_copy(
+                update={"committed_revision": current.revision + 1}
+            )
+            self._store.write_import_session(token, marked_session)
+            committed_session = marked_session
             return current.model_copy(
                 update={"objects": (*current.objects, *committed_session.objects)}
             )
@@ -165,8 +171,6 @@ class BatchImportService:
         updated = self._store.commit(workspace_id, expected_revision, append_all)
         if committed_session is None:
             raise RuntimeError("导入会话未在提交锁内校验")
-        marked = committed_session.model_copy(update={"committed_revision": updated.revision})
-        self._store.write_import_session(token, marked)
         self._store.consume_import_session(token)
         return updated
 
@@ -176,13 +180,14 @@ class BatchImportService:
         candidates: list[DraftObject] = []
         diagnostics: list[DraftDiagnostic] = []
         for upload in uploads:
+            file_name = _safe_upload_name(upload.file_name)
             try:
-                parsed = parse_metadata_upload(upload.file_name, upload.content, self._limits)
+                parsed = parse_metadata_upload(file_name, upload.content, self._limits)
             except OntologyError as error:
-                diagnostics.append(_parser_error_diagnostic(error.code))
+                diagnostics.append(_parser_error_diagnostic(error.code, file_name))
                 continue
             except Exception:
-                diagnostics.append(_parser_error_diagnostic("metadata_parse_error"))
+                diagnostics.append(_parser_error_diagnostic("metadata_parse_error", file_name))
                 continue
             candidates.extend(parsed.objects)
             diagnostics.extend(parsed.diagnostics)
@@ -227,34 +232,68 @@ def _duplicate_diagnostics(
 ) -> list[DraftDiagnostic]:
     identities = [physical_identity(draft, object_) for object_ in candidates]
     counts = Counter(identities)
+    candidate_ids = {
+        identity: _unique_ids(
+            object_.id for object_ in candidates if physical_identity(draft, object_) == identity
+        )
+        for identity in counts
+    }
     diagnostics = [
-        _diagnostic("duplicate_object_in_batch", "导入批次包含重复对象", identity)
+        _diagnostic(
+            "duplicate_object_in_batch",
+            "导入批次包含重复对象",
+            identity,
+            related_ids=candidate_ids[identity],
+        )
         for identity, count in counts.items()
         if count > 1
     ]
-    existing = {physical_identity(draft, object_) for object_ in draft.objects}
+    existing_ids = {
+        identity: _unique_ids(
+            object_.id for object_ in draft.objects if physical_identity(draft, object_) == identity
+        )
+        for identity in {physical_identity(draft, object_) for object_ in draft.objects}
+    }
     diagnostics.extend(
-        _diagnostic("duplicate_object_in_draft", "导入对象已存在于草稿", identity)
+        _diagnostic(
+            "duplicate_object_in_draft",
+            "导入对象已存在于草稿",
+            identity,
+            related_ids=_unique_ids((*candidate_ids[identity], *existing_ids[identity])),
+        )
         for identity in counts
-        if identity in existing
+        if identity in existing_ids
     )
     return diagnostics
 
 
-def _parser_error_diagnostic(code: str) -> DraftDiagnostic:
-    return _diagnostic(code, "上传文件解析失败", ())
+def _parser_error_diagnostic(code: str, file_name: str) -> DraftDiagnostic:
+    return _diagnostic(code, f"{file_name}：上传文件解析失败", ())
 
 
 def _diagnostic(
-    code: str, message: str, identity: tuple[str, str, str] | tuple[()]
+    code: str,
+    message: str,
+    identity: tuple[str, str, str] | tuple[()],
+    *,
+    related_ids: tuple[str, ...] = (),
 ) -> DraftDiagnostic:
-    fingerprint = "|".join((code, message, *identity))
+    fingerprint = "|".join((code, message, *identity, *related_ids))
     return DraftDiagnostic(
         id=f"diagnostic/{hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()}",
         code=code,
         severity="error",
         message=message,
+        related_ids=related_ids,
     )
+
+
+def _safe_upload_name(file_name: str) -> str:
+    return PurePosixPath(file_name.replace("\\", "/")).name
+
+
+def _unique_ids(ids: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(ids))
 
 
 def _candidate_digest(objects: Sequence[DraftObject]) -> str:

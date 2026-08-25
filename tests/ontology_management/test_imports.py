@@ -138,6 +138,10 @@ def test_duplicate_inside_one_file_blocks_whole_preview_without_draft_mutation(
     assert {item.code for item in preview.diagnostics if item.severity == "error"} == {
         "duplicate_object_in_batch"
     }
+    diagnostic = next(
+        item for item in preview.diagnostics if item.code == "duplicate_object_in_batch"
+    )
+    assert diagnostic.related_ids == ("object/demo_account",)
     assert draft_bytes(tmp_path) == before
     assert store.read("evaluation").revision == 0
     assert not (tmp_path / "import_sessions").exists()
@@ -158,6 +162,10 @@ def test_duplicate_across_files_blocks_whole_preview_without_draft_mutation(tmp_
     assert {item.code for item in preview.diagnostics if item.severity == "error"} == {
         "duplicate_object_in_batch"
     }
+    diagnostic = next(
+        item for item in preview.diagnostics if item.code == "duplicate_object_in_batch"
+    )
+    assert diagnostic.related_ids == ("object/demo_account",)
     assert draft_bytes(tmp_path) == before
     assert store.read("evaluation").revision == 0
     assert not (tmp_path / "import_sessions").exists()
@@ -174,7 +182,10 @@ def test_draft_duplicate_blocks_whole_preview_without_draft_mutation(tmp_path: P
 
     assert preview.status == "blocked"
     assert preview.token is None
-    assert "duplicate_object_in_draft" in {item.code for item in preview.diagnostics}
+    diagnostic = next(
+        item for item in preview.diagnostics if item.code == "duplicate_object_in_draft"
+    )
+    assert diagnostic.related_ids == ("object/demo_account",)
     assert draft_bytes(tmp_path) == before
     assert store.read("evaluation").revision == 0
 
@@ -194,6 +205,31 @@ def test_parser_error_blocks_whole_preview_without_a_token(tmp_path: Path) -> No
     assert "ontology_import_error" in {item.code for item in preview.diagnostics}
     assert draft_bytes(tmp_path) == before
     assert store.read("evaluation").revision == 0
+
+
+@pytest.mark.parametrize("file_name", (r"C:\private\file.tsv", "../../file.tsv"))
+def test_preview_diagnostics_keep_only_a_safe_upload_basename(
+    tmp_path: Path, file_name: str
+) -> None:
+    service, _, _ = import_service(tmp_path)
+    content = (
+        HEADER + "DEMO_ACCOUNT\t账户\t账户表\tBAD-NAME\t字段\tbigint\tRAW_ROW_SECRET\n"
+    ).encode("utf-8")
+
+    preview = service.preview(
+        "evaluation",
+        expected_revision=0,
+        uploads=(UploadPayload(file_name=file_name, content=content),),
+    )
+
+    diagnostic = next(
+        item for item in preview.diagnostics if item.code == "invalid_field_identifier"
+    )
+    assert "file.tsv" in diagnostic.message
+    assert "private" not in diagnostic.message
+    assert ".." not in diagnostic.message
+    assert "RAW_ROW_SECRET" not in diagnostic.message
+    assert diagnostic.related_ids == ("object/demo_account", "field/demo_account/bad-name")
 
 
 def test_empty_upload_blocks_whole_preview_without_a_token(tmp_path: Path) -> None:
@@ -373,6 +409,60 @@ def test_commit_failure_preserves_draft_bytes_and_revision(
         store,
         lambda: service.confirm("evaluation", preview.token or "", expected_revision=0),
         code="ontology_management_store_error",
+    )
+
+
+def test_marker_write_failure_preserves_draft_bytes_and_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, store, _ = import_service(tmp_path)
+    preview = service.preview(
+        "evaluation", expected_revision=0, uploads=(upload("accounts.tsv", TABLE_A),)
+    )
+    assert preview.token is not None
+
+    def fail_marker_write(_: str, __: object) -> object:
+        raise OntologyManagementStoreError(operation="write")
+
+    monkeypatch.setattr(store, "write_import_session", fail_marker_write)
+
+    assert_failure_preserves_draft(
+        tmp_path,
+        store,
+        lambda: service.confirm("evaluation", preview.token or "", expected_revision=0),
+        code="ontology_management_store_error",
+    )
+
+
+def test_draft_replace_failure_after_marker_burns_the_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, store, _ = import_service(tmp_path)
+    preview = service.preview(
+        "evaluation", expected_revision=0, uploads=(upload("accounts.tsv", TABLE_A),)
+    )
+    assert preview.token is not None
+    original_atomic_write = store._atomic_write
+
+    def fail_draft_replace(path: Path, content: bytes) -> None:
+        if path.name == "draft.json":
+            raise OSError("draft replacement failed")
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(store, "_atomic_write", fail_draft_replace)
+
+    assert_failure_preserves_draft(
+        tmp_path,
+        store,
+        lambda: service.confirm("evaluation", preview.token or "", expected_revision=0),
+        code="ontology_management_store_error",
+    )
+    assert store.read_import_session(preview.token).committed_revision == 1
+    assert_failure_preserves_draft(
+        tmp_path,
+        store,
+        lambda: service.confirm("evaluation", preview.token or "", expected_revision=0),
+        code="import_token_used",
     )
 
 
