@@ -78,7 +78,9 @@ class TabularMetadataDraft(FrozenModel):
     fields: tuple[FieldMetadata, ...]
     object_names: tuple[str, ...] = ()
     diagnostics: tuple[ImportDiagnostic, ...] = ()
+    document_diagnostics: tuple[ImportDiagnostic, ...] = ()
     temporal_policy: TemporalPolicyOverride | None = None
+    source_name: str = ""
 
 
 class FieldOverride(FrozenModel):
@@ -194,6 +196,100 @@ def parse_tabular_metadata(text: str) -> TabularMetadataDraft:
         fields=tuple(fields),
         object_names=tuple(sorted(object_names, key=lambda value: (value.casefold(), value))),
         diagnostics=tuple(diagnostics),
+    )
+
+
+def parse_tabular_objects(text: str, source_name: str) -> tuple[TabularMetadataDraft, ...]:
+    """Parse a TSV document into independently analyzable object drafts."""
+    reader = csv.DictReader(io.StringIO(text), delimiter="\t")
+    required_headers = {"对象英文名称", "属性英文名"}
+    missing_headers = sorted(required_headers - set(reader.fieldnames or ()))
+    if missing_headers:
+        raise OntologyImportError(
+            "元数据缺少必需列",
+            details={"columns": missing_headers},
+        )
+
+    grouped_rows: dict[str, list[tuple[int, dict[str, str | None]]]] = {}
+    object_names: dict[str, list[str]] = {}
+    document_diagnostics: list[ImportDiagnostic] = []
+    for line, row in enumerate(reader, start=2):
+        table_name = _clean(row, "对象英文名称")
+        if table_name is None:
+            document_diagnostics.append(
+                ImportDiagnostic(
+                    code="missing_table_name",
+                    severity=DiagnosticSeverity.ERROR,
+                    message="对象物理名称为空",
+                    location=SourceLocation(line=line, column="对象英文名称"),
+                )
+            )
+            continue
+        key = table_name.casefold()
+        grouped_rows.setdefault(key, []).append((line, row))
+        names = object_names.setdefault(key, [])
+        if table_name not in names:
+            names.append(table_name)
+
+    drafts: list[TabularMetadataDraft] = []
+    for key, rows in grouped_rows.items():
+        first_name = object_names[key][0]
+        fields: list[FieldMetadata] = []
+        diagnostics: list[ImportDiagnostic] = []
+        table_label: str | None = None
+        table_description: str | None = None
+        table_status: str | None = None
+        for line, row in rows:
+            field_name = _clean(row, "属性英文名")
+            if field_name is None:
+                diagnostics.append(
+                    ImportDiagnostic(
+                        code="missing_field_name",
+                        severity=DiagnosticSeverity.ERROR,
+                        message="属性物理名称为空",
+                        location=SourceLocation(line=line, column="属性英文名"),
+                    )
+                )
+                continue
+            table_label = table_label or _clean(row, "对象中文名称")
+            table_description = table_description or _clean(row, "对象描述")
+            table_status = table_status or _clean(row, "状态")
+            fields.append(
+                FieldMetadata(
+                    physical_name=field_name,
+                    label=_clean(row, "属性中文名"),
+                    source_type=_clean(row, "属性类型"),
+                    description=_clean(row, "属性描述"),
+                    primary_key=_is_true(_clean(row, "是否主键")),
+                    title=_is_true(_clean(row, "是否标题")),
+                    location=SourceLocation(line=line, column="属性英文名"),
+                )
+            )
+        drafts.append(
+            TabularMetadataDraft(
+                table=TableMetadata(
+                    physical_name=first_name,
+                    label=table_label,
+                    description=table_description,
+                    enabled=table_status is None or _is_true(table_status),
+                ),
+                fields=tuple(fields),
+                object_names=tuple(object_names[key]),
+                diagnostics=tuple(diagnostics),
+                source_name=source_name,
+            )
+        )
+    if not drafts:
+        raise OntologyImportError("未解析到有效对象元数据")
+    if document_diagnostics:
+        drafts[0] = drafts[0].model_copy(
+            update={"document_diagnostics": tuple(document_diagnostics)}
+        )
+    return tuple(
+        sorted(
+            drafts,
+            key=lambda item: (item.table.physical_name.casefold(), item.table.physical_name),
+        )
     )
 
 
