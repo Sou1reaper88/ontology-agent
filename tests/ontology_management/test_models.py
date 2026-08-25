@@ -186,6 +186,7 @@ def test_supporting_management_dtos_are_frozen_and_validate_bounds() -> None:
 
     assert disposition.status == "resolved"
     assert session.expected_revision == 0
+    assert session.committed_revision is None
     assert version.version == "1.0.0"
     with pytest.raises(ValidationError):
         UploadLimits(max_upload_bytes=0, max_xlsx_uncompressed_bytes=1)

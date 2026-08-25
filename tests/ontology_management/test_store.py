@@ -190,7 +190,7 @@ def test_concurrent_writers_allow_exactly_one_commit_per_revision(tmp_path: Path
     assert store.read("evaluation").revision == 1
 
 
-def test_import_session_is_addressed_by_hash_and_consumed_without_token_persistence(
+def test_import_session_is_addressed_by_hash_and_marked_consumed_without_token_persistence(
     tmp_path: Path,
 ) -> None:
     store = FileDraftStore(tmp_path)
@@ -204,5 +204,9 @@ def test_import_session_is_addressed_by_hash_and_consumed_without_token_persiste
     assert session_path.is_file()
     assert token.encode("utf-8") not in session_path.read_bytes()
     assert store.read_import_session(token) == session
-    assert store.consume_import_session(token) == session
-    assert not session_path.exists()
+    consumed = store.consume_import_session(token)
+
+    assert consumed.consumed_at is not None
+    assert session_path.is_file()
+    assert token.encode("utf-8") not in session_path.read_bytes()
+    assert store.read_import_session(token) == consumed

@@ -129,6 +129,7 @@ class ImportSession(FrozenModel):
     diagnostics: tuple[DraftDiagnostic, ...] = ()
     created_at: datetime
     expires_at: datetime
+    committed_revision: int | None = Field(default=None, ge=0)
     consumed_at: datetime | None = None
 
     @model_validator(mode="after")

@@ -176,17 +176,17 @@ class FileDraftStore:
             raise OntologyManagementStoreError(operation="read") from error
 
     def consume_import_session(self, token: str) -> ImportSession:
-        """Return and delete a session so a bearer token is single-use."""
+        """Mark a session consumed while retaining a replay-safe tombstone."""
         token_hash = _token_hash(token)
         try:
             with self._lock_for(f"import:{token_hash}"):
                 session = self.read_import_session(token)
-                path = self._import_session_path(token_hash)
-                try:
-                    path.unlink()
-                except FileNotFoundError as error:
-                    raise ImportSessionNotFoundError() from error
-                return session
+                consumed = session.model_copy(update={"consumed_at": datetime.now(UTC)})
+                self._atomic_write(
+                    self._import_session_path(token_hash),
+                    (consumed.model_dump_json(indent=2, exclude_none=True) + "\n").encode("utf-8"),
+                )
+                return consumed
         except OntologyError:
             raise
         except OSError as error:
