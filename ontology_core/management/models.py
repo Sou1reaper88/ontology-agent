@@ -202,7 +202,7 @@ class WorkspaceDraft(FrozenModel):
                 "关系目标",
             )
 
-        active_policy_objects: set[str] = set()
+        policy_objects: set[str] = set()
         for policy in self.temporal_policies:
             _require_owned_field(
                 policy.object_id,
@@ -211,10 +211,9 @@ class WorkspaceDraft(FrozenModel):
                 fields_by_id,
                 "时间策略",
             )
-            if policy.status == "active":
-                if policy.object_id in active_policy_objects:
-                    raise ValueError(f"对象只能有一个启用的时间策略: {policy.object_id}")
-                active_policy_objects.add(policy.object_id)
+            if policy.object_id in policy_objects:
+                raise ValueError("对象只能有一个时间策略")
+            policy_objects.add(policy.object_id)
         return self
 
     def canonical_json(self) -> str:

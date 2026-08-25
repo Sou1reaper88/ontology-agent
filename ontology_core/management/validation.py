@@ -266,15 +266,13 @@ class DraftValidator:
     ) -> list[DraftDiagnostic]:
         diagnostics: list[DraftDiagnostic] = []
         object_ids = {item.id for item in draft.objects}
-        active_counts = Counter(
-            policy.object_id for policy in draft.temporal_policies if policy.status == "active"
-        )
-        for object_id, count in active_counts.items():
+        policy_counts = Counter(policy.object_id for policy in draft.temporal_policies)
+        for object_id, count in policy_counts.items():
             if count > 1:
                 diagnostics.append(
                     _diagnostic(
-                        "conflicting_active_temporal_policies",
-                        "对象存在多个启用的时间策略",
+                        "multiple_temporal_policies_for_object",
+                        "对象存在多个时间策略",
                         "error",
                         (object_id,),
                     )

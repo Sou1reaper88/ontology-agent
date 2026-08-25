@@ -302,6 +302,51 @@ def test_builder_blocks_normalized_short_name_collisions_before_target_write(
     assert not target.exists()
 
 
+@pytest.mark.parametrize(
+    "statuses",
+    (("active", "inactive"), ("inactive", "inactive")),
+)
+def test_builder_blocks_multiple_temporal_policies_per_object_before_target_write(
+    tmp_path: Path,
+    statuses: tuple[str, str],
+) -> None:
+    draft = _workspace()
+    order_policy = next(
+        policy for policy in draft.temporal_policies if policy.object_id == "object/order_d"
+    )
+    other_policies = tuple(
+        policy for policy in draft.temporal_policies if policy.object_id != order_policy.object_id
+    )
+    duplicates = tuple(
+        order_policy.model_copy(update={"status": status, "priority": 100 + index})
+        for index, status in enumerate(statuses)
+    )
+    draft = draft.model_copy(update={"temporal_policies": (*other_policies, *duplicates)})
+    validator = DraftValidator()
+
+    diagnostics = [
+        item
+        for item in validator.validate(draft)
+        if item.code == "multiple_temporal_policies_for_object"
+    ]
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.severity == "error"
+    assert diagnostic.related_ids == (order_policy.object_id,)
+    assert diagnostic.id == stable_diagnostic_id(
+        "multiple_temporal_policies_for_object", (order_policy.object_id,)
+    )
+    with pytest.raises(DraftNotPublishableError) as caught:
+        validator.assert_publishable(draft)
+    assert diagnostic.id in {item.id for item in caught.value.diagnostics}
+
+    target = tmp_path / "duplicate-temporal-policy"
+    with pytest.raises(DraftNotPublishableError):
+        PackageBuilder(validator).build(draft, target, "1.0.0")
+    assert not target.exists()
+
+
 def test_builder_refuses_non_empty_target(tmp_path: Path) -> None:
     target = tmp_path / "occupied"
     target.mkdir()

@@ -131,7 +131,13 @@ def test_workspace_draft_requires_relation_references_to_owned_existing_fields()
         )
 
 
-def test_workspace_draft_allows_one_active_temporal_policy_per_object() -> None:
+@pytest.mark.parametrize(
+    "statuses",
+    (("active", "inactive"), ("inactive", "inactive")),
+)
+def test_workspace_draft_allows_at_most_one_temporal_policy_per_object(
+    statuses: tuple[str, str],
+) -> None:
     object_ = synthetic_object("ORDERS")
     policy = DraftTemporalPolicy(
         object_id=object_.id,
@@ -144,9 +150,36 @@ def test_workspace_draft_allows_one_active_temporal_policy_per_object() -> None:
         WorkspaceDraft(
             **{
                 **synthetic_workspace(objects=(object_,)).model_dump(),
+                "temporal_policies": tuple(
+                    policy.model_copy(update={"status": status, "priority": 100 + index})
+                    for index, status in enumerate(statuses)
+                ),
+            },
+        )
+
+
+def test_duplicate_temporal_policy_model_error_does_not_expose_object_id() -> None:
+    object_ = synthetic_object("ORDERS").model_copy(
+        update={"id": "object/fictional-secret-identifier"}
+    )
+    policy = DraftTemporalPolicy(
+        object_id=object_.id,
+        partition_field_id=object_.fields[0].id,
+        grain=TemporalGrain.DAY,
+        default_strategy=TemporalDefaultStrategy.T_MINUS_2,
+        status="inactive",
+    )
+
+    with pytest.raises(ValidationError) as caught:
+        WorkspaceDraft(
+            **{
+                **synthetic_workspace(objects=(object_,)).model_dump(),
                 "temporal_policies": (policy, policy.model_copy(update={"priority": 200})),
             },
         )
+
+    error = caught.value.errors(include_input=False)[0]
+    assert "fictional-secret" not in error["msg"]
 
 
 def test_temporal_policy_requires_matching_grain_and_default_strategy() -> None:
