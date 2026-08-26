@@ -40,7 +40,7 @@ class DraftEditReferenceConflictError(OntologyError):
         super().__init__("草稿元素仍被引用，不能删除")
 
 
-class DraftEditPublishedIdentifierError(OntologyError):
+class DraftEditPublishedIdentifierError(OntologyError, ValueError):
     """Raised when ordinary editing targets a published stable identifier."""
 
     code = "draft_edit_published_identifier"
@@ -188,7 +188,7 @@ class DraftEditor:
         def mutate(draft: WorkspaceDraft) -> WorkspaceDraft:
             _object_by_id(draft, object_id)
             if object_id in self._published_object_ids:
-                raise ValueError("已发布对象不能通过普通编辑删除")
+                raise DraftEditPublishedIdentifierError()
             if any(
                 object_id in {item.source_object_id, item.target_object_id}
                 for item in draft.relations

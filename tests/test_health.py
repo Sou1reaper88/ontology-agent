@@ -18,4 +18,7 @@ def test_health() -> None:
 def test_ready() -> None:
     resp = client.get("/ready")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    payload = resp.json()
+    assert payload["database"] == "ok"
+    assert payload["ontology"] in {"ok", "degraded"}
+    assert payload["status"] == ("ok" if payload["ontology"] == "ok" else "degraded")

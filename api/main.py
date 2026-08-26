@@ -16,6 +16,7 @@ from api.routes import (
     conversation,
     execute,
     ontology,
+    ontology_packages,
     permissions,
     roles,
     sql,
@@ -43,6 +44,7 @@ app.include_router(execute.router)
 app.include_router(conversation.router)
 app.include_router(sql.router)
 app.include_router(ontology.router)
+app.include_router(ontology_packages.router)
 app.include_router(audit.router)
 
 
@@ -54,14 +56,30 @@ async def health() -> dict[str, str]:
 
 @app.get("/ready", tags=["monitor"])
 async def ready() -> dict[str, str]:
-    """就绪探针：检查数据库连通性。"""
+    """就绪探针：数据库与已发布本体的可用性独立报告。"""
+    database = "ok"
     try:
         from models.base import engine
 
         with engine.connect():
-            return {"status": "ok", "env": settings.env, "database": "ok"}
+            pass
     except Exception:
-        return {"status": "degraded", "env": settings.env, "database": "unavailable"}
+        database = "unavailable"
+    ontology = "ok"
+    try:
+        from api.routes.ontology_packages import get_management_service
+
+        health = get_management_service().recover(settings.ontology.management_workspace)
+        if health.status != "ok":
+            ontology = "degraded"
+    except Exception:
+        ontology = "degraded"
+    return {
+        "status": "ok" if database == "ok" and ontology == "ok" else "degraded",
+        "env": settings.env,
+        "database": database,
+        "ontology": ontology,
+    }
 
 
 @app.get("/metrics", include_in_schema=False)
