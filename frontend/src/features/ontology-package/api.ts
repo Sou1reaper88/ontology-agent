@@ -69,7 +69,7 @@ interface ApiOverview {
   diagnostics: ApiDiagnostic[];
 }
 
-interface ApiImportPreview {
+export interface ImportPreviewResponse {
   status: ImportPreview["status"];
   token: string | null;
   object_count: number;
@@ -158,14 +158,21 @@ export async function previewImport(
   files: Blob[],
   expectedRevision: number
 ): Promise<ImportPreview> {
+  const response = await client.post<ApiEnvelope<ImportPreviewResponse>>(
+    `${workspacePath(workspaceId)}/imports/preview`,
+    importPreviewFormData(files, expectedRevision)
+  );
+  return mapImportPreview(response.data.data);
+}
+
+export function importPreviewFormData(files: Blob[], expectedRevision: number): FormData {
   const body = new FormData();
   body.append("expected_revision", String(expectedRevision));
   files.forEach((file) => body.append("files", file));
-  const response = await client.post<ApiEnvelope<ApiImportPreview>>(
-    `${workspacePath(workspaceId)}/imports/preview`,
-    body
-  );
-  const preview = response.data.data;
+  return body;
+}
+
+export function mapImportPreview(preview: ImportPreviewResponse): ImportPreview {
   return {
     status: preview.status,
     token: preview.token,

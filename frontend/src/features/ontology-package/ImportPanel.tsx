@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UploadOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, List, Space, Tag, Upload, message } from "antd";
 import type { UploadFile, UploadProps } from "antd";
@@ -8,6 +8,10 @@ import {
   isDraftRevisionConflict,
   previewImport,
 } from "./api";
+import {
+  installPreviewForRevision,
+  previewForCurrentRevision,
+} from "./importPreviewState";
 import type { ImportPreview } from "./types";
 
 interface ImportPanelProps {
@@ -30,9 +34,19 @@ export default function ImportPanel({
   onConflict,
 }: ImportPanelProps) {
   const [files, setFiles] = useState<UploadFile[]>([]);
-  const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [previewState, setPreviewState] = useState<ReturnType<typeof installPreviewForRevision>>(null);
   const [previewing, setPreviewing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const currentRevisionRef = useRef(revision);
+
+  if (currentRevisionRef.current !== revision) currentRevisionRef.current = revision;
+
+  useEffect(() => {
+    setPreviewState((current) => previewForCurrentRevision(current, revision));
+    setConfirming(false);
+  }, [revision]);
+
+  const preview = previewForCurrentRevision(previewState, revision);
 
   const uploadProps: UploadProps = {
     accept: ".tsv,.txt,.xlsx",
@@ -41,7 +55,7 @@ export default function ImportPanel({
     multiple: true,
     onChange: ({ fileList }) => {
       setFiles(fileList);
-      setPreview(null);
+      setPreviewState(null);
     },
   };
 
@@ -57,11 +71,19 @@ export default function ImportPanel({
       message.warning("请先选择要预览的文件");
       return;
     }
+    const sourceRevision = currentRevisionRef.current;
     setPreviewing(true);
     try {
-      setPreview(await previewImport(workspaceId, uploads, revision));
+      const response = await previewImport(workspaceId, uploads, sourceRevision);
+      const revisionBoundPreview = installPreviewForRevision(
+        response,
+        sourceRevision,
+        currentRevisionRef.current
+      );
+      if (revisionBoundPreview) setPreviewState(revisionBoundPreview);
     } catch (error) {
       if (isDraftRevisionConflict(error)) {
+        setPreviewState(null);
         await onConflict();
       } else {
         message.error(apiErrorMessage(error, "导入预览失败"));
@@ -72,16 +94,19 @@ export default function ImportPanel({
   };
 
   const handleConfirm = async () => {
-    if (!preview?.token || preview.status !== "ready") return;
+    if (!preview?.preview.token || preview.preview.status !== "ready") return;
+    const expectedRevision = currentRevisionRef.current;
+    if (preview.sourceRevision !== expectedRevision) return;
     setConfirming(true);
     try {
-      await confirmImport(workspaceId, preview.token, revision);
+      await confirmImport(workspaceId, preview.preview.token, expectedRevision);
       message.success("已导入到草稿");
-      setPreview(null);
+      setPreviewState(null);
       setFiles([]);
       await onChanged();
     } catch (error) {
       if (isDraftRevisionConflict(error)) {
+        setPreviewState(null);
         await onConflict();
       } else {
         message.error(apiErrorMessage(error, "确认导入失败"));
@@ -107,16 +132,16 @@ export default function ImportPanel({
           预览导入
         </Button>
         {preview ? (
-          <Card size="small" title={preview.status === "ready" ? "预览就绪" : "预览被阻止"}>
+          <Card size="small" title={preview.preview.status === "ready" ? "预览就绪" : "预览被阻止"}>
             <Space direction="vertical" style={{ width: "100%" }}>
               <div>已选择 {files.length} 个文件</div>
               <div>
-                将导入 {preview.objectCount} 个对象、{preview.fieldCount} 个字段
+                将导入 {preview.preview.objectCount} 个对象、{preview.preview.fieldCount} 个字段
               </div>
-              {preview.diagnostics.length ? (
+              {preview.preview.diagnostics.length ? (
                 <List
                   size="small"
-                  dataSource={preview.diagnostics}
+                  dataSource={preview.preview.diagnostics}
                   renderItem={(item) => (
                     <List.Item>
                       <Tag color={severityColor[item.severity]}>{item.severity}</Tag>
@@ -125,7 +150,7 @@ export default function ImportPanel({
                   )}
                 />
               ) : null}
-              {preview.status === "ready" && preview.token ? (
+              {preview.preview.status === "ready" && preview.preview.token ? (
                 <Button type="primary" onClick={handleConfirm} loading={confirming}>
                   确认导入到草稿
                 </Button>
