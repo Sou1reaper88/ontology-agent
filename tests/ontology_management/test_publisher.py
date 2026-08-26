@@ -143,6 +143,38 @@ def test_publish_commits_six_immutable_files_and_hot_installs_stable_ids(
     assert runtime.health().status == "ok"
 
 
+def test_publish_records_validated_package_counts_and_content_digest(tmp_path: Path) -> None:
+    publisher, _ = _publisher(tmp_path)
+
+    summary = publisher.publish("evaluation", "1.0.0", "first", 1, "tester")
+
+    assert summary.counts is not None
+    assert summary.counts.concepts == 1
+    assert summary.counts.properties == 1
+    assert summary.counts.relations == 0
+    assert summary.counts.temporal_policies == 0
+    assert summary.content_digest is not None
+    assert len(summary.content_digest) == 64
+    assert set(summary.content_digest) <= set("0123456789abcdef")
+    persisted = json.loads(_version_metadata_path(tmp_path, "1.0.0").read_text(encoding="utf-8"))
+    assert persisted["counts"] == summary.counts.model_dump(mode="json")
+    assert persisted["content_digest"] == summary.content_digest
+
+
+def test_legacy_version_metadata_without_counts_or_digest_remains_readable(tmp_path: Path) -> None:
+    publisher, _ = _published_v1(tmp_path)
+    path = _version_metadata_path(tmp_path, "1.0.0")
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata.pop("counts", None)
+    metadata.pop("content_digest", None)
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    version = publisher.list_versions("evaluation")[0]
+
+    assert version.counts is None
+    assert version.content_digest is None
+
+
 def test_version_reuse_is_rejected_before_build(tmp_path: Path, monkeypatch) -> None:
     publisher, runtime = _published_v1(tmp_path)
     old_sha = runtime.snapshot().info.sha256

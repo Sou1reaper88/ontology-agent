@@ -25,6 +25,7 @@ from ontology_core.management.paths import safe_child
 from ontology_core.management.store import DraftRevisionConflict, FileDraftStore
 from ontology_core.management.validation import DraftNotPublishableError
 from ontology_core.repository import OntologyRepository, OntologySnapshot
+from ontology_core.semantic_models import SemanticCounts
 
 
 class OntologyPublishError(OntologyError):
@@ -109,6 +110,8 @@ class PackagePublisher:
                     actor=actor,
                     release_notes=release_notes,
                     revision=draft.revision,
+                    counts=_snapshot_counts(candidate),
+                    content_digest=candidate.info.sha256,
                     active=True,
                 )
                 self._write_version_summary(workspace_id, summary)
@@ -146,6 +149,8 @@ class PackagePublisher:
                     actor=actor,
                     release_notes=reason,
                     revision=original.revision,
+                    counts=original.counts,
+                    content_digest=original.content_digest,
                     active=True,
                 )
                 with _coordination_lock:
@@ -277,6 +282,19 @@ class PackagePublisher:
         key = (str(self._root), workspace_id)
         with _workspace_locks_guard:
             return _workspace_locks.setdefault(key, threading.RLock())
+
+
+def _snapshot_counts(snapshot: OntologySnapshot) -> SemanticCounts:
+    catalog = snapshot.catalog
+    return SemanticCounts(
+        concepts=len(catalog.concepts),
+        properties=len(catalog.properties),
+        relations=len(catalog.relations),
+        rules=len(catalog.rules),
+        data_sources=len(catalog.data_sources),
+        mappings=len(catalog.mappings),
+        temporal_policies=len(catalog.temporal_policies),
+    )
 
 
 def _snapshot_at(snapshot: OntologySnapshot, target: Path) -> OntologySnapshot:

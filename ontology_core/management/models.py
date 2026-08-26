@@ -8,7 +8,7 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from ontology_core.models import FrozenModel
-from ontology_core.semantic_models import TemporalDefaultStrategy, TemporalGrain
+from ontology_core.semantic_models import SemanticCounts, TemporalDefaultStrategy, TemporalGrain
 
 
 class DraftDataSource(FrozenModel):
@@ -147,6 +147,8 @@ class VersionSummary(FrozenModel):
     actor: str = Field(min_length=1)
     release_notes: str = ""
     revision: int | None = Field(default=None, ge=0)
+    counts: SemanticCounts | None = None
+    content_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     active: bool = False
 
 

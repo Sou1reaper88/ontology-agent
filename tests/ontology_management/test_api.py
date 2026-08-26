@@ -194,6 +194,13 @@ def test_management_api_composes_existing_services_without_route_domain_logic(
     )
     assert published.status_code == 200, published.text
     assert published.json()["data"]["version"] == "1.0.0"
+    published_summary = published.json()["data"]
+    assert published_summary["counts"]["concepts"] == 2
+    assert published_summary["counts"]["properties"] == 2
+    assert published_summary["counts"]["relations"] == 1
+    assert published_summary["counts"]["temporal_policies"] == 1
+    assert len(published_summary["content_digest"]) == 64
+    assert set(published_summary["content_digest"]) <= set("0123456789abcdef")
 
     active = client.get("/ontology-packages/active")
     assert active.status_code == 200, active.text
