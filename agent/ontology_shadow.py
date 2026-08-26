@@ -14,6 +14,7 @@ from ontology_core.errors import (
     NoMatchingConceptError,
     OntologyCompileError,
     OntologyError,
+    PackageNotFoundError,
     TemporalIntentError,
     UnsupportedQueryPlanError,
 )
@@ -48,6 +49,14 @@ class ShadowPackage(FrozenModel):
     package_id: str
     version: str
     sha256: str
+
+
+class RuntimeHealth(FrozenModel):
+    status: Literal["ok", "degraded"]
+    package_id: str | None = None
+    version: str | None = None
+    sha256: str | None = None
+    reason: str | None = None
 
 
 class TemporalEvidence(FrozenModel):
@@ -86,18 +95,50 @@ class _SnapshotRuntime(Protocol):
 
 
 class OntologyRuntime:
-    def __init__(self, package_path: str | Path) -> None:
-        self._package_path = Path(package_path)
+    def __init__(self, initial_package_path: str | Path | None = None) -> None:
         self._lock = threading.RLock()
-        self._snapshot: OntologySnapshot | None = None
+        self._snapshot = self._load_explicit(initial_package_path) if initial_package_path else None
+        self._degraded_reason = None if self._snapshot is not None else "not_loaded"
+
+    @staticmethod
+    def _load_explicit(package_path: str | Path) -> OntologySnapshot:
+        repository = OntologyRepository()
+        repository.publish(package_path)
+        return repository.current()
+
+    def install(self, snapshot: OntologySnapshot) -> None:
+        if not isinstance(snapshot, OntologySnapshot):
+            raise TypeError("snapshot must be OntologySnapshot")
+        with self._lock:
+            self._snapshot = snapshot
+
+    def _mark_degraded(self, reason: str) -> None:
+        with self._lock:
+            self._snapshot = None
+            self._degraded_reason = reason
 
     def snapshot(self) -> OntologySnapshot:
         with self._lock:
             if self._snapshot is None:
-                repository = OntologyRepository()
-                repository.publish(self._package_path)
-                self._snapshot = repository.current()
+                raise PackageNotFoundError("当前没有有效本体快照")
             return self._snapshot
+
+    def health(self) -> RuntimeHealth:
+        with self._lock:
+            if self._snapshot is None:
+                return RuntimeHealth(status="degraded", reason=self._degraded_reason)
+            return RuntimeHealth(
+                status="ok",
+                package_id=self._snapshot.info.package_id,
+                version=self._snapshot.info.version,
+                sha256=self._snapshot.info.sha256,
+            )
+
+
+@lru_cache(maxsize=1)
+def get_ontology_runtime() -> OntologyRuntime:
+    package_path = settings.ontology.package_path.strip()
+    return OntologyRuntime(package_path or None)
 
 
 def _normalize_sql(value: str | None) -> str:
@@ -255,8 +296,7 @@ class OntologyShadowService:
 
 @lru_cache(maxsize=8)
 def _configured_service(package_path: str, enabled: bool) -> OntologyShadowService:
-    runtime = OntologyRuntime(package_path) if package_path.strip() else None
-    return OntologyShadowService(runtime=runtime, enabled=enabled)
+    return OntologyShadowService(runtime=get_ontology_runtime(), enabled=enabled)
 
 
 def get_ontology_shadow_service() -> OntologyShadowService:

@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.ontology_shadow import OntologyRuntime, OntologyShadowService
+import pytest
+
+from agent.ontology_shadow import (
+    OntologyRuntime,
+    OntologyShadowService,
+    _configured_service,
+    get_ontology_runtime,
+    get_ontology_shadow_service,
+)
 from ontology_core.models import PackageInfo
 from ontology_core.repository import OntologySnapshot
 from ontology_core.semantic_models import (
@@ -306,3 +314,31 @@ def test_runtime_publishes_an_external_package() -> None:
 
     assert snapshot.info.package_id == "example.neutral"
     assert OntologyRuntime(valid_package_dir).snapshot().info.sha256 == snapshot.info.sha256
+
+
+def test_runtime_install_is_prevalidated_assignment_and_reports_health() -> None:
+    runtime = OntologyRuntime()
+
+    assert runtime.health().status == "degraded"
+    with pytest.raises(TypeError, match="snapshot must be OntologySnapshot"):
+        runtime.install(object())  # type: ignore[arg-type]
+
+    snapshot = _snapshot()
+    runtime.install(snapshot)
+
+    assert runtime.snapshot() is snapshot
+    assert runtime.health().status == "ok"
+    assert runtime.health().sha256 == snapshot.info.sha256
+
+
+def test_shadow_service_uses_the_process_wide_runtime(monkeypatch) -> None:
+    get_ontology_runtime.cache_clear()
+    _configured_service.cache_clear()
+    monkeypatch.setattr("agent.ontology_shadow.settings.ontology.package_path", "")
+
+    runtime = get_ontology_runtime()
+    service = get_ontology_shadow_service()
+
+    assert service._runtime is runtime
+    _configured_service.cache_clear()
+    get_ontology_runtime.cache_clear()
