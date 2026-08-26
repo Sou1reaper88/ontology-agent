@@ -87,7 +87,7 @@ class PackagePublisher:
         with self._workspace_lock(workspace_id):
             versions_dir = self._versions_dir(workspace_id)
             target = safe_child(versions_dir, version)
-            if target.exists():
+            if self._version_is_reserved(workspace_id, version, target):
                 raise VersionAlreadyExistsError()
 
             draft = self._store.read(workspace_id)
@@ -163,8 +163,8 @@ class PackagePublisher:
         with self._workspace_lock(workspace_id):
             try:
                 active = self.active_version(workspace_id)
-                pointer_version = active.version
                 target = safe_child(self._versions_dir(workspace_id), active.version)
+                pointer_version = active.version
                 if not target.is_dir():
                     raise PublishedVersionNotFoundError()
                 candidate = _snapshot_at(self._load_candidate(target), target)
@@ -213,6 +213,14 @@ class PackagePublisher:
         repository.publish(path)
         return repository.current()
 
+    def _version_is_reserved(self, workspace_id: str, version: str, target: Path) -> bool:
+        if target.exists() or self._version_metadata_path(workspace_id, version).exists():
+            return True
+        try:
+            return self.active_version(workspace_id).version == version
+        except PublishedVersionNotFoundError:
+            return False
+
     @staticmethod
     def _commit_version(staging: Path, target: Path) -> None:
         staging.rename(target)
@@ -221,19 +229,11 @@ class PackagePublisher:
         self._atomic_json_write(self._active_pointer_path(workspace_id), summary)
 
     def _write_version_summary(self, workspace_id: str, summary: VersionSummary) -> None:
-        path = safe_child(
-            self._workspace_root(workspace_id),
-            "version-metadata",
-            f"{summary.version}.json",
-        )
+        path = self._version_metadata_path(workspace_id, summary.version)
         self._atomic_json_write(path, summary.model_copy(update={"active": False}))
 
     def _read_version_summary(self, workspace_id: str, version: str) -> VersionSummary:
-        path = safe_child(
-            self._workspace_root(workspace_id),
-            "version-metadata",
-            f"{version}.json",
-        )
+        path = self._version_metadata_path(workspace_id, version)
         try:
             return VersionSummary.model_validate_json(path.read_bytes())
         except FileNotFoundError as error:
@@ -265,6 +265,13 @@ class PackagePublisher:
 
     def _active_pointer_path(self, workspace_id: str) -> Path:
         return safe_child(self._workspace_root(workspace_id), "active-version.json")
+
+    def _version_metadata_path(self, workspace_id: str, version: str) -> Path:
+        return safe_child(
+            self._workspace_root(workspace_id),
+            "version-metadata",
+            f"{version}.json",
+        )
 
     def _workspace_lock(self, workspace_id: str) -> threading.RLock:
         key = (str(self._root), workspace_id)

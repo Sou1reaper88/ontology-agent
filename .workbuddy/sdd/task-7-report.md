@@ -199,3 +199,140 @@ privacy, or scope issue was found.
 - `tests/ontology_management/test_publisher.py` (new)
 - `tests/test_ontology_shadow.py`
 - `.workbuddy/sdd/task-7-report.md` (new)
+
+---
+
+## Important Review Fixes (2026-08-26)
+
+Base commit: `971095646468843120c898301196ce9494a535ea`
+
+### Scope
+
+Addressed only the two verified Important findings:
+
+1. Unsafe active-pointer version text was retained before safe path validation and could be
+   returned through `RuntimeHealth.version`.
+2. Version reuse was reserved only by `versions/<version>` directory presence, allowing a deleted
+   or corrupted package directory to reopen a version identifier despite durable publication
+   metadata or the exact active pointer.
+
+The reviewer Minors concerning `_configured_service` cache-key semantics and crash-after-rename
+orphan listing remain intentionally deferred to the final review ledger. No code for either Minor
+was changed.
+
+### Root Cause and Fix 1: Unsafe Recovery Pointer Disclosure
+
+`recover()` assigned `active.version` to `pointer_version` before passing it through `safe_child()`.
+When `safe_child()` rejected traversal or an absolute path, degraded health correctly blocked
+runtime installation but copied the unsafe input into the health response.
+
+Focused tests now cover traversal text, Windows absolute text, and malformed pointer JSON while a
+valid older version remains present. The implementation validates the pointer version as a safe
+single child segment first and retains it only afterward. Unsafe or malformed pointers therefore
+return degraded health with `version=None`; a valid safe pointer whose exact target is missing still
+returns that safe version for diagnostics. Recovery never scans or installs the older valid version.
+
+RED command:
+
+```powershell
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m pytest tests/ontology_management/test_publisher.py -k 'recover and (unsafe or malformed)' -q
+```
+
+RED output:
+
+```text
+FF.                                                                      [100%]
+FAILED ...test_recover_does_not_expose_unsafe_pointer_version[../synthetic-version]
+FAILED ...test_recover_does_not_expose_unsafe_pointer_version[C:\synthetic\unsafe]
+2 failed, 1 passed, 9 deselected in 2.91s
+```
+
+The two unsafe values were reproduced in `RuntimeHealth.version`; malformed JSON already produced
+the required `None` and was retained as explicit regression coverage.
+
+GREEN command and output:
+
+```powershell
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m pytest tests/ontology_management/test_publisher.py -k 'recover and (unsafe or malformed)' -q
+...                                                                      [100%]
+3 passed, 9 deselected in 2.65s
+```
+
+### Root Cause and Fix 2: Incomplete Durable Version Reservation
+
+`publish()` rejected reuse only when the final package directory existed. The metadata sidecar and
+valid exact active pointer are also durable evidence that publication consumed the version string,
+but neither participated in the reservation check.
+
+Two focused tests publish version `1.0.0`, remove its package directory, and independently retain
+only (a) publication metadata or (b) the valid exact active pointer. Both assert
+`VersionAlreadyExistsError`, no builder call, no recreated target, and no staging entry.
+
+RED command:
+
+```powershell
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m pytest tests/ontology_management/test_publisher.py -k 'reserves or reserved' -q
+```
+
+RED output:
+
+```text
+FF                                                                       [100%]
+FAILED ...test_version_metadata_reserves_version_after_package_directory_is_missing
+FAILED ...test_active_pointer_reserves_version_when_package_and_metadata_are_missing
+2 failed, 12 deselected in 2.44s
+```
+
+Both failures showed the builder was reached and its sentinel assertion was wrapped as
+`OntologyPublishError`.
+
+GREEN command and output:
+
+```powershell
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m pytest tests/ontology_management/test_publisher.py -k 'reserves or reserved' -q
+..                                                                       [100%]
+2 passed, 12 deselected in 1.32s
+```
+
+The final reservation predicate runs under the existing workspace lock and before draft read,
+staging-token generation, or filesystem creation. It checks only the existing final directory,
+the deterministic version-metadata path, and a valid exact active pointer; no recovery registry or
+new persistence mechanism was added.
+
+### Focused and Regression Verification
+
+Focused command and output:
+
+```powershell
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m pytest tests/ontology_management/test_publisher.py tests/test_ontology_shadow.py -q
+......................                                                   [100%]
+22 passed in 10.49s
+```
+
+Relevant regression command and output:
+
+```powershell
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m pytest tests/ontology_management tests/ontology_core tests/test_ontology_shadow.py -q
+523 passed, 1 skipped in 32.68s
+```
+
+Formatting commands and outputs:
+
+```powershell
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m ruff check ontology_core/management/publisher.py tests/ontology_management/test_publisher.py
+All checks passed!
+
+& 'D:\Projects\ontology-agent\.venv\Scripts\python.exe' -m black --check ontology_core/management/publisher.py tests/ontology_management/test_publisher.py
+All done! ✨ 🍰 ✨
+2 files would be left unchanged.
+```
+
+### Fix Self-Review
+
+- Unsafe pointer text is validated before retention and is absent from degraded health.
+- Valid safe missing-target pointers retain the exact version and still degrade without fallback.
+- Malformed pointers degrade with no version disclosure.
+- Final directory, durable metadata, and valid exact active pointer each reserve a version.
+- Reservation occurs before staging/target creation and before invoking the package builder.
+- No published package bytes, runtime installation ordering, stable object/field IDs, cache-key
+  behavior, or orphan-listing behavior changed.

@@ -85,6 +85,28 @@ def _version_dir(tmp_path: Path, version: str) -> Path:
     return tmp_path / "management" / "workspaces" / "evaluation" / "versions" / version
 
 
+def _active_pointer_path(tmp_path: Path) -> Path:
+    return tmp_path / "management" / "workspaces" / "evaluation" / "active-version.json"
+
+
+def _version_metadata_path(tmp_path: Path, version: str) -> Path:
+    return (
+        tmp_path
+        / "management"
+        / "workspaces"
+        / "evaluation"
+        / "version-metadata"
+        / f"{version}.json"
+    )
+
+
+def _remove_version_directory(tmp_path: Path, version: str) -> None:
+    target = _version_dir(tmp_path, version)
+    for item in target.iterdir():
+        item.unlink()
+    target.rmdir()
+
+
 def _directory_bytes(path: Path) -> dict[str, bytes]:
     return {
         item.relative_to(path).as_posix(): item.read_bytes()
@@ -135,6 +157,46 @@ def test_version_reuse_is_rejected_before_build(tmp_path: Path, monkeypatch) -> 
 
     assert runtime.snapshot().info.sha256 == old_sha
     assert publisher.active_version("evaluation").version == "1.0.0"
+
+
+def test_version_metadata_reserves_version_after_package_directory_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    publisher, _ = _published_v1(tmp_path)
+    _remove_version_directory(tmp_path, "1.0.0")
+    _active_pointer_path(tmp_path).unlink()
+
+    def unexpected_build(*args, **kwargs):
+        raise AssertionError("builder must not run for a metadata-reserved version")
+
+    monkeypatch.setattr(publisher._builder, "build", unexpected_build)
+
+    with pytest.raises(VersionAlreadyExistsError):
+        publisher.publish("evaluation", "1.0.0", "different bytes", 1, "tester")
+
+    assert not _version_dir(tmp_path, "1.0.0").exists()
+    assert _version_metadata_path(tmp_path, "1.0.0").is_file()
+    assert list(_version_dir(tmp_path, "1.0.0").parent.iterdir()) == []
+
+
+def test_active_pointer_reserves_version_when_package_and_metadata_are_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    publisher, _ = _published_v1(tmp_path)
+    _remove_version_directory(tmp_path, "1.0.0")
+    _version_metadata_path(tmp_path, "1.0.0").unlink()
+
+    def unexpected_build(*args, **kwargs):
+        raise AssertionError("builder must not run for an active-pointer-reserved version")
+
+    monkeypatch.setattr(publisher._builder, "build", unexpected_build)
+
+    with pytest.raises(VersionAlreadyExistsError):
+        publisher.publish("evaluation", "1.0.0", "different bytes", 1, "tester")
+
+    assert not _version_dir(tmp_path, "1.0.0").exists()
+    assert publisher.active_version("evaluation").version == "1.0.0"
+    assert list(_version_dir(tmp_path, "1.0.0").parent.iterdir()) == []
 
 
 @pytest.mark.parametrize(
@@ -242,7 +304,7 @@ def test_recover_loads_only_the_exact_active_pointer_target(tmp_path: Path) -> N
 
 def test_recover_degrades_for_missing_exact_target_without_fallback(tmp_path: Path) -> None:
     publisher, _ = _published_v1(tmp_path)
-    pointer_path = tmp_path / "management/workspaces/evaluation/active-version.json"
+    pointer_path = _active_pointer_path(tmp_path)
     pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
     pointer["version"] = "9.9.9"
     pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
@@ -257,5 +319,48 @@ def test_recover_degrades_for_missing_exact_target_without_fallback(tmp_path: Pa
 
     assert health.status == "degraded"
     assert health.version == "9.9.9"
+    with pytest.raises(PackageNotFoundError):
+        recovered_runtime.snapshot()
+
+
+@pytest.mark.parametrize("unsafe_version", ("../synthetic-version", "C:\\synthetic\\unsafe"))
+def test_recover_does_not_expose_unsafe_pointer_version(
+    tmp_path: Path, unsafe_version: str
+) -> None:
+    publisher, _ = _published_v1(tmp_path)
+    pointer_path = _active_pointer_path(tmp_path)
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["version"] = unsafe_version
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+    recovered_runtime = OntologyRuntime()
+    recovered = PackagePublisher(
+        publisher._store,
+        tmp_path / "management",
+        recovered_runtime,
+    )
+
+    health = recovered.recover("evaluation")
+
+    assert health.status == "degraded"
+    assert health.version is None
+    with pytest.raises(PackageNotFoundError):
+        recovered_runtime.snapshot()
+    assert _version_dir(tmp_path, "1.0.0").is_dir()
+
+
+def test_recover_degrades_for_malformed_pointer_without_exposing_version(tmp_path: Path) -> None:
+    publisher, _ = _published_v1(tmp_path)
+    _active_pointer_path(tmp_path).write_text('{"version":', encoding="utf-8")
+    recovered_runtime = OntologyRuntime()
+    recovered = PackagePublisher(
+        publisher._store,
+        tmp_path / "management",
+        recovered_runtime,
+    )
+
+    health = recovered.recover("evaluation")
+
+    assert health.status == "degraded"
+    assert health.version is None
     with pytest.raises(PackageNotFoundError):
         recovered_runtime.snapshot()
