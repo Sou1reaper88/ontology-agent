@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from api.routes import ontology
 from api.routes.ontology_packages import get_management_service
 from audit.middleware import _safe_audit_query
 from auth.jwt import create_access_token, get_current_user
@@ -110,7 +111,44 @@ def test_active_endpoint_is_authenticated_but_workspace_access_requires_maintain
 def test_missing_management_root_disables_writes_without_breaking_health(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    expected_legacy_body = [
+        {
+            "id": 41,
+            "source_table": "SYNTHETIC_SOURCE",
+            "source_field": "SOURCE_ID",
+            "target_table": "SYNTHETIC_TARGET",
+            "target_field": "TARGET_ID",
+            "relation_type": "many_to_one",
+            "relation_label": "Synthetic legacy relation",
+        }
+    ]
+
+    class LegacyCursor:
+        def execute(self, statement: str) -> None:
+            assert "FROM ontology_relations" in statement
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [
+                (
+                    41,
+                    "SYNTHETIC_SOURCE",
+                    "SOURCE_ID",
+                    "SYNTHETIC_TARGET",
+                    "TARGET_ID",
+                    "many_to_one",
+                    "Synthetic legacy relation",
+                )
+            ]
+
+    class LegacyConnection:
+        def cursor(self) -> LegacyCursor:
+            return LegacyCursor()
+
+        def close(self) -> None:
+            return None
+
     monkeypatch.setattr(settings.ontology, "management_root", "")
+    monkeypatch.setattr(ontology, "_conn", lambda database: LegacyConnection())
     app.dependency_overrides[get_current_user] = lambda: _user("本体维护者")
     try:
         with TestClient(app) as client:
@@ -128,12 +166,8 @@ def test_missing_management_root_disables_writes_without_breaking_health(
     assert ready.json()["ontology"] == "degraded"
     assert blocked_write.status_code == 503
     assert blocked_write.json()["code"] == "ontology_management_unavailable"
-    assert legacy.status_code != 503
-    assert legacy.json() != {
-        "code": "ontology_management_unavailable",
-        "message": "本体管理服务当前不可用",
-        "details": {},
-    }
+    assert legacy.status_code == 200
+    assert legacy.json() == expected_legacy_body
 
 
 def test_request_roles_use_current_persisted_users_not_jwt_role_claims(

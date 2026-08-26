@@ -473,3 +473,56 @@ def test_administrator_can_delete_a_draft_relation(
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["revision"] == 3
     assert deleted.json()["data"]["relations"] == []
+
+
+def test_publish_blocked_by_diagnostics_returns_safe_422_envelope(
+    management_client: tuple[TestClient, list[str]],
+) -> None:
+    client, role_name = management_client
+    preview = client.post(
+        "/ontology-packages/workspaces/evaluation/imports/preview",
+        data=_multipart(0),
+        files=[
+            ("files", ("accounts.tsv", ACCOUNT.encode("utf-8"), "text/tab-separated-values")),
+            ("files", ("orders.tsv", ORDER.encode("utf-8"), "text/tab-separated-values")),
+        ],
+    )
+    assert preview.status_code == 200, preview.text
+    confirmed = client.post(
+        f"/ontology-packages/workspaces/evaluation/imports/{preview.json()['data']['token']}/confirm",
+        json={"expected_revision": 0},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    account, order = confirmed.json()["data"]["objects"]
+    relation = client.put(
+        "/ontology-packages/workspaces/evaluation/relations/relation/synthetic-blocked-publish",
+        json={
+            "expected_revision": 1,
+            "source_object_id": order["id"],
+            "source_field_id": order["fields"][0]["id"],
+            "target_object_id": account["id"],
+            "target_field_id": account["fields"][0]["id"],
+            "cardinality": "many_to_one",
+            "confirmed": False,
+        },
+    )
+    assert relation.status_code == 200, relation.text
+
+    role_name[0] = "全省管理员"
+    response = client.post(
+        "/ontology-packages/workspaces/evaluation/versions",
+        json={
+            "version": "1.0.0",
+            "release_notes": "RAW_RELEASE_NOTE_SECRET",
+            "expected_revision": 2,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "draft_not_publishable",
+        "message": "草稿尚未满足发布条件",
+        "details": {},
+    }
+    assert "RAW_RELEASE_NOTE_SECRET" not in response.text
+    assert "SYNTHETIC_ACCOUNT" not in response.text
