@@ -47,6 +47,7 @@ class ImportPreview(FrozenModel):
 
 class ImportTokenExpiredError(OntologyImportError):
     code = "import_token_expired"
+    status_code = 410
 
     def __init__(self) -> None:
         super().__init__("导入确认令牌已过期")

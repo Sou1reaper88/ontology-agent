@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +16,10 @@ from auth.jwt import create_access_token, get_current_user
 from auth.ontology_roles import require_ontology_administrator, require_ontology_maintainer
 from config.settings import settings
 from models import Role, User
+from models.base import SessionLocal
+from ontology_core.management.models import DraftDataSource, WorkspaceDraft
 from ontology_core.management.service import OntologyManagementService
+from ontology_core.management.store import FileDraftStore
 
 
 def _user(role_name: str) -> User:
@@ -26,6 +31,24 @@ def _user(role_name: str) -> User:
         role_id=2,
         role=Role(id=2, name=role_name),
         status=1,
+    )
+
+
+def _workspace() -> WorkspaceDraft:
+    return WorkspaceDraft(
+        workspace_id="evaluation",
+        display_name="Synthetic evaluation",
+        package_id="tests.evaluation",
+        base_uri="https://example.invalid/tests/evaluation/",
+        revision=0,
+        updated_at=datetime(2026, 8, 26, tzinfo=UTC),
+        data_source=DraftDataSource(
+            id="source/evaluation",
+            label="Synthetic source",
+            platform_type="generic_sql",
+            dialect="generic",
+            physical_namespace="synthetic",
+        ),
     )
 
 
@@ -97,6 +120,7 @@ def test_missing_management_root_disables_writes_without_breaking_health(
                 "/ontology-packages/workspaces/evaluation/objects/object/synthetic",
                 json={"expected_revision": 0, "label": "Synthetic"},
             )
+            legacy = client.get("/ontology/relations")
     finally:
         app.dependency_overrides.clear()
     assert health.status_code == 200
@@ -104,6 +128,91 @@ def test_missing_management_root_disables_writes_without_breaking_health(
     assert ready.json()["ontology"] == "degraded"
     assert blocked_write.status_code == 503
     assert blocked_write.json()["code"] == "ontology_management_unavailable"
+    assert legacy.status_code != 503
+    assert legacy.json() != {
+        "code": "ontology_management_unavailable",
+        "message": "本体管理服务当前不可用",
+        "details": {},
+    }
+
+
+def test_request_roles_use_current_persisted_users_not_jwt_role_claims(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "external-management-root"
+    store = FileDraftStore(root)
+    store.create_workspace(_workspace())
+    management_service = OntologyManagementService(root)
+    db = SessionLocal()
+    created_roles: list[Role] = []
+    created_users: list[User] = []
+    try:
+        roles: dict[str, Role] = {}
+        for name in ("地市生产岗", "本体维护者", "全省管理员"):
+            role = db.query(Role).filter(Role.name == name).one_or_none()
+            if role is None:
+                role = Role(name=name, description="Synthetic request role")
+                db.add(role)
+                db.flush()
+                created_roles.append(role)
+            roles[name] = role
+        suffix = uuid4().hex[:8]
+        for index, (role_name, role) in enumerate(roles.items(), start=1):
+            user = User(
+                username=f"ontology-role-api-{suffix}-{index}",
+                display_name=f"Synthetic {role_name}",
+                password_hash="not-used",
+                role_id=role.id,
+                status=1,
+            )
+            db.add(user)
+            created_users.append(user)
+        db.commit()
+        for user in created_users:
+            db.refresh(user)
+        tokens = {
+            user.role.name: create_access_token(user.id, user.username, role_id=999)
+            for user in created_users
+        }
+        app.dependency_overrides[get_management_service] = lambda: management_service
+        with TestClient(app) as client:
+            producer_workspace = client.get(
+                "/ontology-packages/workspaces/evaluation",
+                headers={"Authorization": f"Bearer {tokens['地市生产岗']}"},
+            )
+            maintainer_workspace = client.get(
+                "/ontology-packages/workspaces/evaluation",
+                headers={"Authorization": f"Bearer {tokens['本体维护者']}"},
+            )
+            maintainer_publish = client.post(
+                "/ontology-packages/workspaces/evaluation/versions",
+                json={"version": "1.0.0", "release_notes": "Synthetic", "expected_revision": 0},
+                headers={"Authorization": f"Bearer {tokens['本体维护者']}"},
+            )
+            administrator_workspace = client.get(
+                "/ontology-packages/workspaces/evaluation",
+                headers={"Authorization": f"Bearer {tokens['全省管理员']}"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+        for user in created_users:
+            attached = db.get(User, user.id)
+            if attached is not None:
+                db.delete(attached)
+        db.flush()
+        for role in created_roles:
+            attached = db.get(Role, role.id)
+            if attached is not None:
+                db.delete(attached)
+        db.commit()
+        db.close()
+
+    assert producer_workspace.status_code == 403
+    assert producer_workspace.json()["code"] == "ontology_maintainer_required"
+    assert maintainer_workspace.status_code == 200
+    assert maintainer_publish.status_code == 403
+    assert maintainer_publish.json()["code"] == "ontology_administrator_required"
+    assert administrator_workspace.status_code == 200
 
 
 def test_error_responses_never_leak_upload_text_ttl_or_management_root(

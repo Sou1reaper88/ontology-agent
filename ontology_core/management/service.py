@@ -36,6 +36,16 @@ class OntologyManagementUnavailableError(OntologyError):
         super().__init__("本体管理服务当前不可用")
 
 
+class DraftFieldNotFoundError(OntologyError):
+    """Report a missing draft field through the stable management API envelope."""
+
+    code = "draft_field_not_found"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("未找到属性")
+
+
 @dataclass(frozen=True)
 class WorkspaceOverview:
     """Public service result composed from a draft and immutable version summaries."""
@@ -115,6 +125,10 @@ class OntologyManagementService:
             active_version=active,
             versions=self._publisher.list_versions(workspace_id),
         )
+
+    def draft_revision(self, workspace_id: str) -> int:
+        """Read only the current persisted draft revision for audit correlation."""
+        return self._store.read(workspace_id).revision
 
     def preview_import(
         self, workspace_id: str, *, expected_revision: int, uploads: tuple[UploadPayload, ...]
@@ -271,7 +285,7 @@ class OntologyManagementService:
         for object_ in self._store.read(workspace_id).objects:
             if any(field.id == field_id for field in object_.fields):
                 return object_.id
-        raise ValueError("未找到属性")
+        raise DraftFieldNotFoundError()
 
 
 def _managed_ids(uris: Iterable[str], category: str) -> set[str]:

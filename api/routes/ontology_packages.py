@@ -95,8 +95,8 @@ async def preview_import(
     user: User = Depends(require_ontology_maintainer),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    before = service.overview(workspace_id).draft.revision
-    _audit_context(request, user, workspace_id, "import_preview", before)
+    before = service.draft_revision(workspace_id)
+    _audit_context(request, user, service, workspace_id, "import_preview")
     preview = service.preview_import(
         workspace_id,
         expected_revision=expected_revision,
@@ -119,7 +119,7 @@ def confirm_import(
     user: User = Depends(require_ontology_maintainer),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "import_confirm", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "import_confirm")
     draft = service.confirm_import(workspace_id, token, expected_revision=payload.expected_revision)
     _audit_success(request, revision_after=draft.revision, counts=_counts(draft))
     return _draft_envelope(draft)
@@ -134,7 +134,7 @@ def patch_object(
     user: User = Depends(require_ontology_maintainer),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "object_patch", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "object_patch")
     draft = service.update_object(
         workspace_id,
         object_id,
@@ -154,7 +154,7 @@ def delete_object(
     user: User = Depends(require_ontology_administrator),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "object_delete", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "object_delete")
     draft = service.delete_object(
         workspace_id, object_id, expected_revision=payload.expected_revision
     )
@@ -171,7 +171,7 @@ def patch_field(
     user: User = Depends(require_ontology_maintainer),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "field_patch", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "field_patch")
     draft = service.update_field(
         workspace_id,
         field_id,
@@ -191,7 +191,7 @@ def delete_field(
     user: User = Depends(require_ontology_administrator),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "field_delete", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "field_delete")
     draft = service.delete_field(
         workspace_id,
         field_id,
@@ -210,7 +210,7 @@ def put_relation(
     user: User = Depends(require_ontology_maintainer),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "relation_upsert", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "relation_upsert")
     draft = service.upsert_relation(
         workspace_id, payload.relation(relation_id), expected_revision=payload.expected_revision
     )
@@ -227,7 +227,7 @@ def delete_relation(
     user: User = Depends(require_ontology_administrator),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "relation_delete", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "relation_delete")
     draft = service.delete_relation(
         workspace_id, relation_id, expected_revision=payload.expected_revision
     )
@@ -244,7 +244,7 @@ def put_temporal_policy(
     user: User = Depends(require_ontology_maintainer),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "temporal_policy_upsert", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "temporal_policy_upsert")
     draft = service.upsert_temporal_policy(
         workspace_id, payload.policy(object_id), expected_revision=payload.expected_revision
     )
@@ -261,7 +261,7 @@ def resolve_diagnostic(
     user: User = Depends(require_ontology_maintainer),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "diagnostic_resolve", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "diagnostic_resolve")
     draft = service.resolve_diagnostic(
         workspace_id,
         diagnostic_id,
@@ -308,7 +308,7 @@ def publish_version(
     user: User = Depends(require_ontology_administrator),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    _audit_context(request, user, workspace_id, "version_publish", payload.expected_revision)
+    _audit_context(request, user, service, workspace_id, "version_publish")
     summary = service.publish(
         workspace_id,
         payload.version,
@@ -329,8 +329,7 @@ def rollback_version(
     user: User = Depends(require_ontology_administrator),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
-    before = service.overview(workspace_id).draft.revision
-    _audit_context(request, user, workspace_id, "version_rollback", before)
+    _audit_context(request, user, service, workspace_id, "version_rollback")
     summary = service.rollback(workspace_id, version, payload.reason, str(user.id))
     _audit_success(request, revision_after=summary.revision, counts={"versions": 1})
     return _envelope(summary.model_dump(mode="json"), summary.revision)
@@ -445,13 +444,18 @@ def _safe_details(error: OntologyError) -> dict[str, Any]:
 
 
 def _audit_context(
-    request: Request, user: User, workspace_id: str, action: str, revision_before: int | None
+    request: Request,
+    user: User,
+    service: OntologyManagementService,
+    workspace_id: str,
+    action: str,
 ) -> None:
     request.state.ontology_audit = {
         "user_id": user.id,
         "workspace_id": workspace_id,
         "action": action,
-        "revision_before": revision_before,
+        "revision_before": service.draft_revision(workspace_id),
+        "service": service,
     }
 
 
@@ -478,13 +482,17 @@ def _audit_failure(request: Request, result: str) -> None:
     context = getattr(request.state, "ontology_audit", None)
     if context is None:
         return
+    try:
+        revision_after = context["service"].draft_revision(context["workspace_id"])
+    except OntologyError:
+        revision_after = context["revision_before"]
     write_audit_log(
         context["user_id"],
         context["action"],
         detail={
             "workspace_id": context["workspace_id"],
             "revision_before": context["revision_before"],
-            "revision_after": context["revision_before"],
+            "revision_after": revision_after,
             "action": context["action"],
             "result": result,
             "time": datetime.now(UTC).isoformat(),
