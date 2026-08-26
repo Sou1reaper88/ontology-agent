@@ -1508,11 +1508,10 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                 )
             )
 
-    active_temporal_policies: dict[str, list[str]] = defaultdict(list)
-    for uri, _, _, _, _, applies_to, _, _, _, _, status, _ in temporal_policy_data:
-        if status == "active":
-            active_temporal_policies[applies_to].append(uri)
-    for policy_uris in active_temporal_policies.values():
+    temporal_policies_by_concept: dict[str, list[str]] = defaultdict(list)
+    for uri, _, _, _, _, applies_to, _, _, _, _, _, _ in temporal_policy_data:
+        temporal_policies_by_concept[applies_to].append(uri)
+    for policy_uris in temporal_policies_by_concept.values():
         if len(policy_uris) > 1:
             for uri in policy_uris:
                 violations.append(
@@ -1520,7 +1519,7 @@ def parse_catalog(graph: Graph) -> SemanticCatalog:
                         "duplicate_temporal_policy",
                         uri,
                         APPLIES_TO,
-                        "Concept has multiple active temporal policies",
+                        "Concept has multiple temporal policies",
                     )
                 )
 

@@ -28,7 +28,7 @@ def _graph(data: str) -> Graph:
     return Graph().parse(data=data, format="turtle")
 
 
-def _temporal_policy_graph(extra_policy: str = "") -> Graph:
+def _temporal_policy_graph(extra_policy: str = "", *, status: str = "active") -> Graph:
     return _graph("""
         @prefix ex: <https://example.invalid/ontology/> .
         @prefix oa: <urn:ontology-agent:core#> .
@@ -45,7 +45,7 @@ def _temporal_policy_graph(extra_policy: str = "") -> Graph:
             oa:appliesTo ex:Record ; oa:partitionProperty ex:AccountingMonth ;
             oa:partitionGrain "month" ;
             oa:defaultStrategy "previous_complete_month" ;
-            oa:allowQueryOverride true ; oa:status "active" ; oa:priority 100 .
+            oa:allowQueryOverride true ; oa:status "{status}" ; oa:priority 100 .
         """ + extra_policy)
 
 
@@ -76,20 +76,43 @@ def test_parse_catalog_rejects_invalid_temporal_strategy_pair() -> None:
     assert "invalid_temporal_strategy" in str(caught.value.details)
 
 
-def test_parse_catalog_rejects_multiple_active_temporal_policies() -> None:
-    graph = _temporal_policy_graph("""
+@pytest.mark.parametrize(
+    ("primary_status", "secondary_status"),
+    (("active", "inactive"), ("inactive", "inactive")),
+)
+def test_parse_catalog_rejects_multiple_temporal_policies_regardless_of_status(
+    primary_status: str,
+    secondary_status: str,
+) -> None:
+    graph = _temporal_policy_graph(
+        f"""
         ex:OtherPolicy a oa:TemporalPartitionPolicy ;
             oa:shortName "OtherPolicy" ; rdfs:label "Other policy" ;
             oa:appliesTo ex:Record ; oa:partitionProperty ex:AccountingMonth ;
             oa:partitionGrain "month" ;
             oa:defaultStrategy "previous_complete_month" ;
-            oa:allowQueryOverride true ; oa:status "active" ; oa:priority 50 .
-        """)
+            oa:allowQueryOverride true ; oa:status "{secondary_status}" ; oa:priority 50 .
+        """,
+        status=primary_status,
+    )
 
     with pytest.raises(OntologyValidationError) as caught:
         parse_catalog(graph)
 
-    assert "duplicate_temporal_policy" in str(caught.value.details)
+    assert caught.value.details["violations"] == [
+        {
+            "code": "duplicate_temporal_policy",
+            "uri": "https://example.invalid/ontology/MonthlyPolicy",
+            "path": "urn:ontology-agent:core#appliesTo",
+            "message": "Concept has multiple temporal policies",
+        },
+        {
+            "code": "duplicate_temporal_policy",
+            "uri": "https://example.invalid/ontology/OtherPolicy",
+            "path": "urn:ontology-agent:core#appliesTo",
+            "message": "Concept has multiple temporal policies",
+        },
+    ]
 
 
 def test_parse_catalog_builds_marked_domain_elements(valid_package_dir: Path) -> None:
