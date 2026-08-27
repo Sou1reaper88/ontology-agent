@@ -16,15 +16,23 @@ from api.routes.ontology_packages import _read_uploads, get_management_service
 from api.schemas.ontology_packages import PublishRequest, RollbackRequest
 from auth.jwt import get_current_user
 from models import Role, User
-from ontology_core.management.models import DraftDataSource, WorkspaceDraft
+from ontology_core.management.import_format import STANDARD_COLUMNS
+from ontology_core.management.models import DraftDataSource, UploadLimits, WorkspaceDraft
+from ontology_core.management.parsers import parse_metadata_upload
 from ontology_core.management.service import OntologyManagementService
 from ontology_core.management.store import FileDraftStore
 
-HEADER = "对象英文名称\t对象中文名称\t对象描述\t属性英文名\t属性中文名\t属性类型\t属性描述\n"
+HEADER = "\t".join(STANDARD_COLUMNS) + "\n"
 ACCOUNT = (
-    HEADER + "SYNTHETIC_ACCOUNT\t合成账户\t合成账户表\tACCOUNT_ID\t账户标识\tbigint\t合成稳定键\n"
+    HEADER
+    + "SYNTHETIC_ACCOUNT\t合成账户\t合成账户表\t启用\tACCOUNT_ID\t账户标识\t"
+    "bigint\t合成稳定键\t是\t是\n"
 )
-ORDER = HEADER + "SYNTHETIC_ORDER\t合成订单\t合成订单表\tACCOUNT_ID\t账户标识\tbigint\t合成关联键\n"
+ORDER = (
+    HEADER
+    + "SYNTHETIC_ORDER\t合成订单\t合成订单表\t启用\tACCOUNT_ID\t账户标识\t"
+    "bigint\t合成关联键\t是\t是\n"
+)
 
 
 def _draft() -> WorkspaceDraft:
@@ -103,6 +111,64 @@ def test_upload_streams_are_all_closed_when_byte_cap_rejects_one_file() -> None:
     assert error.value.status_code == 413
     assert oversized.closed is True
     assert untouched.closed is True
+
+
+def test_maintainer_downloads_multiple_template_without_mutating_draft(
+    management_client: tuple[TestClient, list[str]],
+    management_service: OntologyManagementService,
+) -> None:
+    client, _ = management_client
+
+    response = client.get(
+        "/ontology-packages/workspaces/evaluation/imports/template",
+        params={"variant": "multiple"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="ontology-import-multiple.xlsx"'
+    )
+    parsed = parse_metadata_upload(
+        "ontology-import-multiple.xlsx",
+        response.content,
+        UploadLimits(max_upload_bytes=1_000_000, max_xlsx_uncompressed_bytes=100_000),
+    )
+    assert [item.physical_name for item in parsed.objects] == [
+        "SAMPLE_OBJECT_A",
+        "SAMPLE_OBJECT_B",
+    ]
+    assert management_service.draft_revision("evaluation") == 0
+
+
+def test_template_download_rejects_unknown_variant_and_workspace(
+    management_client: tuple[TestClient, list[str]],
+) -> None:
+    client, _ = management_client
+
+    invalid_variant = client.get(
+        "/ontology-packages/workspaces/evaluation/imports/template",
+        params={"variant": "unsupported"},
+    )
+    missing_workspace = client.get(
+        "/ontology-packages/workspaces/missing/imports/template",
+        params={"variant": "single"},
+    )
+
+    assert invalid_variant.status_code == 400
+    assert invalid_variant.json() == {
+        "code": "import_template_variant_invalid",
+        "message": "导入样例类型无效",
+        "details": {},
+    }
+    assert missing_workspace.status_code == 404
+    assert missing_workspace.json() == {
+        "code": "draft_not_found",
+        "message": "未找到本体草稿",
+        "details": {},
+    }
 
 
 def test_management_api_composes_existing_services_without_route_domain_logic(

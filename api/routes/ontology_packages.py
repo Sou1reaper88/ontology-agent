@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 
 from api.schemas.ontology_packages import (
@@ -84,6 +84,21 @@ def workspace_overview(
 ) -> dict[str, Any]:
     overview = service.overview(workspace_id)
     return _envelope(overview.public_data(), overview.draft.revision)
+
+
+@router.get("/workspaces/{workspace_id}/imports/template")
+def download_import_template(
+    workspace_id: str,
+    variant: str,
+    user: User = Depends(require_ontology_maintainer),
+    service: OntologyManagementService = Depends(get_management_service),
+) -> Response:
+    generated = service.import_template(workspace_id, variant)
+    return Response(
+        content=generated.content,
+        media_type=generated.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{generated.file_name}"'},
+    )
 
 
 @router.post("/workspaces/{workspace_id}/imports/preview")

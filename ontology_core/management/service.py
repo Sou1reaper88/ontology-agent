@@ -22,6 +22,7 @@ from ontology_core.management.models import (
 from ontology_core.management.paths import OntologyManagementConfigurationError, safe_child
 from ontology_core.management.publisher import PackagePublisher, PublishedVersionNotFoundError
 from ontology_core.management.store import FileDraftStore
+from ontology_core.management.templates import GeneratedImportTemplate, build_import_template
 from ontology_core.management.validation import DraftValidator
 from ontology_core.repository import OntologyRepository
 
@@ -130,6 +131,11 @@ class OntologyManagementService:
     def draft_revision(self, workspace_id: str) -> int:
         """Read only the current persisted draft revision for audit correlation."""
         return self._store.read(workspace_id).revision
+
+    def import_template(self, workspace_id: str, variant: str) -> GeneratedImportTemplate:
+        """Generate a sample only after confirming the requested workspace exists."""
+        self._store.read(workspace_id)
+        return build_import_template(variant)
 
     def preview_import(
         self, workspace_id: str, *, expected_revision: int, uploads: tuple[UploadPayload, ...]
