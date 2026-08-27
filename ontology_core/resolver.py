@@ -64,6 +64,16 @@ class OntologyResolver:
             catalog.relations,
             lambda relation: relation.source_concept_uri,
         )
+        grouped_relations: dict[tuple[str, str], list[Relation]] = {}
+        for relation in catalog.relations:
+            key = tuple(sorted((relation.source_concept_uri, relation.target_concept_uri)))
+            grouped_relations.setdefault(key, []).append(relation)
+        self._relations_by_pair = MappingProxyType(
+            {
+                key: tuple(sorted(items, key=lambda item: (-item.priority, item.uri)))
+                for key, items in grouped_relations.items()
+            }
+        )
         self._rules_by_concept = _index(
             catalog.rules,
             lambda rule: rule.applies_to_uri,
@@ -178,6 +188,41 @@ class OntologyResolver:
     def list_relations(self, concept_id: str) -> tuple[Relation, ...]:
         concept = self.get_concept(concept_id)
         return self._relations_by_source.get(concept.uri, ())
+
+    def resolve_direct_relation(self, left_concept_id: str, right_concept_id: str) -> Relation:
+        left = self.get_concept(left_concept_id)
+        right = self.get_concept(right_concept_id)
+        candidates = tuple(
+            item
+            for item in self._relations_by_pair.get(tuple(sorted((left.uri, right.uri))), ())
+            if item.status == "active"
+            and item.confirmed
+            and item.source_property_uri is not None
+            and item.target_property_uri is not None
+        )
+        if not candidates:
+            raise ConceptNotFoundError(
+                "未找到已确认的直接关系",
+                details={"concepts": tuple(sorted((left.uri, right.uri)))},
+            )
+        highest_priority = candidates[0].priority
+        winners = tuple(item for item in candidates if item.priority == highest_priority)
+        if len(winners) != 1:
+            raise AmbiguousIdentifierError(
+                "直接关系存在歧义",
+                details={"candidates": tuple(sorted(item.uri for item in winners))},
+            )
+        relation = winners[0]
+        key_uris = (relation.source_property_uri, relation.target_property_uri)
+        if any(
+            not any(mapping.field_name for mapping in self.list_mappings(property_uri))
+            for property_uri in key_uris
+        ):
+            raise PropertyNotFoundError(
+                "直接关系缺少可用的关联键映射",
+                details={"relation": relation.uri},
+            )
+        return relation
 
     def list_rules(self, concept_id: str) -> tuple[BusinessRule, ...]:
         concept = self.get_concept(concept_id)

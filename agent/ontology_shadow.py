@@ -218,22 +218,23 @@ class OntologyShadowService:
                 if item.semantic.uri in evidence_property_uris
             )
             temporal_evidence = None
-            if plan.temporal_decision is not None:
+            temporal_decision = plan.temporal_decisions[0] if plan.temporal_decisions else None
+            if temporal_decision is not None:
                 partition_binding = next(
                     item
                     for item in plan.property_bindings
-                    if item.semantic.uri == plan.temporal_decision.partition_property_uri
+                    if item.semantic.uri == temporal_decision.partition_property_uri
                 )
                 temporal_evidence = TemporalEvidence(
                     partition_field=str(partition_binding.binding.field_name),
-                    grain=plan.temporal_decision.grain.value,
-                    system_time=plan.temporal_decision.system_date.isoformat(),
-                    user_time=plan.temporal_decision.matched_text,
-                    source=plan.temporal_decision.source.value,
-                    default_strategy=plan.temporal_decision.default_strategy.value,
-                    resolved_start=plan.temporal_decision.resolved_start,
-                    resolved_end=plan.temporal_decision.resolved_end,
-                    explanation=plan.temporal_decision.explanation,
+                    grain=temporal_decision.grain.value,
+                    system_time=temporal_decision.system_date.isoformat(),
+                    user_time=temporal_decision.matched_text,
+                    source=temporal_decision.source.value,
+                    default_strategy=temporal_decision.default_strategy.value,
+                    resolved_start=temporal_decision.resolved_start,
+                    resolved_end=temporal_decision.resolved_end,
+                    explanation=temporal_decision.explanation,
                 )
             return OntologyShadowResult(
                 status="generated",
@@ -245,14 +246,14 @@ class OntologyShadowService:
                     ontology_tables=compiled.tables,
                 ),
                 evidence=OntologyEvidence(
-                    concepts=(plan.concept.short_name,),
+                    concepts=tuple(item.short_name for item in plan.concepts),
                     properties=tuple(item.semantic.short_name for item in plan.selections),
                     rules=tuple(item.short_name for item in plan.rules),
                     data_sources=(plan.data_source.short_name,),
                     mappings=tuple(
                         dict.fromkeys(
                             (
-                                plan.object_binding.short_name,
+                                *(item.binding.short_name for item in plan.objects),
                                 *(item.binding.short_name for item in evidence_bindings),
                             )
                         )

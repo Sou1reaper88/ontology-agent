@@ -7,9 +7,11 @@ import pytest
 from ontology_core.compiler import CompilerRegistry, GenericSqlCompiler
 from ontology_core.errors import OntologyCompileError
 from ontology_core.query_plan import (
+    BoundObject,
     BoundProperty,
     QueryPlan,
     ResolvedFilter,
+    ResolvedJoin,
     TemporalDecision,
 )
 from ontology_core.semantic_models import (
@@ -20,6 +22,7 @@ from ontology_core.semantic_models import (
     PhysicalMapping,
     Property,
     RdfLiteral,
+    Relation,
     RuleExpression,
     RuleOperator,
     TemporalDefaultStrategy,
@@ -91,6 +94,7 @@ def _plan(
                 data_source_uri=source.uri,
                 field_name=field_name,
             ),
+            object_alias="t0",
         )
 
     id_binding = bound(customer_id, "customer_id")
@@ -110,9 +114,9 @@ def _plan(
             ),
         )
     return QueryPlan(
-        concept=concept,
+        concepts=(concept,),
         data_source=source,
-        object_binding=object_mapping,
+        objects=(BoundObject(alias="t0", semantic=concept, binding=object_mapping),),
         selections=(id_binding,),
         property_bindings=(id_binding, status_binding),
         rules=rules,
@@ -159,6 +163,7 @@ def _temporal_plan(
             data_source_uri=plan.data_source.uri,
             field_name="accounting_month",
         ),
+        object_alias="t0",
     )
     operator = RuleOperator.EQ if start == end else RuleOperator.BETWEEN
     values = (start,) if start == end else (start, end)
@@ -197,8 +202,8 @@ def _temporal_plan(
                     explanation="默认取上一个完整自然月",
                 ),
             ),
-            "temporal_policy": policy if include_policy else None,
-            "temporal_decision": decision if include_decision else None,
+            "temporal_policies": (policy,) if include_policy else (),
+            "temporal_decisions": (decision,) if include_decision else (),
         }
     )
 
@@ -242,6 +247,121 @@ def test_generic_compiler_uses_only_query_plan_bindings() -> None:
     assert compiled.fields == ("customer_id",)
 
 
+def test_generic_compiler_compiles_structured_two_object_inner_join() -> None:
+    single = _plan()
+    customer = single.concepts[0]
+    customer_id = single.selections[0].model_copy(update={"object_alias": "t0"})
+    order = Concept(
+        uri="https://example.invalid/ontology/Order",
+        short_name="Order",
+        label="Order",
+        labels=_text("Order"),
+    )
+    amount = Property(
+        uri=f"{order.uri}/Amount",
+        short_name="Amount",
+        label="Amount",
+        labels=_text("Amount"),
+        concept_uri=order.uri,
+        datatype_uri=f"{XSD}decimal",
+    )
+    order_customer_id = Property(
+        uri=f"{order.uri}/CustomerId",
+        short_name="OrderCustomerId",
+        label="Order customer ID",
+        labels=_text("Order customer ID"),
+        concept_uri=order.uri,
+        datatype_uri=f"{XSD}string",
+    )
+
+    def order_bound(property_: Property, field: str) -> BoundProperty:
+        return BoundProperty(
+            semantic=property_,
+            binding=PhysicalMapping(
+                uri=f"{property_.uri}/Mapping",
+                short_name=f"{property_.short_name}Mapping",
+                label="Order field mapping",
+                labels=_text("Order field mapping"),
+                semantic_element_uri=property_.uri,
+                data_source_uri=single.data_source.uri,
+                field_name=field,
+            ),
+            object_alias="t1",
+        )
+
+    amount_binding = order_bound(amount, "order_amount")
+    order_key = order_bound(order_customer_id, "customer_id")
+    relation = Relation(
+        uri="https://example.invalid/ontology/CustomerOrder",
+        short_name="CustomerOrder",
+        label="Customer orders",
+        labels=_text("Customer orders"),
+        source_concept_uri=customer.uri,
+        target_concept_uri=order.uri,
+        source_property_uri=customer_id.semantic.uri,
+        target_property_uri=order_customer_id.uri,
+        confirmed=True,
+    )
+    order_object = PhysicalMapping(
+        uri=f"{order.uri}/Mapping",
+        short_name="OrderTable",
+        label="Order table",
+        labels=_text("Order table"),
+        semantic_element_uri=order.uri,
+        data_source_uri=single.data_source.uri,
+        physical_namespace="analytics",
+        object_name="order_detail",
+    )
+    plan = QueryPlan(
+        concepts=(customer, order),
+        data_source=single.data_source,
+        objects=(
+            BoundObject(alias="t0", semantic=customer, binding=single.objects[0].binding),
+            BoundObject(alias="t1", semantic=order, binding=order_object),
+        ),
+        selections=(customer_id, amount_binding),
+        property_bindings=(customer_id, amount_binding, order_key),
+        joins=(ResolvedJoin(relation=relation, left=customer_id, right=order_key),),
+    )
+
+    compiled = GenericSqlCompiler().compile(plan)
+
+    assert compiled.sql == (
+        'SELECT "t0"."customer_id", "t1"."order_amount" '
+        'FROM "analytics"."customer_snapshot" AS "t0" '
+        'INNER JOIN "analytics"."order_detail" AS "t1" '
+        'ON "t0"."customer_id" = "t1"."customer_id";'
+    )
+    assert compiled.tables == ("analytics.customer_snapshot", "analytics.order_detail")
+
+
+def test_query_plan_rejects_two_objects_without_one_join() -> None:
+    plan = _plan()
+    second_concept = plan.concepts[0].model_copy(
+        update={
+            "uri": "https://example.invalid/ontology/Second",
+            "short_name": "Second",
+        }
+    )
+    second = BoundObject(
+        alias="t1",
+        semantic=second_concept,
+        binding=plan.objects[0].binding.model_copy(
+            update={
+                "semantic_element_uri": second_concept.uri,
+                "object_name": "second_table",
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="双对象查询必须包含一条关系"):
+        QueryPlan(
+            concepts=(plan.concepts[0], second_concept),
+            data_source=plan.data_source,
+            objects=(plan.objects[0], second),
+            selections=plan.selections,
+            property_bindings=plan.property_bindings,
+        )
 @pytest.mark.parametrize(
     ("condition", "expected"),
     [

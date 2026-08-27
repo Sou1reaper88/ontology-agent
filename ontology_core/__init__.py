@@ -32,7 +32,13 @@ from ontology_core.models import (
     ValidationReport,
 )
 from ontology_core.planner import OntologyPlanner
-from ontology_core.query_plan import BoundProperty, CompiledQuery, QueryPlan
+from ontology_core.query_plan import (
+    BoundObject,
+    BoundProperty,
+    CompiledQuery,
+    QueryPlan,
+    ResolvedJoin,
+)
 from ontology_core.repository import OntologyRepository, OntologySnapshot
 from ontology_core.resolver import OntologyResolver
 from ontology_core.semantic_models import (
@@ -74,6 +80,7 @@ from ontology_core.validator import OntologyValidator
 __all__ = [
     "AmbiguousIdentifierError",
     "AmbiguousQueryConceptError",
+    "BoundObject",
     "BoundProperty",
     "CompiledQuery",
     "CompilerRegistry",
@@ -118,6 +125,7 @@ __all__ = [
     "QueryPlanningError",
     "RdfLiteral",
     "Relation",
+    "ResolvedJoin",
     "RuleExpression",
     "RuleOperator",
     "SemanticCatalog",

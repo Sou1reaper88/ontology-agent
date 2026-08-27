@@ -42,3 +42,10 @@ def test_temporal_policy_interfaces_are_exported_from_package_root() -> None:
 
     assert expected <= set(ontology_core.__all__)
     assert all(hasattr(ontology_core, name) for name in expected)
+
+
+def test_structured_join_plan_interfaces_are_exported_from_package_root() -> None:
+    expected = {"BoundObject", "BoundProperty", "QueryPlan", "ResolvedJoin"}
+
+    assert expected <= set(ontology_core.__all__)
+    assert all(hasattr(ontology_core, name) for name in expected)

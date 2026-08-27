@@ -113,6 +113,104 @@ def test_resolver_returns_the_active_temporal_policy_for_a_concept() -> None:
     assert resolver.get_temporal_policy("Record") == policy
 
 
+def test_resolver_finds_one_confirmed_direct_relation_in_both_directions() -> None:
+    customer = _concept("Customer")
+    order = _concept("Order")
+    customer_key = Property(
+        uri=f"{customer.uri}/id",
+        short_name="CustomerId",
+        label="Customer ID",
+        labels=(LocalizedText(value="Customer ID", language="en"),),
+        concept_uri=customer.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    order_key = customer_key.model_copy(
+        update={
+            "uri": f"{order.uri}/customer_id",
+            "short_name": "OrderCustomerId",
+            "concept_uri": order.uri,
+        }
+    )
+    relation = Relation(
+        uri="https://example.invalid/ontology/CustomerOrder",
+        short_name="CustomerOrder",
+        label="Customer orders",
+        labels=(LocalizedText(value="Customer orders", language="en"),),
+        source_concept_uri=customer.uri,
+        target_concept_uri=order.uri,
+        source_property_uri=customer_key.uri,
+        target_property_uri=order_key.uri,
+        confirmed=True,
+        priority=100,
+    )
+    mappings = tuple(
+        PhysicalMapping(
+            uri=f"{property_.uri}/mapping",
+            short_name=f"{property_.short_name}Mapping",
+            label="Key mapping",
+            labels=(LocalizedText(value="Key mapping", language="en"),),
+            semantic_element_uri=property_.uri,
+            data_source_uri="https://example.invalid/source",
+            field_name=field,
+        )
+        for property_, field in ((customer_key, "customer_id"), (order_key, "customer_id"))
+    )
+    resolver = _catalog_resolver(
+        concepts=(customer, order),
+        properties=(customer_key, order_key),
+        relations=(
+            relation,
+            relation.model_copy(
+                update={
+                    "uri": "https://example.invalid/ontology/InactiveRelation",
+                    "short_name": "InactiveRelation",
+                    "status": "inactive",
+                    "priority": 999,
+                }
+            ),
+        ),
+        mappings=mappings,
+    )
+
+    assert resolver.resolve_direct_relation(customer.uri, order.uri) == relation
+    assert resolver.resolve_direct_relation(order.uri, customer.uri) == relation
+
+
+def test_resolver_rejects_ambiguous_or_unmapped_direct_relations() -> None:
+    left = _concept("Left")
+    right = _concept("Right")
+    relation = Relation(
+        uri="https://example.invalid/ontology/RelationA",
+        short_name="RelationA",
+        label="Relation A",
+        labels=(LocalizedText(value="Relation A", language="en"),),
+        source_concept_uri=left.uri,
+        target_concept_uri=right.uri,
+        source_property_uri=f"{left.uri}/id",
+        target_property_uri=f"{right.uri}/id",
+        confirmed=True,
+        priority=10,
+    )
+    ambiguous = _catalog_resolver(
+        concepts=(left, right),
+        relations=(
+            relation,
+            relation.model_copy(
+                update={
+                    "uri": "https://example.invalid/ontology/RelationB",
+                    "short_name": "RelationB",
+                }
+            ),
+        ),
+    )
+    unmapped = _catalog_resolver(concepts=(left, right), relations=(relation,))
+
+    with pytest.raises(AmbiguousIdentifierError):
+        ambiguous.resolve_direct_relation(left.uri, right.uri)
+    with pytest.raises(PropertyNotFoundError, match="关联键映射"):
+        unmapped.resolve_direct_relation(left.uri, right.uri)
+
+
 def test_resolver_looks_up_concepts_by_uri_short_name_and_preferred_label(
     valid_package_dir: Path,
 ) -> None:
@@ -372,6 +470,7 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         "list_properties": ("self", "concept_id"),
         "resolve_property": ("self", "concept_id", "property_id"),
         "list_relations": ("self", "concept_id"),
+        "resolve_direct_relation": ("self", "left_concept_id", "right_concept_id"),
         "list_rules": ("self", "concept_id"),
         "get_temporal_policy": ("self", "concept_id"),
         "list_data_sources": ("self",),
@@ -399,6 +498,11 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
             "return": Property,
         },
         "list_relations": {"concept_id": str, "return": tuple[Relation, ...]},
+        "resolve_direct_relation": {
+            "left_concept_id": str,
+            "right_concept_id": str,
+            "return": Relation,
+        },
         "list_rules": {"concept_id": str, "return": tuple[BusinessRule, ...]},
         "get_temporal_policy": {
             "concept_id": str,
@@ -426,6 +530,7 @@ def test_resolver_exposes_only_documented_methods_and_read_only_tuple_indexes(
         resolver._concepts_by_label,
         resolver._properties_by_concept,
         resolver._relations_by_source,
+        resolver._relations_by_pair,
         resolver._rules_by_concept,
         resolver._temporal_policies_by_concept,
         resolver._mappings_by_element,

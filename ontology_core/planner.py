@@ -9,6 +9,7 @@ from ontology_core.errors import (
 )
 from ontology_core.normalization import normalize_text
 from ontology_core.query_plan import (
+    BoundObject,
     BoundProperty,
     QueryPlan,
     ResolvedFilter,
@@ -177,7 +178,7 @@ class OntologyPlanner:
                 None,
             )
             if mapping is not None:
-                bound = BoundProperty(semantic=property_, binding=mapping)
+                bound = BoundProperty(semantic=property_, binding=mapping, object_alias="t0")
                 bindings.append(bound)
                 by_property_uri[property_.uri] = bound
 
@@ -237,13 +238,15 @@ class OntologyPlanner:
                 explanation=parsed.partition.explanation,
             )
         return QueryPlan(
-            concept=concept,
+            concepts=(concept,),
             data_source=source,
-            object_binding=object_binding,
+            objects=(
+                BoundObject(alias="t0", semantic=concept, binding=object_binding),
+            ),
             selections=selections,
             property_bindings=tuple(bindings),
             rules=rules,
             filters=filters,
-            temporal_policy=policy,
-            temporal_decision=temporal_decision,
+            temporal_policies=(policy,) if policy is not None else (),
+            temporal_decisions=(temporal_decision,) if temporal_decision is not None else (),
         )

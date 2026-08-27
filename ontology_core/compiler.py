@@ -8,7 +8,13 @@ from types import MappingProxyType
 from typing import Protocol
 
 from ontology_core.errors import OntologyCompileError
-from ontology_core.query_plan import CompiledQuery, QueryPlan, ResolvedFilter
+from ontology_core.query_plan import (
+    BoundObject,
+    BoundProperty,
+    CompiledQuery,
+    QueryPlan,
+    ResolvedFilter,
+)
 from ontology_core.semantic_models import RdfLiteral, RuleExpression, RuleOperator
 
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
@@ -106,23 +112,14 @@ def _literal(value: RdfLiteral) -> str:
 
 class GenericSqlCompiler:
     def compile(self, plan: QueryPlan) -> CompiledQuery:
-        object_name = plan.object_binding.object_name
-        namespace = plan.object_binding.physical_namespace
-        table_sql = _quote_identifier(object_name)
-        table_name = str(object_name)
-        if namespace:
-            table_sql = f"{_quote_identifier(namespace)}.{table_sql}"
-            table_name = f"{namespace}.{object_name}"
-
         if not plan.selections:
             raise _compile_error("查询计划没有可编译的选择字段")
+        qualify = len(plan.objects) == 2
         selection_names = tuple(item.binding.field_name for item in plan.selections)
-        select_sql = ", ".join(_quote_identifier(item) for item in selection_names)
-        field_bindings = {
-            item.semantic.uri: item.binding.field_name for item in plan.property_bindings
-        }
+        select_sql = ", ".join(self._field(item, qualify=qualify) for item in plan.selections)
+        field_bindings = {item.semantic.uri: item for item in plan.property_bindings}
         rule_predicates = tuple(
-            self._expression(rule.condition, field_bindings)
+            self._expression(rule.condition, field_bindings, qualify=qualify)
             for rule in sorted(
                 (item for item in plan.rules if item.condition is not None),
                 key=lambda item: (-item.priority, item.short_name.casefold(), item.uri),
@@ -130,19 +127,55 @@ class GenericSqlCompiler:
         )
         self._validate_temporal_guard(plan)
         filter_predicates = tuple(
-            self._expression(self._filter_expression(item), field_bindings) for item in plan.filters
+            self._expression(
+                self._filter_expression(item), field_bindings, qualify=qualify
+            )
+            for item in plan.filters
         )
         predicates = (*rule_predicates, *filter_predicates)
         where = ""
         if predicates:
             where = " WHERE " + " AND ".join(predicates)
-        sql = f"SELECT {select_sql} FROM {table_sql}{where};"
+        tables = tuple(self._table(item) for item in plan.objects)
+        from_sql = self._table_sql(plan.objects[0], alias=qualify)
+        if qualify:
+            join = plan.joins[0]
+            from_sql += (
+                f" INNER JOIN {self._table_sql(plan.objects[1], alias=True)}"
+                f" ON {self._field(join.left, qualify=True)}"
+                f" = {self._field(join.right, qualify=True)}"
+            )
+        sql = f"SELECT {select_sql} FROM {from_sql}{where};"
         return CompiledQuery(
             sql=sql,
-            tables=(table_name,),
+            tables=tables,
             fields=tuple(str(item) for item in selection_names),
             predicates=predicates,
         )
+
+    @staticmethod
+    def _table(object_: BoundObject) -> str:
+        object_name = object_.binding.object_name
+        if object_name is None:
+            raise _compile_error("对象映射缺少物理表名")
+        namespace = object_.binding.physical_namespace
+        return f"{namespace}.{object_name}" if namespace else object_name
+
+    @classmethod
+    def _table_sql(cls, object_: BoundObject, *, alias: bool) -> str:
+        object_name = object_.binding.object_name
+        table_sql = _quote_identifier(object_name)
+        namespace = object_.binding.physical_namespace
+        if namespace:
+            table_sql = f"{_quote_identifier(namespace)}.{table_sql}"
+        if alias:
+            table_sql += f" AS {_quote_identifier(object_.alias)}"
+        return table_sql
+
+    @staticmethod
+    def _field(binding: BoundProperty, *, qualify: bool) -> str:
+        field = _quote_identifier(binding.binding.field_name)
+        return f"{_quote_identifier(binding.object_alias)}.{field}" if qualify else field
 
     @staticmethod
     def _filter_expression(item: ResolvedFilter) -> RuleExpression:
@@ -154,24 +187,25 @@ class GenericSqlCompiler:
 
     @staticmethod
     def _validate_temporal_guard(plan: QueryPlan) -> None:
-        policy = plan.temporal_policy
-        if policy is None:
-            return
-        if plan.temporal_decision is None:
-            raise _compile_error("查询计划缺少时间决策")
-        bounded_partition_filters = tuple(
-            item
-            for item in plan.filters
-            if item.property.semantic.uri == policy.partition_property_uri
-            and item.operator in {RuleOperator.EQ, RuleOperator.BETWEEN}
-        )
-        if len(bounded_partition_filters) != 1:
-            raise _compile_error("查询计划缺少有界分区过滤")
+        decisions = {item.partition_property_uri for item in plan.temporal_decisions}
+        for policy in plan.temporal_policies:
+            if policy.partition_property_uri not in decisions:
+                raise _compile_error("查询计划缺少时间决策")
+            bounded_partition_filters = tuple(
+                item
+                for item in plan.filters
+                if item.property.semantic.uri == policy.partition_property_uri
+                and item.operator in {RuleOperator.EQ, RuleOperator.BETWEEN}
+            )
+            if len(bounded_partition_filters) != 1:
+                raise _compile_error("查询计划缺少有界分区过滤")
 
     def _expression(
         self,
         expression: RuleExpression,
-        field_bindings: Mapping[str, str | None],
+        field_bindings: Mapping[str, BoundProperty],
+        *,
+        qualify: bool,
     ) -> str:
         operator = expression.operator
         if operator in {RuleOperator.ALL_OF, RuleOperator.ANY_OF}:
@@ -181,17 +215,22 @@ class GenericSqlCompiler:
             return (
                 "("
                 + separator.join(
-                    self._expression(child, field_bindings) for child in expression.children
+                    self._expression(child, field_bindings, qualify=qualify)
+                    for child in expression.children
                 )
                 + ")"
             )
         if operator == RuleOperator.NOT:
             if len(expression.children) != 1:
                 raise _compile_error("NOT 规则必须只有一个子表达式")
-            return f"NOT ({self._expression(expression.children[0], field_bindings)})"
+            return (
+                f"NOT ({self._expression(expression.children[0], field_bindings, qualify=qualify)})"
+            )
 
-        field_name = field_bindings.get(expression.property_uri or "")
-        field = _quote_identifier(field_name)
+        binding = field_bindings.get(expression.property_uri or "")
+        if binding is None:
+            raise _compile_error("规则属性缺少字段绑定")
+        field = self._field(binding, qualify=qualify)
         values = tuple(_literal(item) for item in expression.values)
         if operator in _COMPARISONS:
             if len(values) != 1:
