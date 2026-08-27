@@ -19,6 +19,11 @@ from ontology_core.management.paths import (
     resolve_management_root,
     safe_child,
 )
+from ontology_core.management.templates import (
+    GeneratedImportTemplate,
+    ImportTemplateVariantError,
+    build_import_template,
+)
 
 __all__ = [
     "DiagnosticDisposition",
@@ -29,11 +34,14 @@ __all__ = [
     "DraftRelation",
     "DraftTemporalPolicy",
     "ImportSession",
+    "GeneratedImportTemplate",
+    "ImportTemplateVariantError",
     "OntologyManagementConfigurationError",
     "OntologyPathError",
     "UploadLimits",
     "VersionSummary",
     "WorkspaceDraft",
+    "build_import_template",
     "resolve_management_root",
     "safe_child",
 ]
