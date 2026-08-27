@@ -3,6 +3,7 @@ import { Alert, Button, Card, Checkbox, Form, Input, List, Select, Space, Tag, T
 import { apiErrorMessage, isDraftRevisionConflict, upsertRelation } from "./api";
 import { validatedFormValues } from "./formValidation";
 import { relationId } from "./relationId";
+import { includesRelationSearch, relationMatchesSearch } from "./relationSearch";
 import type { DraftObject, DraftRelation } from "./types";
 
 interface RelationPanelProps {
@@ -52,6 +53,7 @@ export default function RelationPanel({
 }: RelationPanelProps) {
   const [form] = Form.useForm<RelationFormValues>();
   const [saving, setSaving] = useState(false);
+  const [relationSearch, setRelationSearch] = useState("");
   const sourceObjectId = Form.useWatch("sourceObjectId", form);
   const targetObjectId = Form.useWatch("targetObjectId", form);
   const sourceObject = useMemo(
@@ -61,6 +63,10 @@ export default function RelationPanel({
   const targetObject = useMemo(
     () => objects.find((item) => item.id === targetObjectId),
     [objects, targetObjectId]
+  );
+  const visibleRelations = useMemo(
+    () => relations.filter((item) => relationMatchesSearch(relationSearch, objects, item)),
+    [objects, relationSearch, relations]
   );
 
   const saveRelation = async () => {
@@ -117,6 +123,10 @@ export default function RelationPanel({
               <Select
                 style={{ minWidth: 210 }}
                 placeholder="选择源对象"
+                showSearch
+                filterOption={(input, option) =>
+                  includesRelationSearch(input, String(option?.label ?? ""))
+                }
                 options={objects.map((item) => ({ value: item.id, label: objectLabel(item) }))}
                 onChange={() => form.setFieldValue("sourceFieldId", undefined)}
               />
@@ -126,6 +136,10 @@ export default function RelationPanel({
                 style={{ minWidth: 210 }}
                 disabled={!sourceObject}
                 placeholder="先选择源对象"
+                showSearch
+                filterOption={(input, option) =>
+                  includesRelationSearch(input, String(option?.label ?? ""))
+                }
                 options={(sourceObject?.fields ?? []).map((item) => ({
                   value: item.id,
                   label: item.label ? `${item.label}（${item.physicalName}）` : item.physicalName,
@@ -136,6 +150,10 @@ export default function RelationPanel({
               <Select
                 style={{ minWidth: 210 }}
                 placeholder="选择目标对象"
+                showSearch
+                filterOption={(input, option) =>
+                  includesRelationSearch(input, String(option?.label ?? ""))
+                }
                 options={objects.map((item) => ({ value: item.id, label: objectLabel(item) }))}
                 onChange={() => form.setFieldValue("targetFieldId", undefined)}
               />
@@ -145,6 +163,10 @@ export default function RelationPanel({
                 style={{ minWidth: 210 }}
                 disabled={!targetObject}
                 placeholder="先选择目标对象"
+                showSearch
+                filterOption={(input, option) =>
+                  includesRelationSearch(input, String(option?.label ?? ""))
+                }
                 options={(targetObject?.fields ?? []).map((item) => ({
                   value: item.id,
                   label: item.label ? `${item.label}（${item.physicalName}）` : item.physicalName,
@@ -175,10 +197,18 @@ export default function RelationPanel({
           </Button>
         </Form>
         <Typography.Text strong>现有关系</Typography.Text>
+        <Input.Search
+          allowClear
+          placeholder="搜索关系标签、对象或字段"
+          value={relationSearch}
+          onChange={(event) => setRelationSearch(event.target.value)}
+        />
         <List
           size="small"
-          locale={{ emptyText: "尚未配置关系" }}
-          dataSource={relations}
+          locale={{
+            emptyText: relations.length === 0 ? "尚未配置关系" : "未找到匹配关系",
+          }}
+          dataSource={visibleRelations}
           renderItem={(item) => (
             <List.Item>
               <Space wrap>
