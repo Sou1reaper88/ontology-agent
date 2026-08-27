@@ -3,8 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from ontology_core.errors import (
+    AmbiguousIdentifierError,
     AmbiguousQueryConceptError,
+    ConceptNotFoundError,
     NoMatchingConceptError,
+    PropertyNotFoundError,
     UnsupportedQueryPlanError,
 )
 from ontology_core.normalization import normalize_text
@@ -13,6 +16,7 @@ from ontology_core.query_plan import (
     BoundProperty,
     QueryPlan,
     ResolvedFilter,
+    ResolvedJoin,
     TemporalDecision,
 )
 from ontology_core.resolver import OntologyResolver
@@ -132,6 +136,58 @@ def _infer_concept_from_properties(
     return winners[0]
 
 
+def _property_position(query: str, property_: Property) -> int:
+    positions = tuple(query.find(alias) for alias in _aliases(property_) if alias in query)
+    return min(positions) if positions else len(query)
+
+
+def _selected_concepts(
+    query: str,
+    resolver: OntologyResolver,
+    concepts: tuple[Concept, ...],
+) -> tuple[tuple[Concept, tuple[Property, ...]], ...]:
+    matched = tuple(
+        (concept, properties)
+        for concept in concepts
+        if (
+            properties := tuple(
+                property_
+                for property_ in resolver.list_properties(concept.uri)
+                if _match_score(query, property_) is not None
+            )
+        )
+    )
+    if len(matched) > 2:
+        raise UnsupportedQueryPlanError("查询涉及超过两个本体概念")
+    if len(matched) == 2:
+        matched_aliases = [
+            {
+                alias
+                for property_ in properties
+                for alias in _aliases(property_)
+                if alias in query
+            }
+            for _, properties in matched
+        ]
+        if matched_aliases[0] == matched_aliases[1]:
+            raise AmbiguousQueryConceptError(
+                "查询属性在多个本体概念中存在歧义",
+                details={"candidates": tuple(item[0].short_name for item in matched)},
+            )
+    if matched:
+        return tuple(
+            sorted(
+                matched,
+                key=lambda item: (
+                    min(_property_position(query, property_) for property_ in item[1]),
+                    item[0].uri,
+                ),
+            )
+        )
+    concept = _best_concept(query, concepts)
+    return ((concept, ()),)
+
+
 class OntologyPlanner:
     def __init__(self, resolver: OntologyResolver) -> None:
         self._resolver = resolver
@@ -139,69 +195,96 @@ class OntologyPlanner:
     def plan(self, query: str, *, system_time: str | None = None) -> QueryPlan:
         normalized_query = normalize_text(query)
         concepts = self._resolver.list_concepts()
-        try:
-            concept = _best_concept(normalized_query, concepts)
-        except NoMatchingConceptError:
-            concept, inferred_properties = _infer_concept_from_properties(
-                normalized_query,
-                self._resolver,
-                concepts,
-            )
-        else:
-            inferred_properties = ()
+        selected = _selected_concepts(normalized_query, self._resolver, concepts)
         sources = {item.uri: item for item in self._resolver.list_data_sources()}
-        object_mappings = tuple(
-            item
-            for item in self._resolver.list_mappings(concept.uri)
-            if item.object_name and item.data_source_uri in sources
+        object_mappings = {
+            concept.uri: tuple(
+                item
+                for item in self._resolver.list_mappings(concept.uri)
+                if item.object_name and item.data_source_uri in sources
+            )
+            for concept, _ in selected
+        }
+        common_sources = tuple(
+            source_uri
+            for source_uri in sources
+            if all(
+                any(item.data_source_uri == source_uri for item in object_mappings[concept.uri])
+                for concept, _ in selected
+            )
         )
-        if not object_mappings:
-            raise UnsupportedQueryPlanError("本体概念缺少可用的对象映射")
-        object_binding = object_mappings[0]
-        source = sources[object_binding.data_source_uri]
-
-        properties = self._resolver.list_properties(concept.uri)
-        matched_properties = inferred_properties or tuple(
-            property_
-            for property_ in properties
-            if _match_score(normalized_query, property_) is not None
+        if not common_sources:
+            raise UnsupportedQueryPlanError("查询对象缺少同一数据源的对象映射")
+        source = sources[common_sources[0]]
+        objects = tuple(
+            BoundObject(
+                alias=f"t{index}",
+                semantic=concept,
+                binding=next(
+                    item
+                    for item in object_mappings[concept.uri]
+                    if item.data_source_uri == source.uri
+                ),
+            )
+            for index, (concept, _) in enumerate(selected)
         )
         bindings: list[BoundProperty] = []
         by_property_uri: dict[str, BoundProperty] = {}
-        for property_ in properties:
-            mapping = next(
-                (
-                    item
-                    for item in self._resolver.list_mappings(property_.uri, source.uri)
-                    if item.field_name
-                ),
-                None,
-            )
-            if mapping is not None:
-                bound = BoundProperty(semantic=property_, binding=mapping, object_alias="t0")
-                bindings.append(bound)
-                by_property_uri[property_.uri] = bound
+        properties_by_concept: dict[str, tuple[Property, ...]] = {}
+        for object_ in objects:
+            properties = self._resolver.list_properties(object_.semantic.uri)
+            properties_by_concept[object_.semantic.uri] = properties
+            for property_ in properties:
+                mapping = next(
+                    (
+                        item
+                        for item in self._resolver.list_mappings(property_.uri, source.uri)
+                        if item.field_name
+                    ),
+                    None,
+                )
+                if mapping is not None:
+                    bound = BoundProperty(
+                        semantic=property_,
+                        binding=mapping,
+                        object_alias=object_.alias,
+                    )
+                    bindings.append(bound)
+                    by_property_uri[property_.uri] = bound
 
-        requested = matched_properties
+        requested = tuple(
+            sorted(
+                (property_ for _, matches in selected for property_ in matches),
+                key=lambda item: (_property_position(normalized_query, item), item.uri),
+            )
+        )
         if not requested:
             raise UnsupportedQueryPlanError("未匹配到查询属性")
         if any(item.uri not in by_property_uri for item in requested):
             raise UnsupportedQueryPlanError("查询属性缺少可用的字段映射")
         selections = tuple(by_property_uri[item.uri] for item in requested)
         rules = tuple(
-            item for item in self._resolver.list_rules(concept.uri) if item.status == "active"
+            item
+            for concept, _ in selected
+            for item in self._resolver.list_rules(concept.uri)
+            if item.status == "active"
         )
-        policy = self._resolver.get_temporal_policy(concept.uri)
-        filters: tuple[ResolvedFilter, ...] = ()
-        temporal_decision = None
-        if policy is not None:
+        policies = tuple(
+            policy
+            for concept, _ in selected
+            if (policy := self._resolver.get_temporal_policy(concept.uri)) is not None
+        )
+        filters: list[ResolvedFilter] = []
+        temporal_decisions: list[TemporalDecision] = []
+        parsed_system_date = parse_system_date(system_time) if policies else None
+        for policy in policies:
             partition_binding = by_property_uri.get(policy.partition_property_uri)
             if partition_binding is None:
                 raise UnsupportedQueryPlanError(
                     "分区属性缺少可用的字段映射",
                     details={"property_uri": policy.partition_property_uri},
                 )
-            parsed_system_date = parse_system_date(system_time)
+            properties = properties_by_concept[policy.applies_to_uri]
             business_targets = tuple(
                 _target(property_)
                 for property_ in properties
@@ -216,7 +299,7 @@ class OntologyPlanner:
                 partition_target=_target(partition_binding.semantic),
                 other_targets=business_targets,
             )
-            resolved_filters = [_resolved_filter(parsed.partition, partition_binding)]
+            filters.append(_resolved_filter(parsed.partition, partition_binding))
             for intent in parsed.property_intents:
                 business_binding = by_property_uri.get(intent.target_property_uri)
                 if business_binding is None:
@@ -224,29 +307,43 @@ class OntologyPlanner:
                         "业务日期属性缺少可用的字段映射",
                         details={"property_uri": intent.target_property_uri},
                     )
-                resolved_filters.append(_resolved_filter(intent, business_binding))
-            filters = tuple(resolved_filters)
-            temporal_decision = TemporalDecision(
-                partition_property_uri=policy.partition_property_uri,
-                grain=policy.grain,
-                source=parsed.partition.source,
-                system_date=parsed_system_date,
-                matched_text=parsed.partition.matched_text,
-                resolved_start=parsed.partition.start,
-                resolved_end=parsed.partition.end,
-                default_strategy=policy.default_strategy,
-                explanation=parsed.partition.explanation,
+                filters.append(_resolved_filter(intent, business_binding))
+            temporal_decisions.append(
+                TemporalDecision(
+                    partition_property_uri=policy.partition_property_uri,
+                    grain=policy.grain,
+                    source=parsed.partition.source,
+                    system_date=parsed_system_date,
+                    matched_text=parsed.partition.matched_text,
+                    resolved_start=parsed.partition.start,
+                    resolved_end=parsed.partition.end,
+                    default_strategy=policy.default_strategy,
+                    explanation=parsed.partition.explanation,
+                )
             )
+        joins: tuple[ResolvedJoin, ...] = ()
+        if len(selected) == 2:
+            try:
+                relation = self._resolver.resolve_direct_relation(
+                    selected[0][0].uri,
+                    selected[1][0].uri,
+                )
+                left = by_property_uri[str(relation.source_property_uri)]
+                right = by_property_uri[str(relation.target_property_uri)]
+            except AmbiguousIdentifierError as exc:
+                raise AmbiguousQueryConceptError("直接关系存在歧义", details=exc.details) from exc
+            except (ConceptNotFoundError, PropertyNotFoundError, KeyError) as exc:
+                raise UnsupportedQueryPlanError("查询概念之间缺少可用的唯一直接关系") from exc
+            joins = (ResolvedJoin(relation=relation, left=left, right=right),)
         return QueryPlan(
-            concepts=(concept,),
+            concepts=tuple(item[0] for item in selected),
             data_source=source,
-            objects=(
-                BoundObject(alias="t0", semantic=concept, binding=object_binding),
-            ),
+            objects=objects,
             selections=selections,
             property_bindings=tuple(bindings),
+            joins=joins,
             rules=rules,
-            filters=filters,
-            temporal_policies=(policy,) if policy is not None else (),
-            temporal_decisions=(temporal_decision,) if temporal_decision is not None else (),
+            filters=tuple(filters),
+            temporal_policies=policies,
+            temporal_decisions=tuple(temporal_decisions),
         )

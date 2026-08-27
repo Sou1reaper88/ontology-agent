@@ -268,11 +268,12 @@ def test_shadow_outputs_bounded_temporal_evidence() -> None:
 
     assert result.status == "generated"
     assert "\"accounting_month\" = '202607'" in (result.ontology_sql or "")
-    assert result.temporal_decision is not None
-    assert result.temporal_decision.partition_field == "accounting_month"
-    assert result.temporal_decision.source == "ontology_default"
-    assert result.temporal_decision.resolved_start == "202607"
-    assert result.temporal_decision.safety_status == "bounded"
+    assert len(result.temporal_decisions) == 1
+    decision = result.temporal_decisions[0]
+    assert decision.partition_field == "accounting_month"
+    assert decision.source == "ontology_default"
+    assert decision.resolved_start == "202607"
+    assert decision.safety_status == "bounded"
 
 
 def test_shadow_requests_clarification_for_unsafe_time_scope() -> None:

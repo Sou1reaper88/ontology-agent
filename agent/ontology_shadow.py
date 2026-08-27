@@ -40,6 +40,7 @@ class SqlDiff(FrozenModel):
 class OntologyEvidence(FrozenModel):
     concepts: tuple[str, ...] = ()
     properties: tuple[str, ...] = ()
+    relations: tuple[str, ...] = ()
     rules: tuple[str, ...] = ()
     data_sources: tuple[str, ...] = ()
     mappings: tuple[str, ...] = ()
@@ -87,7 +88,11 @@ class OntologyShadowResult(FrozenModel):
     diff: SqlDiff
     evidence: OntologyEvidence
     package: ShadowPackage | None = None
-    temporal_decision: TemporalEvidence | None = None
+    temporal_decisions: tuple[TemporalEvidence, ...] = ()
+
+    @property
+    def temporal_decision(self) -> TemporalEvidence | None:
+        return self.temporal_decisions[0] if self.temporal_decisions else None
 
 
 class _SnapshotRuntime(Protocol):
@@ -217,24 +222,25 @@ class OntologyShadowService:
                 for item in plan.property_bindings
                 if item.semantic.uri in evidence_property_uris
             )
-            temporal_evidence = None
-            temporal_decision = plan.temporal_decisions[0] if plan.temporal_decisions else None
-            if temporal_decision is not None:
+            temporal_evidence: list[TemporalEvidence] = []
+            for temporal_decision in plan.temporal_decisions:
                 partition_binding = next(
                     item
                     for item in plan.property_bindings
                     if item.semantic.uri == temporal_decision.partition_property_uri
                 )
-                temporal_evidence = TemporalEvidence(
-                    partition_field=str(partition_binding.binding.field_name),
-                    grain=temporal_decision.grain.value,
-                    system_time=temporal_decision.system_date.isoformat(),
-                    user_time=temporal_decision.matched_text,
-                    source=temporal_decision.source.value,
-                    default_strategy=temporal_decision.default_strategy.value,
-                    resolved_start=temporal_decision.resolved_start,
-                    resolved_end=temporal_decision.resolved_end,
-                    explanation=temporal_decision.explanation,
+                temporal_evidence.append(
+                    TemporalEvidence(
+                        partition_field=str(partition_binding.binding.field_name),
+                        grain=temporal_decision.grain.value,
+                        system_time=temporal_decision.system_date.isoformat(),
+                        user_time=temporal_decision.matched_text,
+                        source=temporal_decision.source.value,
+                        default_strategy=temporal_decision.default_strategy.value,
+                        resolved_start=temporal_decision.resolved_start,
+                        resolved_end=temporal_decision.resolved_end,
+                        explanation=temporal_decision.explanation,
+                    )
                 )
             return OntologyShadowResult(
                 status="generated",
@@ -248,6 +254,7 @@ class OntologyShadowService:
                 evidence=OntologyEvidence(
                     concepts=tuple(item.short_name for item in plan.concepts),
                     properties=tuple(item.semantic.short_name for item in plan.selections),
+                    relations=tuple(item.relation.short_name for item in plan.joins),
                     rules=tuple(item.short_name for item in plan.rules),
                     data_sources=(plan.data_source.short_name,),
                     mappings=tuple(
@@ -264,7 +271,7 @@ class OntologyShadowService:
                     version=snapshot.info.version,
                     sha256=snapshot.info.sha256[:12],
                 ),
-                temporal_decision=temporal_evidence,
+                temporal_decisions=tuple(temporal_evidence),
             )
         except NoMatchingConceptError:
             return _empty_result("no_match", "当前本体包未匹配到查询概念", legacy_sql)

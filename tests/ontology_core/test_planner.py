@@ -21,6 +21,7 @@ from ontology_core.semantic_models import (
     LocalizedText,
     PhysicalMapping,
     Property,
+    Relation,
     SemanticCatalog,
     TemporalDefaultStrategy,
     TemporalGrain,
@@ -288,6 +289,155 @@ def _property_inference_resolver(*, shared_label: bool = False) -> OntologyResol
     return OntologyResolver(snapshot)
 
 
+def _join_resolver(*, include_relation: bool = True) -> OntologyResolver:
+    customer = Concept(
+        uri="https://example.invalid/ontology/CustomerJoin",
+        short_name="CustomerJoin",
+        label="客户",
+        labels=_text("客户"),
+    )
+    order = Concept(
+        uri="https://example.invalid/ontology/OrderJoin",
+        short_name="OrderJoin",
+        label="订单",
+        labels=_text("订单"),
+    )
+    customer_id = Property(
+        uri=f"{customer.uri}/CustomerId",
+        short_name="CustomerId",
+        label="客户编号",
+        labels=_text("客户编号"),
+        concept_uri=customer.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    order_customer_id = Property(
+        uri=f"{order.uri}/CustomerId",
+        short_name="OrderCustomerId",
+        label="订单客户编号",
+        labels=_text("订单客户编号"),
+        concept_uri=order.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    amount = Property(
+        uri=f"{order.uri}/Amount",
+        short_name="OrderAmount",
+        label="订单金额",
+        labels=_text("订单金额"),
+        concept_uri=order.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#decimal",
+    )
+    p_mon = Property(
+        uri=f"{customer.uri}/Month",
+        short_name="CustomerMonth",
+        label="客户月分区",
+        labels=_text("客户月分区"),
+        concept_uri=customer.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    p_day = Property(
+        uri=f"{order.uri}/Day",
+        short_name="OrderDay",
+        label="订单日分区",
+        labels=_text("订单日分区"),
+        concept_uri=order.uri,
+        datatype_uri="http://www.w3.org/2001/XMLSchema#string",
+    )
+    source = DataSource(
+        uri="https://example.invalid/ontology/JoinWarehouse",
+        short_name="JoinWarehouse",
+        label="关联仓库",
+        labels=_text("关联仓库"),
+        platform_type="generic",
+        dialect="generic",
+    )
+    properties = (customer_id, order_customer_id, amount, p_mon, p_day)
+    mappings = [
+        PhysicalMapping(
+            uri=f"{concept.uri}/Mapping",
+            short_name=f"{concept.short_name}Table",
+            label="对象映射",
+            labels=_text("对象映射"),
+            semantic_element_uri=concept.uri,
+            data_source_uri=source.uri,
+            physical_namespace="analytics",
+            object_name=table,
+        )
+        for concept, table in ((customer, "customer_m"), (order, "order_d"))
+    ]
+    for property_, field in zip(
+        properties,
+        ("customer_id", "customer_id", "order_amount", "p_mon", "p_day"),
+        strict=True,
+    ):
+        mappings.append(
+            PhysicalMapping(
+                uri=f"{property_.uri}/Mapping",
+                short_name=f"{property_.short_name}Field",
+                label="字段映射",
+                labels=_text("字段映射"),
+                semantic_element_uri=property_.uri,
+                data_source_uri=source.uri,
+                field_name=field,
+            )
+        )
+    relations = (
+        Relation(
+            uri="https://example.invalid/ontology/CustomerOrderJoin",
+            short_name="CustomerOrderJoin",
+            label="客户订单关系",
+            labels=_text("客户订单关系"),
+            source_concept_uri=customer.uri,
+            target_concept_uri=order.uri,
+            source_property_uri=customer_id.uri,
+            target_property_uri=order_customer_id.uri,
+            confirmed=True,
+            priority=100,
+        ),
+    ) if include_relation else ()
+    policies = (
+        TemporalPartitionPolicy(
+            uri=f"{customer.uri}/Policy",
+            short_name="CustomerMonthPolicy",
+            label="客户月策略",
+            labels=_text("客户月策略"),
+            applies_to_uri=customer.uri,
+            partition_property_uri=p_mon.uri,
+            grain=TemporalGrain.MONTH,
+            default_strategy=TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH,
+        ),
+        TemporalPartitionPolicy(
+            uri=f"{order.uri}/Policy",
+            short_name="OrderDayPolicy",
+            label="订单日策略",
+            labels=_text("订单日策略"),
+            applies_to_uri=order.uri,
+            partition_property_uri=p_day.uri,
+            grain=TemporalGrain.DAY,
+            default_strategy=TemporalDefaultStrategy.T_MINUS_2,
+        ),
+    )
+    snapshot = OntologySnapshot(
+        info=PackageInfo(
+            package_id="example.join-planner",
+            version="1.0.0",
+            sha256="2" * 64,
+            loaded_at=datetime.now(UTC),
+            source="https://example.invalid/package",
+        ),
+        catalog=SemanticCatalog(
+            concepts=(customer, order),
+            properties=properties,
+            relations=relations,
+            data_sources=(source,),
+            mappings=tuple(mappings),
+            temporal_policies=policies,
+        ),
+        _data_nt="",
+        _shapes_nt="",
+    )
+    return OntologyResolver(snapshot)
+
+
 def test_planner_builds_single_concept_plan_from_labels_and_mappings() -> None:
     plan = OntologyPlanner(_resolver()).plan("查询客户编号")
 
@@ -296,6 +446,36 @@ def test_planner_builds_single_concept_plan_from_labels_and_mappings() -> None:
     assert plan.object_binding.object_name == "customer_snapshot"
     assert tuple(item.semantic.short_name for item in plan.selections) == ("CustomerId",)
     assert plan.selections[0].binding.field_name == "customer_id"
+
+
+def test_planner_builds_bounded_direct_two_concept_plan() -> None:
+    plan = OntologyPlanner(_join_resolver()).plan(
+        "查询客户编号和订单金额",
+        system_time="2026-08-24",
+    )
+    compiled = GenericSqlCompiler().compile(plan)
+
+    assert tuple(item.short_name for item in plan.concepts) == ("CustomerJoin", "OrderJoin")
+    assert tuple(item.semantic.short_name for item in plan.selections) == (
+        "CustomerId",
+        "OrderAmount",
+    )
+    assert tuple(item.resolved_start for item in plan.temporal_decisions) == (
+        "202607",
+        "20260822",
+    )
+    assert len(plan.joins) == 1
+    assert 'INNER JOIN "analytics"."order_d" AS "t1"' in compiled.sql
+    assert '"t0"."p_mon" = \'202607\'' in compiled.sql
+    assert '"t1"."p_day" = \'20260822\'' in compiled.sql
+
+
+def test_planner_rejects_two_concepts_without_confirmed_relation() -> None:
+    with pytest.raises(UnsupportedQueryPlanError, match="直接关系"):
+        OntologyPlanner(_join_resolver(include_relation=False)).plan(
+            "查询客户编号和订单金额",
+            system_time="2026-08-24",
+        )
 
 
 def test_planner_rejects_no_match_ambiguity_and_missing_mapping() -> None:

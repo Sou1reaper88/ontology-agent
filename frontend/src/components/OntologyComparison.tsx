@@ -35,6 +35,7 @@ export interface OntologyShadowResult {
   evidence: {
     concepts: string[];
     properties: string[];
+    relations: string[];
     rules: string[];
     data_sources: string[];
     mappings: string[];
@@ -44,7 +45,8 @@ export interface OntologyShadowResult {
     version: string;
     sha256: string;
   } | null;
-  temporal_decision: TemporalEvidence | null;
+  temporal_decisions?: TemporalEvidence[];
+  temporal_decision?: TemporalEvidence | null;
 }
 
 interface Props {
@@ -113,6 +115,8 @@ export function OntologyComparison({
   onEditLegacy,
   onCopyOntology,
 }: Props) {
+  const temporalDecisions =
+    result.temporal_decisions ?? (result.temporal_decision ? [result.temporal_decision] : []);
   if (result.status !== "generated" || !result.ontology_sql) {
     return (
       <Alert
@@ -184,47 +188,47 @@ export function OntologyComparison({
           </Card>
         </Col>
       </Row>
-      {result.temporal_decision && (
+      {temporalDecisions.map((decision, index) => (
         <Card
+          key={`${decision.partition_field}-${index}`}
           size="small"
-          title="业务账期决策"
+          title={temporalDecisions.length > 1 ? `业务账期决策 ${index + 1}` : "业务账期决策"}
           extra={<Tag color="green">已添加有界分区约束</Tag>}
           style={{ marginTop: 10, borderColor: "#95de64" }}
         >
           <Descriptions size="small" column={{ xs: 1, sm: 2, xl: 4 }}>
             <Descriptions.Item label="分区字段">
-              <Text code>{result.temporal_decision.partition_field}</Text>
+              <Text code>{decision.partition_field}</Text>
             </Descriptions.Item>
             <Descriptions.Item label="分区粒度">
-              {result.temporal_decision.grain === "month" ? "月" : "日"}
+              {decision.grain === "month" ? "月" : "日"}
             </Descriptions.Item>
             <Descriptions.Item label="策略来源">
-              {sourceLabels[result.temporal_decision.source]}
+              {sourceLabels[decision.source]}
             </Descriptions.Item>
             <Descriptions.Item label="系统时间">
-              {result.temporal_decision.system_time}
+              {decision.system_time}
             </Descriptions.Item>
             <Descriptions.Item label="用户时间">
-              {result.temporal_decision.user_time || "未指定"}
+              {decision.user_time || "未指定"}
             </Descriptions.Item>
             <Descriptions.Item label="默认算法">
-              {strategyLabels[result.temporal_decision.default_strategy]}
+              {strategyLabels[decision.default_strategy]}
             </Descriptions.Item>
             <Descriptions.Item label="最终账期">
               <Text strong>
-                {result.temporal_decision.resolved_start ===
-                result.temporal_decision.resolved_end
-                  ? result.temporal_decision.resolved_start
-                  : `${result.temporal_decision.resolved_start} 至 ${result.temporal_decision.resolved_end}`}
+                {decision.resolved_start === decision.resolved_end
+                  ? decision.resolved_start
+                  : `${decision.resolved_start} 至 ${decision.resolved_end}`}
               </Text>
             </Descriptions.Item>
             <Descriptions.Item label="安全状态">
               <Tag color="green">有界</Tag>
             </Descriptions.Item>
           </Descriptions>
-          <Text type="secondary">{result.temporal_decision.explanation}</Text>
+          <Text type="secondary">{decision.explanation}</Text>
         </Card>
-      )}
+      ))}
       <Card
         size="small"
         title="本体依据"
@@ -240,6 +244,7 @@ export function OntologyComparison({
         <Space direction="vertical" size={6}>
           <EvidenceTags label="概念" values={result.evidence.concepts} />
           <EvidenceTags label="属性" values={result.evidence.properties} />
+          <EvidenceTags label="关系" values={result.evidence.relations || []} />
           <EvidenceTags label="规则" values={result.evidence.rules} />
           <EvidenceTags label="数据源" values={result.evidence.data_sources} />
           <EvidenceTags label="映射" values={result.evidence.mappings} />
