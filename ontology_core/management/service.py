@@ -12,6 +12,7 @@ from ontology_core.errors import OntologyError
 from ontology_core.management.editor import DraftEditor
 from ontology_core.management.imports import BatchImportService, ImportPreview, UploadPayload
 from ontology_core.management.models import (
+    DraftDeleteImpact,
     DraftDiagnostic,
     DraftRelation,
     DraftTemporalPolicy,
@@ -197,20 +198,50 @@ class OntologyManagementService:
         )
 
     def delete_object(
-        self, workspace_id: str, object_id: str, *, expected_revision: int
+        self,
+        workspace_id: str,
+        object_id: str,
+        *,
+        expected_revision: int,
+        cascade: bool,
+        confirmation_name: str,
     ) -> WorkspaceDraft:
         return self._editor_for(workspace_id).delete_draft_object(
-            workspace_id, object_id, expected_revision=expected_revision
+            workspace_id,
+            object_id,
+            expected_revision=expected_revision,
+            cascade=cascade,
+            confirmation_name=confirmation_name,
         )
 
+    def object_delete_impact(
+        self, workspace_id: str, object_id: str
+    ) -> DraftDeleteImpact:
+        return self._editor_for(workspace_id).object_delete_impact(workspace_id, object_id)
+
     def delete_field(
-        self, workspace_id: str, field_id: str, *, expected_revision: int
+        self,
+        workspace_id: str,
+        field_id: str,
+        *,
+        expected_revision: int,
+        cascade: bool,
+        confirmation_name: str,
     ) -> WorkspaceDraft:
         return self._editor_for(workspace_id).delete_draft_field(
             workspace_id,
             self._field_owner(workspace_id, field_id),
             field_id,
             expected_revision=expected_revision,
+            cascade=cascade,
+            confirmation_name=confirmation_name,
+        )
+
+    def field_delete_impact(self, workspace_id: str, field_id: str) -> DraftDeleteImpact:
+        return self._editor_for(workspace_id).field_delete_impact(
+            workspace_id,
+            self._field_owner(workspace_id, field_id),
+            field_id,
         )
 
     def resolve_diagnostic(

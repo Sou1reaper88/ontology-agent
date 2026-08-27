@@ -88,6 +88,48 @@ def _multipart(revision: int) -> dict[str, str]:
     return {"expected_revision": str(revision)}
 
 
+def _seed_delete_graph(client: TestClient) -> tuple[dict, dict, int]:
+    preview = client.post(
+        "/ontology-packages/workspaces/evaluation/imports/preview",
+        data=_multipart(0),
+        files=[
+            ("files", ("accounts.tsv", ACCOUNT.encode("utf-8"), "text/tab-separated-values")),
+            ("files", ("orders.tsv", ORDER.encode("utf-8"), "text/tab-separated-values")),
+        ],
+    )
+    confirmed = client.post(
+        f"/ontology-packages/workspaces/evaluation/imports/{preview.json()['data']['token']}/confirm",
+        json={"expected_revision": 0},
+    )
+    account, order = confirmed.json()["data"]["objects"]
+    relation = client.put(
+        "/ontology-packages/workspaces/evaluation/relations/relation/synthetic-delete-impact",
+        json={
+            "expected_revision": 1,
+            "label": "合成关联",
+            "source_object_id": order["id"],
+            "source_field_id": order["fields"][0]["id"],
+            "target_object_id": account["id"],
+            "target_field_id": account["fields"][0]["id"],
+            "cardinality": "many_to_one",
+            "confirmed": True,
+        },
+    )
+    assert relation.status_code == 200, relation.text
+    policy = client.put(
+        f"/ontology-packages/workspaces/evaluation/temporal-policies/{order['id']}",
+        json={
+            "expected_revision": 2,
+            "partition_field_id": order["fields"][0]["id"],
+            "grain": "day",
+            "default_strategy": "t_minus_2",
+            "allow_query_override": False,
+        },
+    )
+    assert policy.status_code == 200, policy.text
+    return account, order, policy.json()["revision"]
+
+
 def test_upload_streams_are_all_closed_when_byte_cap_rejects_one_file() -> None:
     class Stream:
         def __init__(self, content: bytes) -> None:
@@ -169,6 +211,150 @@ def test_template_download_rejects_unknown_variant_and_workspace(
         "message": "未找到本体草稿",
         "details": {},
     }
+
+
+def test_administrator_previews_and_atomically_cascade_deletes_object(
+    management_client: tuple[TestClient, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, role_name = management_client
+    account, order, current_revision = _seed_delete_graph(client)
+    role_name[0] = "全省管理员"
+    records: list[dict[str, object]] = []
+
+    def capture(user_id, action, *, detail=None, status="success", **unused) -> None:
+        records.append({"user_id": user_id, "action": action, "detail": detail, "status": status})
+
+    monkeypatch.setattr(ontology_packages, "write_audit_log", capture)
+    impact = client.get(
+        f"/ontology-packages/workspaces/evaluation/objects/{order['id']}/delete-impact"
+    )
+
+    assert impact.status_code == 200, impact.text
+    assert impact.json() == {
+        "data": {
+            "target_type": "object",
+            "target_id": order["id"],
+            "physical_name": "SYNTHETIC_ORDER",
+            "object_count": 1,
+            "field_count": 1,
+            "relation_count": 1,
+            "temporal_policy_count": 1,
+        },
+        "revision": current_revision,
+    }
+
+    deleted = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/objects/{order['id']}",
+        json={
+            "expected_revision": current_revision,
+            "cascade": True,
+            "confirmation_name": "SYNTHETIC_ORDER",
+        },
+    )
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["revision"] == current_revision + 1
+    assert [item["id"] for item in deleted.json()["data"]["objects"]] == [account["id"]]
+    assert deleted.json()["data"]["relations"] == []
+    assert deleted.json()["data"]["temporal_policies"] == []
+    assert records[0]["detail"]["counts"] == {
+        "objects": 1,
+        "fields": 1,
+        "relations": 1,
+        "temporal_policies": 1,
+    }
+    assert "SYNTHETIC_ORDER\t" not in str(records)
+
+
+def test_administrator_cascade_deletes_field_and_rejects_stale_or_wrong_confirmation(
+    management_client: tuple[TestClient, list[str]],
+) -> None:
+    client, role_name = management_client
+    _, order, current_revision = _seed_delete_graph(client)
+    role_name[0] = "全省管理员"
+    field = order["fields"][0]
+
+    impact = client.get(
+        f"/ontology-packages/workspaces/evaluation/fields/{field['id']}/delete-impact"
+    )
+    assert impact.status_code == 200, impact.text
+    assert impact.json()["data"]["field_count"] == 1
+    assert impact.json()["data"]["relation_count"] == 1
+    assert impact.json()["data"]["temporal_policy_count"] == 1
+
+    no_cascade = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/fields/{field['id']}",
+        json={
+            "expected_revision": current_revision,
+            "cascade": False,
+            "confirmation_name": field["physical_name"],
+        },
+    )
+    wrong_name = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/fields/{field['id']}",
+        json={
+            "expected_revision": current_revision,
+            "cascade": True,
+            "confirmation_name": field["physical_name"].casefold(),
+        },
+    )
+    assert no_cascade.status_code == 422
+    assert no_cascade.json()["code"] == "draft_delete_cascade_required"
+    assert wrong_name.status_code == 422
+    assert wrong_name.json()["code"] == "draft_delete_confirmation_mismatch"
+
+    deleted = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/fields/{field['id']}",
+        json={
+            "expected_revision": current_revision,
+            "cascade": True,
+            "confirmation_name": field["physical_name"],
+        },
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["revision"] == current_revision + 1
+    assert deleted.json()["data"]["relations"] == []
+    assert deleted.json()["data"]["temporal_policies"] == []
+
+    stale = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/objects/{order['id']}",
+        json={
+            "expected_revision": current_revision,
+            "cascade": True,
+            "confirmation_name": order["physical_name"],
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["code"] == "draft_revision_conflict"
+
+
+def test_maintainer_cannot_preview_or_execute_cascade_delete(
+    management_client: tuple[TestClient, list[str]],
+) -> None:
+    client, _ = management_client
+    _, order, current_revision = _seed_delete_graph(client)
+
+    impact = client.get(
+        f"/ontology-packages/workspaces/evaluation/objects/{order['id']}/delete-impact"
+    )
+    deleted = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/objects/{order['id']}",
+        json={
+            "expected_revision": current_revision,
+            "cascade": True,
+            "confirmation_name": order["physical_name"],
+        },
+    )
+
+    assert impact.status_code == 403
+    assert deleted.status_code == 403
 
 
 def test_management_api_composes_existing_services_without_route_domain_logic(
@@ -358,11 +544,23 @@ def test_fresh_service_injects_durable_published_identifiers_into_editor(
     field_id = draft.objects[0].fields[0].id
 
     with pytest.raises(Exception) as object_error:
-        restarted.delete_object("evaluation", object_id, expected_revision=draft.revision)
+        restarted.delete_object(
+            "evaluation",
+            object_id,
+            expected_revision=draft.revision,
+            cascade=True,
+            confirmation_name=draft.objects[0].physical_name,
+        )
     assert getattr(object_error.value, "code", None) == "draft_edit_published_identifier"
 
     with pytest.raises(Exception) as field_error:
-        restarted.delete_field("evaluation", field_id, expected_revision=draft.revision)
+        restarted.delete_field(
+            "evaluation",
+            field_id,
+            expected_revision=draft.revision,
+            cascade=True,
+            confirmation_name=draft.objects[0].fields[0].physical_name,
+        )
     assert getattr(field_error.value, "code", None) == "draft_edit_published_identifier"
 
 
@@ -378,7 +576,15 @@ def test_unknown_field_patch_and_delete_return_stable_not_found_envelopes(
     )
 
     role_name[0] = "全省管理员"
-    deleted = client.request("DELETE", unknown_field_url, json={"expected_revision": 0})
+    deleted = client.request(
+        "DELETE",
+        unknown_field_url,
+        json={
+            "expected_revision": 0,
+            "cascade": True,
+            "confirmation_name": "MISSING_FIELD",
+        },
+    )
 
     expected = {"code": "draft_field_not_found", "message": "未找到属性", "details": {}}
     assert patched.status_code == 404

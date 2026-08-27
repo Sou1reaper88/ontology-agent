@@ -14,6 +14,18 @@ class RevisionRequest(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
+class CascadeDeleteRequest(RevisionRequest):
+    cascade: bool
+    confirmation_name: str = Field(min_length=1)
+
+    @field_validator("confirmation_name")
+    @classmethod
+    def require_nonblank_confirmation_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("删除确认名称不能为空")
+        return value
+
+
 class DescriptivePatch(RevisionRequest):
     label: str | None = None
     description: str | None = None

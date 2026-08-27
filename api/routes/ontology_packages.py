@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
 
 from api.schemas.ontology_packages import (
+    CascadeDeleteRequest,
     DescriptivePatch,
     DiagnosticResolutionRequest,
     PublishRequest,
@@ -140,6 +141,17 @@ def confirm_import(
     return _draft_envelope(draft)
 
 
+@router.get("/workspaces/{workspace_id}/objects/{object_id:path}/delete-impact")
+def object_delete_impact(
+    workspace_id: str,
+    object_id: str,
+    user: User = Depends(require_ontology_administrator),
+    service: OntologyManagementService = Depends(get_management_service),
+) -> dict[str, Any]:
+    impact = service.object_delete_impact(workspace_id, object_id)
+    return _envelope(impact.model_dump(mode="json"), service.draft_revision(workspace_id))
+
+
 @router.patch("/workspaces/{workspace_id}/objects/{object_id:path}")
 def patch_object(
     request: Request,
@@ -165,16 +177,36 @@ def delete_object(
     request: Request,
     workspace_id: str,
     object_id: str,
-    payload: RevisionRequest,
+    payload: CascadeDeleteRequest,
     user: User = Depends(require_ontology_administrator),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
+    impact = service.object_delete_impact(workspace_id, object_id)
     _audit_context(request, user, service, workspace_id, "object_delete")
     draft = service.delete_object(
-        workspace_id, object_id, expected_revision=payload.expected_revision
+        workspace_id,
+        object_id,
+        expected_revision=payload.expected_revision,
+        cascade=payload.cascade,
+        confirmation_name=payload.confirmation_name,
     )
-    _audit_success(request, revision_after=draft.revision, counts=_counts(draft))
+    _audit_success(
+        request,
+        revision_after=draft.revision,
+        counts=_delete_counts(impact),
+    )
     return _draft_envelope(draft)
+
+
+@router.get("/workspaces/{workspace_id}/fields/{field_id:path}/delete-impact")
+def field_delete_impact(
+    workspace_id: str,
+    field_id: str,
+    user: User = Depends(require_ontology_administrator),
+    service: OntologyManagementService = Depends(get_management_service),
+) -> dict[str, Any]:
+    impact = service.field_delete_impact(workspace_id, field_id)
+    return _envelope(impact.model_dump(mode="json"), service.draft_revision(workspace_id))
 
 
 @router.patch("/workspaces/{workspace_id}/fields/{field_id:path}")
@@ -202,17 +234,24 @@ def delete_field(
     request: Request,
     workspace_id: str,
     field_id: str,
-    payload: RevisionRequest,
+    payload: CascadeDeleteRequest,
     user: User = Depends(require_ontology_administrator),
     service: OntologyManagementService = Depends(get_management_service),
 ) -> dict[str, Any]:
+    impact = service.field_delete_impact(workspace_id, field_id)
     _audit_context(request, user, service, workspace_id, "field_delete")
     draft = service.delete_field(
         workspace_id,
         field_id,
         expected_revision=payload.expected_revision,
+        cascade=payload.cascade,
+        confirmation_name=payload.confirmation_name,
     )
-    _audit_success(request, revision_after=draft.revision, counts=_counts(draft))
+    _audit_success(
+        request,
+        revision_after=draft.revision,
+        counts=_delete_counts(impact),
+    )
     return _draft_envelope(draft)
 
 
@@ -405,6 +444,15 @@ def _counts(draft) -> dict[str, int]:
         "fields": sum(len(item.fields) for item in draft.objects),
         "relations": len(draft.relations),
         "temporal_policies": len(draft.temporal_policies),
+    }
+
+
+def _delete_counts(impact) -> dict[str, int]:
+    return {
+        "objects": impact.object_count,
+        "fields": impact.field_count,
+        "relations": impact.relation_count,
+        "temporal_policies": impact.temporal_policy_count,
     }
 
 
