@@ -71,6 +71,16 @@ class DraftDeleteConfirmationError(OntologyError):
         super().__init__("删除确认名称不匹配")
 
 
+class DraftObjectNotFoundError(OntologyError, ValueError):
+    """Report a missing draft object through the stable management API envelope."""
+
+    code = "draft_object_not_found"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("未找到对象")
+
+
 class DraftDiagnosticDispositionError(OntologyError):
     """Raised when a non-confirmation diagnostic is submitted for disposition."""
 
@@ -400,7 +410,7 @@ def _object_by_id(draft: WorkspaceDraft, object_id: str) -> DraftObject:
     for object_ in draft.objects:
         if object_.id == object_id:
             return object_
-    raise ValueError("未找到对象")
+    raise DraftObjectNotFoundError()
 
 
 def _field_by_id(object_: DraftObject, field_id: str) -> DraftField:

@@ -268,6 +268,38 @@ def test_administrator_previews_and_atomically_cascade_deletes_object(
     assert "SYNTHETIC_ORDER\t" not in str(records)
 
 
+def test_repeated_object_delete_returns_stable_not_found_error(
+    management_client: tuple[TestClient, list[str]],
+) -> None:
+    client, role_name = management_client
+    _, order, current_revision = _seed_delete_graph(client)
+    role_name[0] = "全省管理员"
+    request = {
+        "expected_revision": current_revision,
+        "cascade": True,
+        "confirmation_name": order["physical_name"],
+    }
+
+    first = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/objects/{order['id']}",
+        json=request,
+    )
+    repeated = client.request(
+        "DELETE",
+        f"/ontology-packages/workspaces/evaluation/objects/{order['id']}",
+        json=request,
+    )
+
+    assert first.status_code == 200, first.text
+    assert repeated.status_code == 404
+    assert repeated.json() == {
+        "code": "draft_object_not_found",
+        "message": "未找到对象",
+        "details": {},
+    }
+
+
 def test_administrator_cascade_deletes_field_and_rejects_stale_or_wrong_confirmation(
     management_client: tuple[TestClient, list[str]],
 ) -> None:
