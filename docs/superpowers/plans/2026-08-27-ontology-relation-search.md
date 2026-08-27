@@ -58,7 +58,7 @@ const objects: DraftObject[] = [
     fields: [
       {
         id: "field/customer-id",
-        physicalName: "CUSTOMER_ID",
+        physicalName: "CUSTOMER_KEY",
         label: "客户编号",
         description: null,
         xsdType: "string",
@@ -110,8 +110,10 @@ const relation: DraftRelation = {
 assert(includesRelationSearch(" customer ", "CUSTOMER_ID"), "physical name is case-insensitive");
 assert(includesRelationSearch("客户", "客户主表", "D_CUSTOMER_M"), "Chinese label matches");
 assert(relationMatchesSearch("订单归属", objects, relation), "relation label matches");
+assert(relationMatchesSearch("d_order_d", objects, relation), "source object matches");
 assert(relationMatchesSearch("d_customer_m", objects, relation), "target object matches");
 assert(relationMatchesSearch("订单客户编号", objects, relation), "source field matches");
+assert(relationMatchesSearch("customer_key", objects, relation), "target field matches");
 assert(relationMatchesSearch("   ", objects, relation), "blank search returns all relations");
 assert(!relationMatchesSearch("不存在", objects, relation), "unmatched relation is rejected");
 
