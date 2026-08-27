@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import io
 import re
@@ -13,6 +12,7 @@ from zipfile import BadZipFile, ZipFile
 from openpyxl import load_workbook
 
 from ontology_core.errors import OntologyImportError
+from ontology_core.management.import_format import prepare_tsv, prepare_xlsx_rows
 from ontology_core.management.models import DraftDiagnostic, DraftField, DraftObject, UploadLimits
 from ontology_core.management.validation import stable_diagnostic_id
 from ontology_core.models import FrozenModel
@@ -65,7 +65,12 @@ def parse_metadata_upload(file_name: str, content: bytes, limits: UploadLimits) 
         raise UnsafeUploadError("上传文件为空或超过大小限制")
     if suffix in {".tsv", ".txt"}:
         try:
-            drafts = parse_tabular_objects(content.decode("utf-8", errors="strict"), file_name)
+            prepared = prepare_tsv(content.decode("utf-8", errors="strict"))
+            drafts = parse_tabular_objects(
+                prepared.text,
+                file_name,
+                line_offset=prepared.line_offset,
+            )
         except UnicodeDecodeError as exc:
             raise UnsafeUploadError("TSV 文件必须使用 UTF-8 编码") from exc
     elif suffix == ".xlsx":
@@ -119,13 +124,17 @@ def _parse_xlsx(content: bytes, file_name: str) -> tuple[TabularMetadataDraft, .
     try:
         drafts: list[TabularMetadataDraft] = []
         for worksheet in workbook.worksheets:
-            text = _rows_to_tsv(worksheet.iter_rows(values_only=True))
-            if not text.strip():
+            rows = tuple(worksheet.iter_rows(values_only=True))
+            if not any(
+                any(value is not None and str(value).strip() for value in row) for row in rows
+            ):
                 continue
+            prepared = prepare_xlsx_rows(rows, worksheet.title)
             drafts.extend(
                 parse_tabular_objects(
-                    text,
+                    prepared.text,
                     f"{file_name}:{worksheet.title}",
+                    line_offset=prepared.line_offset,
                 )
             )
         if not drafts:
@@ -133,14 +142,6 @@ def _parse_xlsx(content: bytes, file_name: str) -> tuple[TabularMetadataDraft, .
         return _merge_drafts(drafts)
     finally:
         workbook.close()
-
-
-def _rows_to_tsv(rows: Iterable[tuple[object, ...]]) -> str:
-    output = io.StringIO(newline="")
-    writer = csv.writer(output, delimiter="\t", lineterminator="\n")
-    for row in rows:
-        writer.writerow("" if value is None else str(value) for value in row)
-    return output.getvalue()
 
 
 def _merge_drafts(drafts: Iterable[TabularMetadataDraft]) -> tuple[TabularMetadataDraft, ...]:

@@ -186,10 +186,16 @@ class BatchImportService:
             try:
                 parsed = parse_metadata_upload(file_name, upload.content, self._limits)
             except OntologyError as error:
-                diagnostics.append(_parser_error_diagnostic(error.code, file_name))
+                diagnostics.append(_parser_error_diagnostic(error.code, file_name, error.message))
                 continue
             except Exception:
-                diagnostics.append(_parser_error_diagnostic("metadata_parse_error", file_name))
+                diagnostics.append(
+                    _parser_error_diagnostic(
+                        "metadata_parse_error",
+                        file_name,
+                        "上传文件解析失败",
+                    )
+                )
                 continue
             candidates.extend(parsed.objects)
             diagnostics.extend(parsed.diagnostics)
@@ -267,8 +273,8 @@ def _duplicate_diagnostics(
     return diagnostics
 
 
-def _parser_error_diagnostic(code: str, file_name: str) -> DraftDiagnostic:
-    return _diagnostic(code, f"{file_name}：上传文件解析失败")
+def _parser_error_diagnostic(code: str, file_name: str, message: str) -> DraftDiagnostic:
+    return _diagnostic(code, f"{file_name}：{message}")
 
 
 def _diagnostic(

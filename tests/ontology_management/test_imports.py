@@ -7,16 +7,21 @@ import pytest
 
 import ontology_core.management.imports as imports_module
 from ontology_core.errors import OntologyError
+from ontology_core.management.import_format import STANDARD_COLUMNS
 from ontology_core.management.imports import BatchImportService, UploadPayload
 from ontology_core.management.models import DraftDataSource, UploadLimits, WorkspaceDraft
 from ontology_core.management.parsers import ParsedUpload, parse_metadata_upload
 from ontology_core.management.store import FileDraftStore, OntologyManagementStoreError
 
 LIMITS = UploadLimits(max_upload_bytes=1_000_000, max_xlsx_uncompressed_bytes=100_000)
-HEADER = "对象英文名称\t对象中文名称\t对象描述\t属性英文名\t属性中文名\t属性类型\t属性描述\n"
-TABLE_A = HEADER + "DEMO_ACCOUNT\t账户\t账户表\tACCOUNT_ID\t账户编号\tbigint\t稳定主键\n"
-TABLE_B = HEADER + "DEMO_CUSTOMER\t客户\t客户表\tCUSTOMER_ID\t客户编号\tbigint\t稳定主键\n"
-TABLE_C = HEADER + "DEMO_ORDER\t订单\t订单表\tORDER_ID\t订单编号\tbigint\t稳定主键\n"
+HEADER = "\t".join(STANDARD_COLUMNS) + "\n"
+TABLE_A = (
+    HEADER + "DEMO_ACCOUNT\t账户\t账户表\t启用\tACCOUNT_ID\t账户编号\tbigint\t稳定主键\t是\t是\n"
+)
+TABLE_B = (
+    HEADER + "DEMO_CUSTOMER\t客户\t客户表\t启用\tCUSTOMER_ID\t客户编号\tbigint\t稳定主键\t是\t是\n"
+)
+TABLE_C = HEADER + "DEMO_ORDER\t订单\t订单表\t启用\tORDER_ID\t订单编号\tbigint\t稳定主键\t是\t是\n"
 
 
 def upload(file_name: str, table: str) -> UploadPayload:
@@ -213,7 +218,7 @@ def test_preview_diagnostics_keep_only_a_safe_upload_basename(
 ) -> None:
     service, _, _ = import_service(tmp_path)
     content = (
-        HEADER + "DEMO_ACCOUNT\t账户\t账户表\tBAD-NAME\t字段\tbigint\tRAW_ROW_SECRET\n"
+        HEADER + "DEMO_ACCOUNT\t账户\t账户表\t启用\tBAD-NAME\t字段\tbigint\tRAW_ROW_SECRET\t\t\n"
     ).encode("utf-8")
 
     preview = service.preview(
@@ -231,6 +236,22 @@ def test_preview_diagnostics_keep_only_a_safe_upload_basename(
     assert ".." not in diagnostic.message
     assert "RAW_ROW_SECRET" not in diagnostic.message
     assert diagnostic.related_ids == ("object/demo_account", "field/demo_account/bad-name")
+
+
+def test_preview_exposes_safe_header_guidance_without_row_contents(tmp_path: Path) -> None:
+    service, _, _ = import_service(tmp_path)
+    secret = "RAW_HEADER_ROW_SECRET"
+    content = f"对象英文名称\t属性英文名\n{secret}\tFIELD_ID\n".encode()
+
+    preview = service.preview(
+        "evaluation",
+        expected_revision=0,
+        uploads=(UploadPayload(file_name="invalid.tsv", content=content),),
+    )
+
+    assert preview.status == "blocked"
+    assert preview.diagnostics[0].message == "invalid.tsv：元数据必须使用十列标准表头"
+    assert secret not in preview.diagnostics[0].message
 
 
 def test_empty_upload_blocks_whole_preview_without_a_token(tmp_path: Path) -> None:

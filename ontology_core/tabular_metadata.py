@@ -199,7 +199,12 @@ def parse_tabular_metadata(text: str) -> TabularMetadataDraft:
     )
 
 
-def parse_tabular_objects(text: str, source_name: str) -> tuple[TabularMetadataDraft, ...]:
+def parse_tabular_objects(
+    text: str,
+    source_name: str,
+    *,
+    line_offset: int = 0,
+) -> tuple[TabularMetadataDraft, ...]:
     """Parse a TSV document into independently analyzable object drafts."""
     reader = csv.DictReader(io.StringIO(text), delimiter="\t")
     required_headers = {"对象英文名称", "属性英文名"}
@@ -213,7 +218,7 @@ def parse_tabular_objects(text: str, source_name: str) -> tuple[TabularMetadataD
     grouped_rows: dict[str, list[tuple[int, dict[str, str | None]]]] = {}
     object_names: dict[str, list[str]] = {}
     document_diagnostics: list[ImportDiagnostic] = []
-    for line, row in enumerate(reader, start=2):
+    for line, row in enumerate(reader, start=2 + line_offset):
         table_name = _clean(row, "对象英文名称")
         if table_name is None:
             document_diagnostics.append(
@@ -239,6 +244,8 @@ def parse_tabular_objects(text: str, source_name: str) -> tuple[TabularMetadataD
         table_label: str | None = None
         table_description: str | None = None
         table_status: str | None = None
+        table_enabled: bool | None = None
+        first_line = rows[0][0]
         for line, row in rows:
             field_name = _clean(row, "属性英文名")
             if field_name is None:
@@ -251,18 +258,100 @@ def parse_tabular_objects(text: str, source_name: str) -> tuple[TabularMetadataD
                     )
                 )
                 continue
-            table_label = table_label or _clean(row, "对象中文名称")
+            field_label = _clean(row, "属性中文名")
+            field_type = _clean(row, "属性类型")
+            if field_label is None:
+                diagnostics.append(
+                    ImportDiagnostic(
+                        code="missing_field_label",
+                        severity=DiagnosticSeverity.ERROR,
+                        message="属性中文名为空",
+                        location=SourceLocation(line=line, column="属性中文名"),
+                        field_name=field_name,
+                    )
+                )
+            if field_type is None:
+                diagnostics.append(
+                    ImportDiagnostic(
+                        code="missing_field_type",
+                        severity=DiagnosticSeverity.ERROR,
+                        message="属性类型为空",
+                        location=SourceLocation(line=line, column="属性类型"),
+                        field_name=field_name,
+                    )
+                )
+            row_label = _clean(row, "对象中文名称")
+            row_status = _clean(row, "状态")
+            if row_label is not None and table_label is not None and row_label != table_label:
+                diagnostics.append(
+                    ImportDiagnostic(
+                        code="conflicting_object_label",
+                        severity=DiagnosticSeverity.ERROR,
+                        message="同一对象存在冲突的中文名称",
+                        location=SourceLocation(line=line, column="对象中文名称"),
+                    )
+                )
+            if row_status is not None:
+                row_enabled, status_diagnostic = _strict_status(row_status, line=line)
+                if status_diagnostic is not None:
+                    diagnostics.append(status_diagnostic)
+                elif table_enabled is not None and row_enabled is not table_enabled:
+                    diagnostics.append(
+                        ImportDiagnostic(
+                            code="conflicting_object_status",
+                            severity=DiagnosticSeverity.ERROR,
+                            message="同一对象存在冲突的状态",
+                            location=SourceLocation(line=line, column="状态"),
+                        )
+                    )
+                elif table_enabled is None:
+                    table_enabled = row_enabled
+            table_label = table_label or row_label
             table_description = table_description or _clean(row, "对象描述")
-            table_status = table_status or _clean(row, "状态")
+            table_status = table_status or row_status
+            primary_key, primary_key_diagnostic = _strict_boolean(
+                _clean(row, "是否主键"),
+                line=line,
+                column="是否主键",
+                field_name=field_name,
+            )
+            title, title_diagnostic = _strict_boolean(
+                _clean(row, "是否标题"),
+                line=line,
+                column="是否标题",
+                field_name=field_name,
+            )
+            if primary_key_diagnostic is not None:
+                diagnostics.append(primary_key_diagnostic)
+            if title_diagnostic is not None:
+                diagnostics.append(title_diagnostic)
             fields.append(
                 FieldMetadata(
                     physical_name=field_name,
-                    label=_clean(row, "属性中文名"),
-                    source_type=_clean(row, "属性类型"),
+                    label=field_label,
+                    source_type=field_type,
                     description=_clean(row, "属性描述"),
-                    primary_key=_is_true(_clean(row, "是否主键")),
-                    title=_is_true(_clean(row, "是否标题")),
+                    primary_key=primary_key,
+                    title=title,
                     location=SourceLocation(line=line, column="属性英文名"),
+                )
+            )
+        if table_label is None:
+            diagnostics.append(
+                ImportDiagnostic(
+                    code="missing_object_label",
+                    severity=DiagnosticSeverity.ERROR,
+                    message="对象中文名称为空",
+                    location=SourceLocation(line=first_line, column="对象中文名称"),
+                )
+            )
+        if table_status is None:
+            diagnostics.append(
+                ImportDiagnostic(
+                    code="missing_object_status",
+                    severity=DiagnosticSeverity.ERROR,
+                    message="对象状态为空",
+                    location=SourceLocation(line=first_line, column="状态"),
                 )
             )
         drafts.append(
@@ -271,7 +360,7 @@ def parse_tabular_objects(text: str, source_name: str) -> tuple[TabularMetadataD
                     physical_name=first_name,
                     label=table_label,
                     description=table_description,
-                    enabled=table_status is None or _is_true(table_status),
+                    enabled=True if table_enabled is None else table_enabled,
                 ),
                 fields=tuple(fields),
                 object_names=tuple(object_names[key]),
@@ -290,6 +379,49 @@ def parse_tabular_objects(text: str, source_name: str) -> tuple[TabularMetadataD
             drafts,
             key=lambda item: (item.table.physical_name.casefold(), item.table.physical_name),
         )
+    )
+
+
+def _strict_boolean(
+    value: str | None,
+    *,
+    line: int,
+    column: str,
+    field_name: str,
+) -> tuple[bool, ImportDiagnostic | None]:
+    if value is None or value.casefold() in {"0", "false", "no", "n", "否"}:
+        return False, None
+    if value.casefold() in {"1", "true", "yes", "y", "是"}:
+        return True, None
+    return (
+        False,
+        ImportDiagnostic(
+            code="invalid_boolean_value",
+            severity=DiagnosticSeverity.ERROR,
+            message=f"{column}包含无法识别的布尔值",
+            location=SourceLocation(line=line, column=column),
+            field_name=field_name,
+        ),
+    )
+
+
+def _strict_status(
+    value: str,
+    *,
+    line: int,
+) -> tuple[bool, ImportDiagnostic | None]:
+    if value.casefold() in {"1", "true", "yes", "y", "是", "启用"}:
+        return True, None
+    if value.casefold() in {"0", "false", "no", "n", "否", "停用"}:
+        return False, None
+    return (
+        False,
+        ImportDiagnostic(
+            code="invalid_object_status",
+            severity=DiagnosticSeverity.ERROR,
+            message="状态包含无法识别的值",
+            location=SourceLocation(line=line, column="状态"),
+        ),
     )
 
 
