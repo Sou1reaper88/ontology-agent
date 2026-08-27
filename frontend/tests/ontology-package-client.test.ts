@@ -1,5 +1,6 @@
 import {
   fieldPath,
+  importTemplatePath,
   importPreviewFormData,
   diagnosticResolutionPath,
   diagnosticResolutionPayload,
@@ -7,6 +8,7 @@ import {
   mapVersionSummary,
   objectPath,
   relationPath,
+  safeAttachmentFileName,
   temporalPolicyPath,
   versionsPath,
   workspacePath,
@@ -15,6 +17,7 @@ import {
   installPreviewForRevision,
   previewForCurrentRevision,
 } from "../src/features/ontology-package/importPreviewState";
+import { metadataUploadValidationError } from "../src/features/ontology-package/uploadValidation";
 
 function equal(actual: string, expected: string, label: string): void {
   if (actual !== expected) {
@@ -60,6 +63,42 @@ equal(
   versionsPath("workspace / 中文"),
   "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/versions",
   "versions path is workspace scoped"
+);
+equal(
+  importTemplatePath("workspace / 中文", "multiple"),
+  "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/imports/template?variant=multiple",
+  "template path is workspace scoped and encoded"
+);
+equal(
+  safeAttachmentFileName(
+    'attachment; filename="ontology-import-single.xlsx"',
+    "fallback.xlsx"
+  ),
+  "ontology-import-single.xlsx",
+  "safe ASCII attachment name is retained"
+);
+equal(
+  safeAttachmentFileName('attachment; filename="../unsafe.xlsx"', "fallback.xlsx"),
+  "fallback.xlsx",
+  "unsafe attachment names fall back"
+);
+equal(
+  safeAttachmentFileName('attachment; filename="sample.tsv"', "fallback.xlsx"),
+  "fallback.xlsx",
+  "non-XLSX attachment names fall back"
+);
+if (metadataUploadValidationError({ name: "objects.XLSX", size: 1024 }) !== null) {
+  throw new Error("supported XLSX files must remain selectable");
+}
+equal(
+  metadataUploadValidationError({ name: "objects.xls", size: 1024 }) ?? "",
+  "仅支持无宏 XLSX、UTF-8 TSV/TXT",
+  "legacy XLS files are rejected"
+);
+equal(
+  metadataUploadValidationError({ name: "objects.tsv", size: 20 * 1024 * 1024 + 1 }) ?? "",
+  "单个文件不能超过 20 MB",
+  "oversized files are rejected"
 );
 const dispositionPayload = diagnosticResolutionPayload("业务核对完成", "dismissed", 9);
 equal(String(dispositionPayload.expected_revision), "9", "diagnostic disposition uses the supplied revision");

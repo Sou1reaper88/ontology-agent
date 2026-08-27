@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { UploadOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, List, Space, Tag, Upload, message } from "antd";
-import type { UploadFile, UploadProps } from "antd";
+import { DownOutlined, DownloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Dropdown, List, Space, Tag, Upload, message } from "antd";
+import type { MenuProps, UploadFile, UploadProps } from "antd";
 import {
   apiErrorMessage,
   confirmImport,
+  downloadImportTemplate,
   isDraftRevisionConflict,
   previewImport,
 } from "./api";
+import type { ImportTemplateVariant } from "./api";
 import {
   installPreviewForRevision,
   previewForCurrentRevision,
 } from "./importPreviewState";
 import type { ImportPreview } from "./types";
+import { metadataUploadValidationError } from "./uploadValidation";
 
 interface ImportPanelProps {
   workspaceId: string;
@@ -27,6 +30,11 @@ const severityColor: Record<ImportPreview["diagnostics"][number]["severity"], st
   confirmation_required: "blue",
 };
 
+const templateItems: MenuProps["items"] = [
+  { key: "single", label: "单对象 XLSX 样例" },
+  { key: "multiple", label: "多对象 XLSX 样例" },
+];
+
 export default function ImportPanel({
   workspaceId,
   revision,
@@ -37,6 +45,7 @@ export default function ImportPanel({
   const [previewState, setPreviewState] = useState<ReturnType<typeof installPreviewForRevision>>(null);
   const [previewing, setPreviewing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [downloadingVariant, setDownloadingVariant] = useState<ImportTemplateVariant | null>(null);
   const currentRevisionRef = useRef(revision);
 
   if (currentRevisionRef.current !== revision) currentRevisionRef.current = revision;
@@ -50,7 +59,14 @@ export default function ImportPanel({
 
   const uploadProps: UploadProps = {
     accept: ".tsv,.txt,.xlsx",
-    beforeUpload: () => false,
+    beforeUpload: (file) => {
+      const validationError = metadataUploadValidationError(file);
+      if (validationError) {
+        message.error(validationError);
+        return Upload.LIST_IGNORE;
+      }
+      return false;
+    },
     fileList: files,
     multiple: true,
     onChange: ({ fileList }) => {
@@ -116,18 +132,66 @@ export default function ImportPanel({
     }
   };
 
+  const handleTemplateDownload = async (variant: ImportTemplateVariant) => {
+    setDownloadingVariant(variant);
+    let objectUrl: string | null = null;
+    try {
+      const downloaded = await downloadImportTemplate(workspaceId, variant);
+      objectUrl = URL.createObjectURL(downloaded.blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = downloaded.fileName;
+      document.body.appendChild(anchor);
+      try {
+        anchor.click();
+      } finally {
+        anchor.remove();
+      }
+      message.success(variant === "single" ? "单对象样例已下载" : "多对象样例已下载");
+    } catch (error) {
+      message.error(apiErrorMessage(error, "样例下载失败"));
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      setDownloadingVariant(null);
+    }
+  };
+
   return (
     <Card title="导入草稿" bordered={false}>
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
         <Alert
           type="info"
           showIcon
-          message="先预览，再明确确认写入草稿"
-          description="预览不会修改草稿版本。仅就绪预览可确认导入。"
+          message="支持无宏 XLSX、UTF-8 TSV/TXT；单文件不超过 20 MB"
+          description={
+            <Space direction="vertical" size={2}>
+              <span>
+                文件必须保留固定的 10 列。对象中文名称和状态每个对象至少填写一次；属性英文名、属性中文名和属性类型每行必填。
+              </span>
+              <span>对象描述和属性描述可以留空；是否主键、是否标题留空时按“否”处理。</span>
+              <span>上传后先预览，只有就绪预览才可以确认写入草稿。</span>
+            </Space>
+          }
         />
-        <Upload {...uploadProps}>
-          <Button icon={<UploadOutlined />}>选择文件</Button>
-        </Upload>
+        <Space wrap>
+          <Upload {...uploadProps}>
+            <Button icon={<UploadOutlined />}>选择文件</Button>
+          </Upload>
+          <Dropdown
+            menu={{
+              items: templateItems,
+              onClick: ({ key }) => void handleTemplateDownload(key as ImportTemplateVariant),
+            }}
+            trigger={["click"]}
+          >
+            <Button
+              icon={<DownloadOutlined />}
+              loading={downloadingVariant !== null}
+            >
+              下载填写样例 <DownOutlined />
+            </Button>
+          </Dropdown>
+        </Space>
         <Button type="primary" onClick={handlePreview} loading={previewing}>
           预览导入
         </Button>

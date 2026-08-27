@@ -132,6 +132,13 @@ interface ApiErrorBody {
 
 const basePath = "/ontology-packages";
 
+export type ImportTemplateVariant = "single" | "multiple";
+
+export interface DownloadedTemplate {
+  blob: Blob;
+  fileName: string;
+}
+
 export const stableSegment = (id: string): string => encodeURIComponent(id);
 
 export const workspacePath = (workspaceId: string): string =>
@@ -153,6 +160,29 @@ export const diagnosticResolutionPath = (workspaceId: string, diagnosticId: stri
   `${workspacePath(workspaceId)}/diagnostics/${stableSegment(diagnosticId)}/resolve`;
 
 export const versionsPath = (workspaceId: string): string => `${workspacePath(workspaceId)}/versions`;
+
+export const importTemplatePath = (
+  workspaceId: string,
+  variant: ImportTemplateVariant
+): string => `${workspacePath(workspaceId)}/imports/template?variant=${variant}`;
+
+export function safeAttachmentFileName(
+  contentDisposition: string | undefined,
+  fallback: string
+): string {
+  const match = /filename="?([^";]+)"?/i.exec(contentDisposition ?? "");
+  const candidate = match?.[1]?.trim();
+  if (
+    !candidate ||
+    candidate.includes("..") ||
+    candidate.includes("/") ||
+    candidate.includes("\\") ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*\.xlsx$/i.test(candidate)
+  ) {
+    return fallback;
+  }
+  return candidate;
+}
 
 export const diagnosticResolutionPayload = (
   explanation: string,
@@ -304,6 +334,20 @@ export async function confirmImport(
     { expected_revision: expectedRevision }
   );
   return { revision: response.data.revision };
+}
+
+export async function downloadImportTemplate(
+  workspaceId: string,
+  variant: ImportTemplateVariant
+): Promise<DownloadedTemplate> {
+  const fallback = `ontology-import-${variant}.xlsx`;
+  const response = await client.get<Blob>(importTemplatePath(workspaceId, variant), {
+    responseType: "blob",
+  });
+  return {
+    blob: response.data,
+    fileName: safeAttachmentFileName(response.headers["content-disposition"], fallback),
+  };
 }
 
 export async function updateObject(
