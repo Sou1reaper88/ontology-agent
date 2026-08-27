@@ -3,6 +3,7 @@
 from ontology_core.management.models import (
     DiagnosticDisposition,
     DraftDataSource,
+    DraftDeleteImpact,
     DraftDiagnostic,
     DraftField,
     DraftObject,
@@ -28,6 +29,7 @@ from ontology_core.management.templates import (
 __all__ = [
     "DiagnosticDisposition",
     "DraftDataSource",
+    "DraftDeleteImpact",
     "DraftDiagnostic",
     "DraftField",
     "DraftObject",

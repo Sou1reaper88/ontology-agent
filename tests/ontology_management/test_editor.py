@@ -150,82 +150,212 @@ def test_relation_and_temporal_policy_require_owned_endpoints_in_one_mutation(
     assert not updated.relations[0].confirmed
 
 
-def test_deletion_fails_closed_for_references_and_published_object_ids(tmp_path: Path) -> None:
+def test_delete_impact_counts_only_direct_object_and_field_references(tmp_path: Path) -> None:
     editor, store = initialized_editor(tmp_path)
     customer, order = store.read("evaluation").objects
+    order_customer_id = next(
+        item for item in order.fields if item.physical_name == "CUSTOMER_ID"
+    )
+    order_date = next(item for item in order.fields if item.physical_name == "ORDER_DATE")
     relation = DraftRelation(
         id="relation/order-customer",
         source_object_id=order.id,
-        source_field_id=order.fields[1].id,
+        source_field_id=order_customer_id.id,
         target_object_id=customer.id,
         target_field_id=customer.fields[0].id,
         cardinality="many_to_one",
         confirmed=True,
     )
     editor.upsert_relation("evaluation", relation, expected_revision=0)
+    policy = DraftTemporalPolicy(
+        object_id=order.id,
+        partition_field_id=order_date.id,
+        grain=TemporalGrain.DAY,
+        default_strategy=TemporalDefaultStrategy.T_MINUS_2,
+    )
+    editor.upsert_temporal_policy("evaluation", policy, expected_revision=1)
 
-    with pytest.raises(ValueError, match="仍被引用"):
-        editor.delete_draft_object("evaluation", customer.id, expected_revision=1)
-    assert store.read("evaluation").revision == 1
+    impact = editor.object_delete_impact("evaluation", order.id)
+    assert impact.model_dump() == {
+        "target_type": "object",
+        "target_id": order.id,
+        "physical_name": "ORDER",
+        "object_count": 1,
+        "field_count": 3,
+        "relation_count": 1,
+        "temporal_policy_count": 1,
+    }
+
+    field_impact = editor.field_delete_impact("evaluation", order.id, order_date.id)
+    assert field_impact.model_dump() == {
+        "target_type": "field",
+        "target_id": order_date.id,
+        "physical_name": "ORDER_DATE",
+        "object_count": 0,
+        "field_count": 1,
+        "relation_count": 0,
+        "temporal_policy_count": 1,
+    }
+
+
+def test_object_delete_atomically_cascades_references(tmp_path: Path) -> None:
+    editor, store = initialized_editor(tmp_path)
+    customer, order = store.read("evaluation").objects
+    order_customer_id = next(
+        item for item in order.fields if item.physical_name == "CUSTOMER_ID"
+    )
+    order_date = next(item for item in order.fields if item.physical_name == "ORDER_DATE")
+    relation = DraftRelation(
+        id="relation/order-customer",
+        source_object_id=order.id,
+        source_field_id=order_customer_id.id,
+        target_object_id=customer.id,
+        target_field_id=customer.fields[0].id,
+        cardinality="many_to_one",
+        confirmed=True,
+    )
+    editor.upsert_relation("evaluation", relation, expected_revision=0)
+    editor.upsert_temporal_policy(
+        "evaluation",
+        DraftTemporalPolicy(
+            object_id=order.id,
+            partition_field_id=order_date.id,
+            grain=TemporalGrain.DAY,
+            default_strategy=TemporalDefaultStrategy.T_MINUS_2,
+        ),
+        expected_revision=1,
+    )
+
+    updated = editor.delete_draft_object(
+        "evaluation",
+        order.id,
+        expected_revision=2,
+        cascade=True,
+        confirmation_name="ORDER",
+    )
+
+    assert updated.revision == 3
+    assert [item.id for item in updated.objects] == [customer.id]
+    assert updated.relations == ()
+    assert updated.temporal_policies == ()
+
+
+def test_object_delete_fails_closed_without_cascade_confirmation_or_for_published_id(
+    tmp_path: Path,
+) -> None:
+    editor, store = initialized_editor(tmp_path)
+    customer = store.read("evaluation").objects[0]
+    before = draft_bytes(tmp_path)
+
+    with pytest.raises(OntologyError) as cascade_error:
+        editor.delete_draft_object(
+            "evaluation",
+            customer.id,
+            expected_revision=0,
+            cascade=False,
+            confirmation_name="CUSTOMER",
+        )
+    assert cascade_error.value.code == "draft_delete_cascade_required"
+    assert draft_bytes(tmp_path) == before
+
+    with pytest.raises(OntologyError) as confirmation_error:
+        editor.delete_draft_object(
+            "evaluation",
+            customer.id,
+            expected_revision=0,
+            cascade=True,
+            confirmation_name="customer",
+        )
+    assert confirmation_error.value.code == "draft_delete_confirmation_mismatch"
+    assert draft_bytes(tmp_path) == before
 
     protected_editor, protected_store = initialized_editor(
         tmp_path / "published", published_object_ids=frozenset({customer.id})
     )
     with pytest.raises(ValueError, match="已发布"):
-        protected_editor.delete_draft_object("evaluation", customer.id, expected_revision=0)
+        protected_editor.delete_draft_object(
+            "evaluation",
+            customer.id,
+            expected_revision=0,
+            cascade=True,
+            confirmation_name="CUSTOMER",
+        )
     assert protected_store.read("evaluation").revision == 0
 
 
-def test_deleting_a_field_fails_closed_for_references_and_published_ids(tmp_path: Path) -> None:
+def test_field_delete_atomically_cascades_relation_and_temporal_policy(tmp_path: Path) -> None:
     editor, store = initialized_editor(tmp_path)
     customer, order = store.read("evaluation").objects
+    order_customer_id = next(
+        item for item in order.fields if item.physical_name == "CUSTOMER_ID"
+    )
     relation = DraftRelation(
         id="relation/order-customer",
         source_object_id=order.id,
-        source_field_id=order.fields[1].id,
+        source_field_id=order_customer_id.id,
         target_object_id=customer.id,
         target_field_id=customer.fields[0].id,
         cardinality="many_to_one",
         confirmed=True,
     )
     editor.upsert_relation("evaluation", relation, expected_revision=0)
-    before = draft_bytes(tmp_path)
 
-    for object_id, field_id in (
-        (relation.source_object_id, relation.source_field_id),
-        (relation.target_object_id, relation.target_field_id),
-    ):
-        with pytest.raises(OntologyError) as exc_info:
-            editor.delete_draft_field("evaluation", object_id, field_id, expected_revision=1)
-        assert exc_info.value.code == "draft_edit_reference_conflict"
-        assert draft_bytes(tmp_path) == before
-        assert store.read("evaluation").revision == 1
+    relation_deleted = editor.delete_draft_field(
+        "evaluation",
+        order.id,
+        relation.source_field_id,
+        expected_revision=1,
+        cascade=True,
+        confirmation_name="CUSTOMER_ID",
+    )
+    assert relation_deleted.revision == 2
+    assert relation_deleted.relations == ()
+    assert {item.physical_name for item in relation_deleted.objects[1].fields} == {
+        "ORDER_ID",
+        "ORDER_DATE",
+    }
 
     temporal_editor, temporal_store = initialized_editor(tmp_path / "temporal")
     temporal_order = temporal_store.read("evaluation").objects[1]
+    temporal_order_date = next(
+        item for item in temporal_order.fields if item.physical_name == "ORDER_DATE"
+    )
     policy = DraftTemporalPolicy(
         object_id=temporal_order.id,
-        partition_field_id=temporal_order.fields[2].id,
+        partition_field_id=temporal_order_date.id,
         grain=TemporalGrain.DAY,
         default_strategy=TemporalDefaultStrategy.T_MINUS_2,
     )
     temporal_editor.upsert_temporal_policy("evaluation", policy, expected_revision=0)
-    temporal_before = draft_bytes(tmp_path / "temporal")
-    with pytest.raises(OntologyError) as exc_info:
-        temporal_editor.delete_draft_field(
-            "evaluation", temporal_order.id, policy.partition_field_id, expected_revision=1
-        )
-    assert exc_info.value.code == "draft_edit_reference_conflict"
-    assert draft_bytes(tmp_path / "temporal") == temporal_before
-    assert temporal_store.read("evaluation").revision == 1
+    policy_deleted = temporal_editor.delete_draft_field(
+        "evaluation",
+        temporal_order.id,
+        policy.partition_field_id,
+        expected_revision=1,
+        cascade=True,
+        confirmation_name="ORDER_DATE",
+    )
+    assert policy_deleted.revision == 2
+    assert policy_deleted.temporal_policies == ()
+
+
+def test_field_delete_fails_closed_for_published_ids(tmp_path: Path) -> None:
+    editor, store = initialized_editor(tmp_path)
+    order = store.read("evaluation").objects[1]
+    order_id = next(item for item in order.fields if item.physical_name == "ORDER_ID")
 
     protected_editor, protected_store = initialized_editor(
-        tmp_path / "published-field", published_field_ids=frozenset({order.fields[0].id})
+        tmp_path / "published-field", published_field_ids=frozenset({order_id.id})
     )
     protected_before = draft_bytes(tmp_path / "published-field")
     with pytest.raises(OntologyError) as exc_info:
         protected_editor.delete_draft_field(
-            "evaluation", order.id, order.fields[0].id, expected_revision=0
+            "evaluation",
+            order.id,
+            order_id.id,
+            expected_revision=0,
+            cascade=True,
+            confirmation_name="ORDER_ID",
         )
     assert exc_info.value.code == "draft_edit_published_identifier"
     assert draft_bytes(tmp_path / "published-field") == protected_before
@@ -238,7 +368,12 @@ def test_deleting_an_unreferenced_unpublished_field_uses_one_revision(tmp_path: 
     unreferenced = next(field for field in order.fields if field.physical_name == "ORDER_ID")
 
     updated = editor.delete_draft_field(
-        "evaluation", order.id, unreferenced.id, expected_revision=0
+        "evaluation",
+        order.id,
+        unreferenced.id,
+        expected_revision=0,
+        cascade=True,
+        confirmation_name="ORDER_ID",
     )
 
     assert updated.revision == 1

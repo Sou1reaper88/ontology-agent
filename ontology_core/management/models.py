@@ -98,6 +98,18 @@ class DraftTemporalPolicy(FrozenModel):
         return self
 
 
+class DraftDeleteImpact(FrozenModel):
+    """Aggregate-only impact preview for one destructive draft edit."""
+
+    target_type: Literal["object", "field"]
+    target_id: str = Field(min_length=1)
+    physical_name: str = Field(min_length=1)
+    object_count: int = Field(ge=0)
+    field_count: int = Field(ge=0)
+    relation_count: int = Field(ge=0)
+    temporal_policy_count: int = Field(ge=0)
+
+
 class DraftDiagnostic(FrozenModel):
     """A stable validation finding, independent from its rendered text."""
 

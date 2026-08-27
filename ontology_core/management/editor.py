@@ -8,6 +8,7 @@ from datetime import datetime
 from ontology_core.errors import OntologyError
 from ontology_core.management.models import (
     DiagnosticDisposition,
+    DraftDeleteImpact,
     DraftField,
     DraftObject,
     DraftRelation,
@@ -48,6 +49,26 @@ class DraftEditPublishedIdentifierError(OntologyError, ValueError):
 
     def __init__(self) -> None:
         super().__init__("已发布标识不能通过普通编辑删除")
+
+
+class DraftDeleteCascadeRequiredError(OntologyError):
+    """Raised unless a destructive edit explicitly opts into cascade behavior."""
+
+    code = "draft_delete_cascade_required"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("删除草稿元素必须明确确认级联")
+
+
+class DraftDeleteConfirmationError(OntologyError):
+    """Raised when the typed physical name does not match the current target."""
+
+    code = "draft_delete_confirmation_mismatch"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("删除确认名称不匹配")
 
 
 class DraftDiagnosticDispositionError(OntologyError):
@@ -181,21 +202,41 @@ class DraftEditor:
         return self._store.commit(workspace_id, expected_revision, mutate)
 
     def delete_draft_object(
-        self, workspace_id: str, object_id: str, *, expected_revision: int
+        self,
+        workspace_id: str,
+        object_id: str,
+        *,
+        expected_revision: int,
+        cascade: bool,
+        confirmation_name: str,
     ) -> WorkspaceDraft:
-        """Delete an unreferenced, never-published object and its owned fields."""
+        """Atomically delete a never-published object and all draft references."""
 
         def mutate(draft: WorkspaceDraft) -> WorkspaceDraft:
-            _object_by_id(draft, object_id)
-            if object_id in self._published_object_ids:
+            object_ = _object_by_id(draft, object_id)
+            _require_delete_confirmation(object_.physical_name, cascade, confirmation_name)
+            if object_id in self._published_object_ids or any(
+                field.id in self._published_field_ids for field in object_.fields
+            ):
                 raise DraftEditPublishedIdentifierError()
-            if any(
-                object_id in {item.source_object_id, item.target_object_id}
-                for item in draft.relations
-            ) or any(item.object_id == object_id for item in draft.temporal_policies):
-                raise ValueError("对象仍被引用，不能删除")
-            return draft.model_copy(
-                update={"objects": tuple(item for item in draft.objects if item.id != object_id)}
+            return _validated(
+                draft.model_copy(
+                    update={
+                        "objects": tuple(
+                            item for item in draft.objects if item.id != object_id
+                        ),
+                        "relations": tuple(
+                            item
+                            for item in draft.relations
+                            if object_id not in {item.source_object_id, item.target_object_id}
+                        ),
+                        "temporal_policies": tuple(
+                            item
+                            for item in draft.temporal_policies
+                            if item.object_id != object_id
+                        ),
+                    }
+                )
             )
 
         return self._store.commit(workspace_id, expected_revision, mutate)
@@ -207,28 +248,83 @@ class DraftEditor:
         field_id: str,
         *,
         expected_revision: int,
+        cascade: bool,
+        confirmation_name: str,
     ) -> WorkspaceDraft:
-        """Delete only an unreferenced, unpublished field in one draft mutation."""
+        """Atomically delete an unpublished field and all draft references."""
 
         def mutate(draft: WorkspaceDraft) -> WorkspaceDraft:
             object_ = _object_by_id(draft, object_id)
-            _field_by_id(object_, field_id)
+            field = _field_by_id(object_, field_id)
+            _require_delete_confirmation(field.physical_name, cascade, confirmation_name)
             if object_id in self._published_object_ids or field_id in self._published_field_ids:
                 raise DraftEditPublishedIdentifierError()
-            if _field_is_referenced(draft, field_id):
-                raise DraftEditReferenceConflictError()
             updated_object = object_.model_copy(
                 update={"fields": tuple(item for item in object_.fields if item.id != field_id)}
             )
-            return draft.model_copy(
-                update={
-                    "objects": tuple(
-                        updated_object if item.id == object_id else item for item in draft.objects
-                    )
-                }
+            return _validated(
+                draft.model_copy(
+                    update={
+                        "objects": tuple(
+                            updated_object if item.id == object_id else item
+                            for item in draft.objects
+                        ),
+                        "relations": tuple(
+                            item
+                            for item in draft.relations
+                            if field_id not in {item.source_field_id, item.target_field_id}
+                        ),
+                        "temporal_policies": tuple(
+                            item
+                            for item in draft.temporal_policies
+                            if item.partition_field_id != field_id
+                        ),
+                    }
+                )
             )
 
         return self._store.commit(workspace_id, expected_revision, mutate)
+
+    def object_delete_impact(self, workspace_id: str, object_id: str) -> DraftDeleteImpact:
+        """Calculate current aggregate impact for deleting one draft object."""
+        draft = self._store.read(workspace_id)
+        object_ = _object_by_id(draft, object_id)
+        return DraftDeleteImpact(
+            target_type="object",
+            target_id=object_.id,
+            physical_name=object_.physical_name,
+            object_count=1,
+            field_count=len(object_.fields),
+            relation_count=sum(
+                object_id in {item.source_object_id, item.target_object_id}
+                for item in draft.relations
+            ),
+            temporal_policy_count=sum(
+                item.object_id == object_id for item in draft.temporal_policies
+            ),
+        )
+
+    def field_delete_impact(
+        self, workspace_id: str, object_id: str, field_id: str
+    ) -> DraftDeleteImpact:
+        """Calculate current aggregate impact for deleting one draft field."""
+        draft = self._store.read(workspace_id)
+        object_ = _object_by_id(draft, object_id)
+        field = _field_by_id(object_, field_id)
+        return DraftDeleteImpact(
+            target_type="field",
+            target_id=field.id,
+            physical_name=field.physical_name,
+            object_count=0,
+            field_count=1,
+            relation_count=sum(
+                field_id in {item.source_field_id, item.target_field_id}
+                for item in draft.relations
+            ),
+            temporal_policy_count=sum(
+                item.partition_field_id == field_id for item in draft.temporal_policies
+            ),
+        )
 
     def resolve_diagnostic(
         self,
@@ -324,8 +420,10 @@ def _descriptive_value(value: str | None | object) -> str | None:
     raise DraftEditValidationError()
 
 
-def _field_is_referenced(draft: WorkspaceDraft, field_id: str) -> bool:
-    return any(
-        field_id in {relation.source_field_id, relation.target_field_id}
-        for relation in draft.relations
-    ) or any(policy.partition_field_id == field_id for policy in draft.temporal_policies)
+def _require_delete_confirmation(
+    physical_name: str, cascade: bool, confirmation_name: str
+) -> None:
+    if not cascade:
+        raise DraftDeleteCascadeRequiredError()
+    if confirmation_name != physical_name:
+        raise DraftDeleteConfirmationError()
