@@ -46,6 +46,16 @@ export interface DraftTemporalPolicy {
   priority: number;
 }
 
+export interface DraftDeleteImpact {
+  targetType: "object" | "field";
+  targetId: string;
+  physicalName: string;
+  objectCount: number;
+  fieldCount: number;
+  relationCount: number;
+  temporalPolicyCount: number;
+}
+
 export interface DraftDiagnostic {
   id: string;
   code: string;

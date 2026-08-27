@@ -3,6 +3,7 @@ import client from "../../api/client";
 import type {
   DraftDiagnostic,
   DiagnosticDisposition,
+  DraftDeleteImpact,
   DraftField,
   DraftObject,
   DraftRelation,
@@ -70,6 +71,16 @@ interface ApiTemporalPolicy {
   allow_query_override: boolean;
   status: DraftTemporalPolicy["status"];
   priority: number;
+}
+
+export interface ApiDeleteImpact {
+  target_type: DraftDeleteImpact["targetType"];
+  target_id: string;
+  physical_name: string;
+  object_count: number;
+  field_count: number;
+  relation_count: number;
+  temporal_policy_count: number;
 }
 
 interface ApiDiagnosticDisposition {
@@ -147,8 +158,14 @@ export const workspacePath = (workspaceId: string): string =>
 export const objectPath = (workspaceId: string, objectId: string): string =>
   `${workspacePath(workspaceId)}/objects/${stableSegment(objectId)}`;
 
+export const objectDeleteImpactPath = (workspaceId: string, objectId: string): string =>
+  `${objectPath(workspaceId, objectId)}/delete-impact`;
+
 export const fieldPath = (workspaceId: string, fieldId: string): string =>
   `${workspacePath(workspaceId)}/fields/${stableSegment(fieldId)}`;
+
+export const fieldDeleteImpactPath = (workspaceId: string, fieldId: string): string =>
+  `${fieldPath(workspaceId, fieldId)}/delete-impact`;
 
 export const relationPath = (workspaceId: string, relationId: string): string =>
   `${workspacePath(workspaceId)}/relations/${stableSegment(relationId)}`;
@@ -189,6 +206,12 @@ export const diagnosticResolutionPayload = (
   status: "resolved" | "dismissed",
   expectedRevision: number
 ) => ({ explanation, status, expected_revision: expectedRevision });
+
+export const cascadeDeletePayload = (expectedRevision: number, confirmationName: string) => ({
+  expected_revision: expectedRevision,
+  cascade: true,
+  confirmation_name: confirmationName,
+});
 
 const diagnostic = (value: ApiDiagnostic): DraftDiagnostic => ({
   id: value.id,
@@ -242,6 +265,16 @@ const temporalPolicy = (value: ApiTemporalPolicy): DraftTemporalPolicy => ({
   allowQueryOverride: value.allow_query_override,
   status: value.status,
   priority: value.priority,
+});
+
+export const mapDeleteImpact = (value: ApiDeleteImpact): DraftDeleteImpact => ({
+  targetType: value.target_type,
+  targetId: value.target_id,
+  physicalName: value.physical_name,
+  objectCount: value.object_count,
+  fieldCount: value.field_count,
+  relationCount: value.relation_count,
+  temporalPolicyCount: value.temporal_policy_count,
 });
 
 const disposition = (value: ApiDiagnosticDisposition): DiagnosticDisposition => ({
@@ -363,6 +396,28 @@ export async function updateObject(
   return { revision: response.data.revision };
 }
 
+export async function fetchObjectDeleteImpact(
+  workspaceId: string,
+  objectId: string
+): Promise<{ impact: DraftDeleteImpact; revision: number }> {
+  const response = await client.get<ApiEnvelope<ApiDeleteImpact>>(
+    objectDeleteImpactPath(workspaceId, objectId)
+  );
+  return { impact: mapDeleteImpact(response.data.data), revision: response.data.revision };
+}
+
+export async function deleteDraftObject(
+  workspaceId: string,
+  objectId: string,
+  expectedRevision: number,
+  confirmationName: string
+): Promise<DraftWriteResult> {
+  const response = await client.delete<ApiEnvelope<unknown>>(objectPath(workspaceId, objectId), {
+    data: cascadeDeletePayload(expectedRevision, confirmationName),
+  });
+  return { revision: response.data.revision };
+}
+
 export async function updateField(
   workspaceId: string,
   fieldId: string,
@@ -372,6 +427,28 @@ export async function updateField(
   const response = await client.patch<ApiEnvelope<unknown>>(fieldPath(workspaceId, fieldId), {
     ...changes,
     expected_revision: expectedRevision,
+  });
+  return { revision: response.data.revision };
+}
+
+export async function fetchFieldDeleteImpact(
+  workspaceId: string,
+  fieldId: string
+): Promise<{ impact: DraftDeleteImpact; revision: number }> {
+  const response = await client.get<ApiEnvelope<ApiDeleteImpact>>(
+    fieldDeleteImpactPath(workspaceId, fieldId)
+  );
+  return { impact: mapDeleteImpact(response.data.data), revision: response.data.revision };
+}
+
+export async function deleteDraftField(
+  workspaceId: string,
+  fieldId: string,
+  expectedRevision: number,
+  confirmationName: string
+): Promise<DraftWriteResult> {
+  const response = await client.delete<ApiEnvelope<unknown>>(fieldPath(workspaceId, fieldId), {
+    data: cascadeDeletePayload(expectedRevision, confirmationName),
   });
   return { revision: response.data.revision };
 }

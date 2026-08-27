@@ -1,12 +1,16 @@
 import {
+  cascadeDeletePayload,
+  fieldDeleteImpactPath,
   fieldPath,
   importTemplatePath,
   importPreviewFormData,
   diagnosticResolutionPath,
   diagnosticResolutionPayload,
   mapImportPreview,
+  mapDeleteImpact,
   mapVersionSummary,
   objectPath,
+  objectDeleteImpactPath,
   relationPath,
   safeAttachmentFileName,
   temporalPolicyPath,
@@ -40,9 +44,19 @@ equal(
   "object IDs are URL encoded"
 );
 equal(
+  objectDeleteImpactPath("workspace / 中文", "object/alpha beta"),
+  "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/objects/object%2Falpha%20beta/delete-impact",
+  "object delete impact path is encoded"
+);
+equal(
   fieldPath("workspace / 中文", "field/alpha beta"),
   "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/fields/field%2Falpha%20beta",
   "field IDs are URL encoded"
+);
+equal(
+  fieldDeleteImpactPath("workspace / 中文", "field/alpha beta"),
+  "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/fields/field%2Falpha%20beta/delete-impact",
+  "field delete impact path is encoded"
 );
 equal(
   relationPath("workspace / 中文", "relation/alpha beta"),
@@ -103,6 +117,30 @@ equal(
 const dispositionPayload = diagnosticResolutionPayload("业务核对完成", "dismissed", 9);
 equal(String(dispositionPayload.expected_revision), "9", "diagnostic disposition uses the supplied revision");
 equal(dispositionPayload.status, "dismissed", "diagnostic disposition preserves the selected status");
+
+const deletePayload = cascadeDeletePayload(12, "D_SAMPLE_OBJECT");
+equal(String(deletePayload.expected_revision), "12", "delete payload keeps revision");
+truthy(deletePayload.cascade, "delete payload explicitly enables cascade");
+equal(deletePayload.confirmation_name, "D_SAMPLE_OBJECT", "delete payload keeps exact name");
+
+const mappedImpact = mapDeleteImpact({
+  target_type: "object",
+  target_id: "object/sample",
+  physical_name: "D_SAMPLE_OBJECT",
+  object_count: 1,
+  field_count: 8,
+  relation_count: 2,
+  temporal_policy_count: 1,
+});
+equal(mappedImpact.targetType, "object", "delete impact target type is mapped");
+equal(String(mappedImpact.objectCount), "1", "delete impact object count is mapped");
+equal(String(mappedImpact.fieldCount), "8", "delete impact field count is mapped");
+equal(String(mappedImpact.relationCount), "2", "delete impact relation count is mapped");
+equal(
+  String(mappedImpact.temporalPolicyCount),
+  "1",
+  "delete impact temporal policy count is mapped"
+);
 
 const mappedPreview = mapImportPreview({
   status: "ready",
