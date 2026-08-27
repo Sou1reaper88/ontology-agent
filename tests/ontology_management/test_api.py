@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from api.main import app
 from api.routes import ontology_packages
 from api.routes.ontology_packages import _read_uploads, get_management_service
+from api.schemas.ontology_packages import PublishRequest, RollbackRequest
 from auth.jwt import get_current_user
 from models import Role, User
 from ontology_core.management.models import DraftDataSource, WorkspaceDraft
@@ -233,6 +234,41 @@ def test_maintainer_cannot_publish(management_client: tuple[TestClient, list[str
 
     assert response.status_code == 403
     assert response.json()["code"] == "ontology_administrator_required"
+
+
+def test_publish_and_rollback_reject_whitespace_only_release_text(
+    management_client: tuple[TestClient, list[str]],
+) -> None:
+    client, role_name = management_client
+    role_name[0] = "全省管理员"
+
+    published = client.post(
+        "/ontology-packages/workspaces/evaluation/versions",
+        json={"version": "1.0.0", "release_notes": "   ", "expected_revision": 0},
+    )
+    rollback = client.post(
+        "/ontology-packages/workspaces/evaluation/versions/1.0.0/rollback",
+        json={"reason": "\t\n"},
+    )
+
+    expected = {"code": "ontology_request_invalid", "message": "本体管理请求无效", "details": {}}
+    assert published.status_code == 422
+    assert published.json() == expected
+    assert rollback.status_code == 422
+    assert rollback.json() == expected
+
+
+def test_publish_and_rollback_normalize_nonblank_release_text() -> None:
+    assert (
+        PublishRequest.model_validate(
+            {"version": "1.0.0", "release_notes": " first release ", "expected_revision": 0}
+        ).release_notes
+        == "first release"
+    )
+    assert (
+        RollbackRequest.model_validate({"reason": " verified rollback "}).reason
+        == "verified rollback"
+    )
 
 
 def test_fresh_service_injects_durable_published_identifiers_into_editor(

@@ -6,7 +6,14 @@ import {
   resolveDiagnostic,
   validateWorkspace,
 } from "./api";
-import type { DiagnosticDisposition, DraftDiagnostic, DraftObject } from "./types";
+import { diagnosticDestination } from "./diagnosticRouting";
+import type {
+  DiagnosticDisposition,
+  DraftDiagnostic,
+  DraftObject,
+  DraftRelation,
+  DraftTemporalPolicy,
+} from "./types";
 
 interface DiagnosticsPanelProps {
   workspaceId: string;
@@ -14,6 +21,8 @@ interface DiagnosticsPanelProps {
   diagnostics: DraftDiagnostic[];
   dispositions: DiagnosticDisposition[];
   objects: DraftObject[];
+  relations: DraftRelation[];
+  policies: DraftTemporalPolicy[];
   onChanged: () => Promise<void>;
   onConflict: () => Promise<void>;
   onNavigate: (target: "objects" | "relations" | "temporal") => void;
@@ -41,18 +50,14 @@ function relatedToObject(diagnostic: DraftDiagnostic, object: DraftObject): bool
   );
 }
 
-function destination(diagnostic: DraftDiagnostic): "objects" | "relations" | "temporal" {
-  if (diagnostic.code.includes("relation")) return "relations";
-  if (diagnostic.code.includes("temporal") || diagnostic.code.includes("partition")) return "temporal";
-  return "objects";
-}
-
 export default function DiagnosticsPanel({
   workspaceId,
   revision,
   diagnostics,
   dispositions,
   objects,
+  relations,
+  policies,
   onChanged,
   onConflict,
   onNavigate,
@@ -172,7 +177,22 @@ export default function DiagnosticsPanel({
             return (
               <List.Item
                 actions={[
-                  <Button key="navigate" type="link" onClick={() => onNavigate(destination(item))}>
+                  <Button
+                    key="navigate"
+                    type="link"
+                    onClick={() =>
+                      onNavigate(
+                        diagnosticDestination(
+                          item.relatedIds,
+                          relations.map((relation) => relation.id),
+                          policies.map((policy) => ({
+                            objectId: policy.objectId,
+                            partitionFieldId: policy.partitionFieldId,
+                          }))
+                        )
+                      )
+                    }
+                  >
                     修正元数据
                   </Button>,
                   item.severity === "confirmation_required" && !currentDisposition ? (

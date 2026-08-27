@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ontology_core.management.models import DraftRelation, DraftTemporalPolicy
 from ontology_core.semantic_models import TemporalDefaultStrategy, TemporalGrain
@@ -62,8 +62,24 @@ class DiagnosticResolutionRequest(RevisionRequest):
 
 class PublishRequest(RevisionRequest):
     version: str = Field(min_length=1)
-    release_notes: str = ""
+    release_notes: str = Field(min_length=1)
+
+    @field_validator("release_notes")
+    @classmethod
+    def require_nonblank_release_notes(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("发布说明不能为空")
+        return stripped
 
 
 class RollbackRequest(BaseModel):
     reason: str = Field(min_length=1)
+
+    @field_validator("reason")
+    @classmethod
+    def require_nonblank_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("回滚原因不能为空")
+        return stripped

@@ -145,6 +145,8 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
             diagnostics={overview.diagnostics}
             dispositions={overview.dispositions}
             objects={overview.objects}
+            relations={overview.relations}
+            policies={overview.temporalPolicies}
             onChanged={refreshWorkspace}
             onConflict={handleConflict}
             onNavigate={navigateToEditor}

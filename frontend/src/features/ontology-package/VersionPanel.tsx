@@ -7,6 +7,7 @@ import {
   publishVersion,
   rollbackVersion,
 } from "./api";
+import { validatedFormValues } from "./formValidation";
 import type { DiagnosticDisposition, DraftDiagnostic, VersionSummary } from "./types";
 
 interface VersionPanelProps {
@@ -60,7 +61,8 @@ export default function VersionPanel({
   );
 
   const publish = async () => {
-    const values = await form.validateFields();
+    const values = await validatedFormValues(() => form.validateFields());
+    if (!values) return;
     if (blocking.length) {
       message.error("请先处理错误和需要确认的诊断");
       return;

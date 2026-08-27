@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { Alert, Button, Card, Checkbox, Form, Input, List, Select, Space, Tag, Typography, message } from "antd";
 import { apiErrorMessage, isDraftRevisionConflict, upsertRelation } from "./api";
+import { validatedFormValues } from "./formValidation";
+import { relationId } from "./relationId";
 import type { DraftObject, DraftRelation } from "./types";
 
 interface RelationPanelProps {
@@ -62,7 +64,8 @@ export default function RelationPanel({
   );
 
   const saveRelation = async () => {
-    const values = await form.validateFields();
+    const values = await validatedFormValues(() => form.validateFields());
+    if (!values) return;
     if (values.sourceObjectId === values.targetObjectId || values.sourceFieldId === values.targetFieldId) {
       message.error("源与目标必须是不同的对象和字段");
       return;
@@ -71,7 +74,7 @@ export default function RelationPanel({
     try {
       await upsertRelation(
         workspaceId,
-        `relation/${values.sourceFieldId}--${values.targetFieldId}`,
+        relationId(values.sourceFieldId, values.targetFieldId),
         {
           label: values.label.trim(),
           sourceObjectId: values.sourceObjectId,
