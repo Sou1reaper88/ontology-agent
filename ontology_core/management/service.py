@@ -67,6 +67,7 @@ class WorkspaceOverview:
             "temporal_policies": [
                 item.model_dump(mode="json") for item in self.draft.temporal_policies
             ],
+            "dispositions": [item.model_dump(mode="json") for item in self.draft.dispositions],
             "diagnostics": [item.model_dump(mode="json") for item in self.diagnostics],
             "active_version": (
                 self.active_version.model_dump(mode="json") if self.active_version else None

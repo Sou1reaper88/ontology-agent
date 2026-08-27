@@ -434,6 +434,17 @@ def test_maintainer_can_resolve_a_confirmation_diagnostic(
 
     assert resolved.status_code == 200, resolved.text
     assert resolved.json()["revision"] == 3
+    overview = client.get("/ontology-packages/workspaces/evaluation")
+    assert overview.status_code == 200, overview.text
+    assert overview.json()["data"]["dispositions"] == [
+        {
+            "diagnostic_id": diagnostic_id,
+            "status": "resolved",
+            "note": "Synthetic confirmation evidence",
+            "actor": "101",
+            "resolved_at": overview.json()["data"]["dispositions"][0]["resolved_at"],
+        }
+    ]
 
 
 def test_administrator_can_delete_a_draft_relation(

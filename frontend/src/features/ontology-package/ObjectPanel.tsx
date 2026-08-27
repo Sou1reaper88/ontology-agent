@@ -171,7 +171,7 @@ export default function ObjectPanel({
   ];
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(250px, 0.8fr) minmax(0, 2fr)", gap: 16 }}>
+    <div id="object-editor" style={{ display: "grid", gridTemplateColumns: "minmax(250px, 0.8fr) minmax(0, 2fr)", gap: 16 }}>
       <div>
         <Input.Search
           allowClear
@@ -228,10 +228,7 @@ export default function ObjectPanel({
         extra={<Button type="primary" loading={savingObject} onClick={saveObject}>保存对象</Button>}
       >
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-          <div>
-            <Typography.Text type="secondary">稳定标识</Typography.Text>
-            <Typography.Paragraph code>{selected?.id}</Typography.Paragraph>
-          </div>
+          <Typography.Text type="secondary">物理名称：{selected?.physicalName}</Typography.Text>
           <Input
             addonBefore="对象标签"
             value={objectLabel}

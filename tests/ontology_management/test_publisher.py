@@ -299,6 +299,9 @@ def test_pointer_failure_keeps_old_runtime_and_active_version(
 def test_rollback_only_switches_pointer_and_runtime(tmp_path: Path) -> None:
     publisher, runtime = _published_v1(tmp_path)
     publisher.publish("evaluation", "1.1.0", "second", 1, "tester")
+    original = next(
+        item for item in publisher.list_versions("evaluation") if item.version == "1.0.0"
+    )
     first_dir = _version_dir(tmp_path, "1.0.0")
     second_dir = _version_dir(tmp_path, "1.1.0")
     before = {
@@ -312,8 +315,13 @@ def test_rollback_only_switches_pointer_and_runtime(tmp_path: Path) -> None:
     assert summary.actor == "admin"
     assert summary.release_notes == "synthetic rollback"
     assert summary.active is True
+    assert summary.counts == original.counts
+    assert summary.content_digest == original.content_digest
     assert runtime.snapshot().info.version == "1.0.0"
-    assert publisher.active_version("evaluation").version == "1.0.0"
+    active = publisher.active_version("evaluation")
+    assert active.version == "1.0.0"
+    assert active.counts == original.counts
+    assert active.content_digest == original.content_digest
     assert _directory_bytes(first_dir) == before["1.0.0"]
     assert _directory_bytes(second_dir) == before["1.1.0"]
 

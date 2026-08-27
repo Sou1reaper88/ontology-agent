@@ -1,8 +1,14 @@
 import {
   fieldPath,
   importPreviewFormData,
+  diagnosticResolutionPath,
+  diagnosticResolutionPayload,
   mapImportPreview,
+  mapVersionSummary,
   objectPath,
+  relationPath,
+  temporalPolicyPath,
+  versionsPath,
   workspacePath,
 } from "../src/features/ontology-package/api";
 import {
@@ -35,6 +41,29 @@ equal(
   "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/fields/field%2Falpha%20beta",
   "field IDs are URL encoded"
 );
+equal(
+  relationPath("workspace / 中文", "relation/alpha beta"),
+  "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/relations/relation%2Falpha%20beta",
+  "relation IDs are URL encoded"
+);
+equal(
+  temporalPolicyPath("workspace / 中文", "object/alpha beta"),
+  "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/temporal-policies/object%2Falpha%20beta",
+  "temporal object IDs are URL encoded"
+);
+equal(
+  diagnosticResolutionPath("workspace / 中文", "diagnostic/alpha beta"),
+  "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/diagnostics/diagnostic%2Falpha%20beta/resolve",
+  "diagnostic IDs are URL encoded"
+);
+equal(
+  versionsPath("workspace / 中文"),
+  "/ontology-packages/workspaces/workspace%20%2F%20%E4%B8%AD%E6%96%87/versions",
+  "versions path is workspace scoped"
+);
+const dispositionPayload = diagnosticResolutionPayload("业务核对完成", "dismissed", 9);
+equal(String(dispositionPayload.expected_revision), "9", "diagnostic disposition uses the supplied revision");
+equal(dispositionPayload.status, "dismissed", "diagnostic disposition preserves the selected status");
 
 const mappedPreview = mapImportPreview({
   status: "ready",
@@ -70,4 +99,37 @@ if (installPreviewForRevision(mappedPreview, 7, 8) !== null) {
 }
 if (previewForCurrentRevision(installedPreview, 8) !== null) {
   throw new Error("preview is invalidated when its source revision is stale");
+}
+
+const enrichedVersion = mapVersionSummary({
+  version: "1.0.0",
+  published_at: "2026-08-26T00:00:00Z",
+  actor: "admin",
+  release_notes: "first release",
+  revision: 5,
+  active: true,
+  counts: {
+    concepts: 2,
+    properties: 3,
+    relations: 1,
+    rules: 0,
+    data_sources: 1,
+    mappings: 5,
+    temporal_policies: 1,
+  },
+  content_digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+});
+equal(String(enrichedVersion.counts?.concepts), "2", "version counts are mapped");
+equal(enrichedVersion.contentDigest?.slice(0, 12) ?? "", "0123456789ab", "version digest is mapped");
+
+const legacyVersion = mapVersionSummary({
+  version: "0.9.0",
+  published_at: "2026-08-25T00:00:00Z",
+  actor: "admin",
+  release_notes: "legacy release",
+  revision: null,
+  active: false,
+});
+if (legacyVersion.counts !== null || legacyVersion.contentDigest !== null) {
+  throw new Error("legacy versions use unavailable metadata markers");
 }

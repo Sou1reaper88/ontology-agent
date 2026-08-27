@@ -23,6 +23,29 @@ export interface DraftObject {
   priority: number;
 }
 
+export interface DraftRelation {
+  id: string;
+  label: string;
+  sourceObjectId: string;
+  sourceFieldId: string;
+  targetObjectId: string;
+  targetFieldId: string;
+  cardinality: "one_to_one" | "one_to_many" | "many_to_one" | "many_to_many";
+  status: "active" | "inactive";
+  priority: number;
+  confirmed: boolean;
+}
+
+export interface DraftTemporalPolicy {
+  objectId: string;
+  partitionFieldId: string;
+  grain: "day" | "month";
+  defaultStrategy: "t_minus_2" | "previous_complete_month";
+  allowQueryOverride: boolean;
+  status: "active" | "inactive";
+  priority: number;
+}
+
 export interface DraftDiagnostic {
   id: string;
   code: string;
@@ -31,13 +54,33 @@ export interface DraftDiagnostic {
   relatedIds: string[];
 }
 
+export interface DiagnosticDisposition {
+  diagnosticId: string;
+  status: "resolved" | "dismissed";
+  note: string | null;
+  actor: string;
+  resolvedAt: string;
+}
+
 export interface VersionSummary {
   version: string;
   publishedAt: string;
   actor: string;
   releaseNotes: string;
   revision: number | null;
+  counts: VersionCounts | null;
+  contentDigest: string | null;
   active: boolean;
+}
+
+export interface VersionCounts {
+  concepts: number;
+  properties: number;
+  relations: number;
+  rules: number;
+  dataSources: number;
+  mappings: number;
+  temporalPolicies: number;
 }
 
 export interface WorkspaceOverview {
@@ -52,6 +95,9 @@ export interface WorkspaceOverview {
     temporalPolicies: number;
   };
   objects: DraftObject[];
+  relations: DraftRelation[];
+  temporalPolicies: DraftTemporalPolicy[];
+  dispositions: DiagnosticDisposition[];
   diagnostics: DraftDiagnostic[];
 }
 
