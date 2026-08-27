@@ -8,6 +8,8 @@ import {
   updateObject,
 } from "./api";
 import type { DraftField, DraftObject } from "./types";
+import DeleteDraftModal from "./DeleteDraftModal";
+import type { DeleteTarget } from "./DeleteDraftModal";
 
 interface ObjectPanelProps {
   workspaceId: string;
@@ -38,6 +40,7 @@ export default function ObjectPanel({
   const [fieldDrafts, setFieldDrafts] = useState<Record<string, FieldDraft>>({});
   const [savingObject, setSavingObject] = useState(false);
   const [savingFieldId, setSavingFieldId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
 
   const selected = objects.find((item) => item.id === selectedId) ?? null;
   const visibleObjects = useMemo(() => {
@@ -124,6 +127,15 @@ export default function ObjectPanel({
     }
   };
 
+  const handleDeleted = async (target: DeleteTarget) => {
+    setDeleteTarget(null);
+    if (target.kind === "object") {
+      setSelectedId(null);
+      setDrawerOpen(false);
+    }
+    await onChanged();
+  };
+
   const columns: ColumnsType<DraftField> = [
     {
       title: "字段",
@@ -161,11 +173,32 @@ export default function ObjectPanel({
     },
     {
       title: "操作",
-      width: 88,
+      width: 140,
       render: (_, item) => (
-        <Button type="link" size="small" loading={savingFieldId === item.id} onClick={() => saveField(item)}>
-          保存
-        </Button>
+        <Space size={4}>
+          <Button
+            type="link"
+            size="small"
+            loading={savingFieldId === item.id}
+            onClick={() => saveField(item)}
+          >
+            保存
+          </Button>
+          <Button
+            type="link"
+            danger
+            size="small"
+            onClick={() =>
+              setDeleteTarget({
+                kind: "field",
+                id: item.id,
+                physicalName: item.physicalName,
+              })
+            }
+          >
+            删除
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -225,7 +258,26 @@ export default function ObjectPanel({
         open={drawerOpen && Boolean(selected)}
         onClose={() => setDrawerOpen(false)}
         width={520}
-        extra={<Button type="primary" loading={savingObject} onClick={saveObject}>保存对象</Button>}
+        extra={
+          <Space>
+            <Button
+              danger
+              onClick={() =>
+                selected &&
+                setDeleteTarget({
+                  kind: "object",
+                  id: selected.id,
+                  physicalName: selected.physicalName,
+                })
+              }
+            >
+              删除对象
+            </Button>
+            <Button type="primary" loading={savingObject} onClick={saveObject}>
+              保存对象
+            </Button>
+          </Space>
+        }
       >
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Typography.Text type="secondary">物理名称：{selected?.physicalName}</Typography.Text>
@@ -242,6 +294,15 @@ export default function ObjectPanel({
           />
         </Space>
       </Drawer>
+      <DeleteDraftModal
+        open={Boolean(deleteTarget)}
+        target={deleteTarget}
+        workspaceId={workspaceId}
+        revision={revision}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={handleDeleted}
+        onConflict={onConflict}
+      />
     </div>
   );
 }
