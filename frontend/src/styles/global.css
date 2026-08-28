@@ -1,0 +1,89 @@
+:root {
+  --oa-bg: #f4f1e9;
+  --oa-surface: #fbfaf6;
+  --oa-surface-strong: #ffffff;
+  --oa-text: #19221f;
+  --oa-text-muted: #66716c;
+  --oa-border: #d8d7cf;
+  --oa-accent: #176b5f;
+  --oa-accent-strong: #124f47;
+  --oa-accent-soft: #dcebe6;
+  --oa-header: #16231f;
+  --oa-header-text: #eef5f1;
+  --oa-shadow: 0 16px 40px rgba(33, 47, 42, 0.1);
+  font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC",
+    "Noto Sans SC", sans-serif;
+  color: var(--oa-text);
+  background: var(--oa-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--oa-bg);
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100dvh;
+  background: var(--oa-bg);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+code,
+pre,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 3px solid rgba(23, 107, 95, 0.34);
+  outline-offset: 2px;
+}
+
+.ant-btn,
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select-selector {
+  transition: border-color 180ms ease, background-color 180ms ease,
+    transform 180ms ease;
+}
+
+.ant-btn:active {
+  transform: translateY(1px);
+}
+
+.ant-card {
+  border-color: var(--oa-border);
+  box-shadow: none;
+}
+
+.ant-table-wrapper {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
