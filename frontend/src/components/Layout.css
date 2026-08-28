@@ -1,0 +1,227 @@
+.app-shell {
+  min-height: 100dvh;
+  background:
+    radial-gradient(circle at 12% 4%, rgba(23, 107, 95, 0.06), transparent 28rem),
+    var(--oa-bg);
+}
+
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 9px 12px;
+  border-radius: 6px;
+  color: var(--oa-header);
+  background: var(--oa-header-text);
+  box-shadow: var(--oa-shadow);
+  transform: translateY(-150%);
+  transition: transform 160ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  color: var(--oa-header-text);
+  background: rgba(22, 35, 31, 0.97);
+  border-bottom: 1px solid rgba(238, 245, 241, 0.1);
+  box-shadow: 0 10px 28px rgba(22, 35, 31, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.app-header-inner {
+  width: min(100%, 1480px);
+  min-height: 68px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 3vw, 34px);
+  display: grid;
+  grid-template-columns: auto minmax(320px, 1fr) auto;
+  align-items: center;
+  gap: clamp(18px, 3vw, 42px);
+}
+
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  min-width: max-content;
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-brand-mark {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 10px 10px 10px 4px;
+  background: var(--oa-accent);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.app-brand-mark::before,
+.app-brand-mark::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  background: var(--oa-header-text);
+}
+
+.app-brand-mark::before {
+  width: 7px;
+  height: 7px;
+  top: 8px;
+  left: 8px;
+  box-shadow: 12px 11px 0 var(--oa-header-text);
+}
+
+.app-brand-mark::after {
+  width: 14px;
+  height: 1px;
+  top: 17px;
+  left: 10px;
+  border-radius: 0;
+  background: rgba(238, 245, 241, 0.7);
+  transform: rotate(39deg);
+}
+
+.app-brand-copy {
+  display: grid;
+  gap: 1px;
+}
+
+.app-brand-name {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.app-brand-subtitle {
+  color: rgba(238, 245, 241, 0.58);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.desktop-navigation.ant-menu-horizontal {
+  min-width: 0;
+  color: rgba(238, 245, 241, 0.68);
+  background: transparent;
+  border-bottom: 0;
+}
+
+.desktop-navigation.ant-menu-horizontal > .ant-menu-item {
+  height: 42px;
+  line-height: 42px;
+  margin-inline: 2px;
+  padding-inline: 14px;
+  border-radius: 7px;
+  color: rgba(238, 245, 241, 0.68);
+}
+
+.desktop-navigation.ant-menu-horizontal > .ant-menu-item::after {
+  display: none;
+}
+
+.desktop-navigation.ant-menu-horizontal > .ant-menu-item:hover {
+  color: var(--oa-header-text);
+  background: rgba(238, 245, 241, 0.07);
+}
+
+.desktop-navigation.ant-menu-horizontal > .ant-menu-item-selected {
+  color: #f4fffb;
+  background: rgba(73, 173, 153, 0.19);
+}
+
+.app-user-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: max-content;
+}
+
+.app-user-name {
+  max-width: 130px;
+  overflow: hidden;
+  color: rgba(238, 245, 241, 0.72);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-logout.ant-btn-text,
+.mobile-navigation.ant-btn-text {
+  color: var(--oa-header-text);
+}
+
+.app-logout.ant-btn-text:hover,
+.mobile-navigation.ant-btn-text:hover {
+  color: var(--oa-header-text);
+  background: rgba(238, 245, 241, 0.09);
+}
+
+.mobile-navigation {
+  display: none;
+}
+
+.app-main {
+  width: min(100%, 1480px);
+  margin: 0 auto;
+  padding: clamp(18px, 2.6vw, 34px);
+}
+
+@media (max-width: 900px) {
+  .app-header-inner {
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+  }
+
+  .app-brand-subtitle,
+  .app-user-name {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-header-inner {
+    min-height: 60px;
+  }
+
+  .desktop-navigation {
+    display: none;
+  }
+
+  .mobile-navigation {
+    display: inline-flex;
+    justify-self: end;
+  }
+
+  .app-main {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 430px) {
+  .app-header-inner {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    padding-inline: 12px;
+  }
+
+  .app-brand-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .app-brand-mark {
+    display: none;
+  }
+
+  .app-user-actions {
+    gap: 2px;
+  }
+}
