@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Card, Empty, Spin, message } from "antd";
+import { Button, Empty, Spin, message } from "antd";
+import { useSearchParams } from "react-router-dom";
 import { apiErrorMessage, fetchVersions, fetchWorkspaceOverview } from "./api";
 import DiagnosticsPanel from "./DiagnosticsPanel";
 import ImportPanel from "./ImportPanel";
+import ObjectDetailPanel from "./ObjectDetailPanel";
 import ObjectPanel from "./ObjectPanel";
 import RelationPanel from "./RelationPanel";
 import TemporalPanel from "./TemporalPanel";
 import VersionPanel from "./VersionPanel";
 import WorkbenchShell from "./WorkbenchShell";
 import type { VersionSummary, WorkspaceOverview } from "./types";
+import { selectedOntologyObject, withSelectedObject } from "./objectNavigation";
 import { initialWorkbenchStage, type WorkbenchStage } from "./workbenchModel";
+import "./object-detail.css";
 import "./ontology-workbench.css";
 
 interface OntologyWorkbenchProps {
@@ -21,6 +25,7 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeStage, setActiveStage] = useState<WorkbenchStage | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const refreshWorkspace = useCallback(async () => {
     setLoading(true);
@@ -56,6 +61,36 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
     return <Empty description="无法加载本体包工作台" />;
   }
 
+  const requestedObjectId = searchParams.get("object");
+  const selectedObject = selectedOntologyObject(overview.objects, requestedObjectId);
+  const selectObject = (objectId: string | null, replace = false) => {
+    setSearchParams(withSelectedObject(searchParams, objectId), { replace });
+  };
+
+  const objectContent = selectedObject ? (
+    <ObjectDetailPanel
+      workspaceId={workspaceId}
+      revision={overview.revision}
+      object={selectedObject}
+      onChanged={refreshWorkspace}
+      onConflict={handleConflict}
+      onBack={() => selectObject(null, true)}
+    />
+  ) : requestedObjectId ? (
+    <section className="ontology-object-invalid">
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="对象已不存在或当前链接已经失效"
+      >
+        <Button type="primary" onClick={() => selectObject(null, true)}>
+          返回对象列表
+        </Button>
+      </Empty>
+    </section>
+  ) : (
+    <ObjectPanel objects={overview.objects} onSelectObject={(objectId) => selectObject(objectId)} />
+  );
+
   const panels: Record<WorkbenchStage, ReactNode> = {
     import: (
       <ImportPanel
@@ -65,17 +100,7 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
         onConflict={handleConflict}
       />
     ),
-    objects: (
-      <Card className="ontology-workbench__object-card" bordered={false} loading={loading}>
-        <ObjectPanel
-          workspaceId={workspaceId}
-          revision={overview.revision}
-          objects={overview.objects}
-          onChanged={refreshWorkspace}
-          onConflict={handleConflict}
-        />
-      </Card>
-    ),
+    objects: objectContent,
     relations: (
       <RelationPanel
         workspaceId={workspaceId}
@@ -107,7 +132,10 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
         policies={overview.temporalPolicies}
         onChanged={refreshWorkspace}
         onConflict={handleConflict}
-        onNavigate={(target) => setActiveStage(target)}
+        onNavigate={(target) => {
+          if (target === "objects") selectObject(null, true);
+          setActiveStage(target);
+        }}
       />
     ),
     versions: (
