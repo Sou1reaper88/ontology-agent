@@ -15,6 +15,23 @@ export function scoreLabel(score: number | null | undefined): string {
   return score === null || score === undefined ? "不可评分" : `${score} 分`;
 }
 
+export function caseQueryParams(filters: EvaluationCaseFilters): Record<string, string | number | boolean> {
+  const params: Record<string, string | number | boolean> = {
+    path: filters.path,
+    page: filters.page,
+    page_size: filters.pageSize,
+  };
+  if (filters.strictPass !== undefined) params.strict_pass = filters.strictPass;
+  if (filters.ontologyStatus) params.ontology_status = filters.ontologyStatus;
+  if (filters.diagnosisCode) params.diagnosis_code = filters.diagnosisCode;
+  if (filters.manualReview !== undefined) params.manual_review = filters.manualReview;
+  return params;
+}
+
+export function dimensionDifferenceLabel(kind: "missing" | "extra" | "conflicts"): string {
+  return { missing: "缺失", extra: "多余", conflicts: "冲突" }[kind];
+}
+
 const STATUS: Record<string, Presentation> = {
   pending: { label: "待开始", description: "任务已创建，尚未调用智能体", tone: "neutral" },
   running: { label: "评测中", description: "正在逐条生成并比较 SQL", tone: "warning" },
@@ -96,3 +113,4 @@ export function primaryDiagnosisPresentation(code: string | null | undefined): P
   }
   return DIAGNOSES[code] || { label: code, description: "查看案例结构差异。", tone: "neutral" };
 }
+import type { EvaluationCaseFilters } from "./types";

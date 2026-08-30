@@ -18,6 +18,10 @@ export interface EvaluationSummary {
   ontology: CandidateSummary;
   ontology_generation: MetricCount;
   ontology_no_match: MetricCount;
+  diagnoses?: {
+    legacy: Record<string, number>;
+    ontology: Record<string, number>;
+  };
 }
 
 export interface EvaluationRunSummary {
@@ -90,4 +94,14 @@ export interface EvaluationCaseDetail extends EvaluationCaseSummary {
   ontology_evidence: Record<string, unknown> | null;
   temporal_decisions: Array<Record<string, unknown>> | null;
   error_code: string | null;
+}
+
+export interface EvaluationCaseFilters {
+  path: "legacy" | "ontology";
+  strictPass?: boolean;
+  ontologyStatus?: string;
+  diagnosisCode?: string;
+  manualReview?: boolean;
+  page: number;
+  pageSize: number;
 }

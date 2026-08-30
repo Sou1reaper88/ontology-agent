@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
@@ -198,6 +199,16 @@ class EvaluationRunner:
         )
         generated_count = sum(case.ontology_status == "generated" for case in run.cases)
         no_match_count = sum(case.ontology_status == "no_match" for case in run.cases)
+        legacy_diagnoses = Counter(
+            code
+            for case in run.cases
+            for code in ((case.diagnosis_codes or {}).get("legacy", []))
+        )
+        ontology_diagnoses = Counter(
+            code
+            for case in run.cases
+            for code in ((case.diagnosis_codes or {}).get("ontology", []))
+        )
         return {
             "legacy": summarize_candidate_results(legacy).model_dump(mode="json"),
             "ontology": summarize_candidate_results(ontology).model_dump(mode="json"),
@@ -207,4 +218,8 @@ class EvaluationRunner:
             "ontology_no_match": _metric(no_match_count, len(run.cases)).model_dump(
                 mode="json"
             ),
+            "diagnoses": {
+                "legacy": dict(sorted(legacy_diagnoses.items())),
+                "ontology": dict(sorted(ontology_diagnoses.items())),
+            },
         }

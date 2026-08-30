@@ -118,6 +118,11 @@ def test_runner_processes_cases_serially_and_summarizes() -> None:
         assert run.package_sha256 == "a" * 12
         assert run.summary["legacy"]["strict_pass"]["numerator"] == 2
         assert run.summary["ontology_generation"]["numerator"] == 1
+        assert run.summary["diagnoses"]["ontology"] == {
+            "candidate_parse_failed": 1,
+            "manual_review_required": 1,
+            "ontology_no_match": 1,
+        }
         assert run.cases[1].diagnosis_codes["ontology"][0] == "ontology_no_match"
     assert adapter.calls == [
         ("requirement-1", "2026-08-24"),
