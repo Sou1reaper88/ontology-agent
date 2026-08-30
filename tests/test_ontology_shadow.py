@@ -255,6 +255,9 @@ def test_shadow_maps_planning_outcomes_without_guessing_sql() -> None:
     assert no_match.status == "no_match" and no_match.ontology_sql is None
     assert ambiguous.status == "ambiguous" and ambiguous.ontology_sql is None
     assert unsupported.status == "unsupported" and unsupported.ontology_sql is None
+    assert no_match.package is not None and no_match.package.version == "1.0.0"
+    assert ambiguous.package == no_match.package
+    assert unsupported.package == no_match.package
 
 
 def test_shadow_outputs_bounded_temporal_evidence() -> None:
@@ -293,6 +296,7 @@ def test_shadow_requests_clarification_for_unsafe_time_scope() -> None:
     assert conflict.status == "clarification_required"
     assert unbounded.status == "clarification_required"
     assert conflict.ontology_sql is None and unbounded.ontology_sql is None
+    assert conflict.package is not None and unbounded.package == conflict.package
     assert "确认" in conflict.summary
     assert "明确" in unbounded.summary
 

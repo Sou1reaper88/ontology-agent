@@ -89,3 +89,18 @@ class ImportedCase(FrozenModel):
     row_number: int
     requirement: str
     reference_sql: str
+
+
+class GenerationSnapshot(FrozenModel):
+    legacy_sql: str | None = None
+    legacy_success: bool = False
+    ontology_sql: str | None = None
+    ontology_status: str | None = None
+    ontology_summary: str | None = None
+    ontology_evidence: dict = {}
+    temporal_decisions: list[dict] = []
+    package_id: str | None = None
+    package_version: str | None = None
+    package_sha256: str | None = None
+    duration_ms: int = 0
+    error_code: str | None = None

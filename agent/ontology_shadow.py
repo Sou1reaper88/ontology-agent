@@ -166,12 +166,14 @@ def _empty_result(
     ],
     summary: str,
     legacy_sql: str | None,
+    package: ShadowPackage | None = None,
 ) -> OntologyShadowResult:
     return OntologyShadowResult(
         status=status,
         summary=summary,
         diff=SqlDiff(changed=False, legacy_tables=_tables(legacy_sql)),
         evidence=OntologyEvidence(),
+        package=package,
     )
 
 
@@ -202,8 +204,14 @@ class OntologyShadowService:
             return _empty_result("unavailable", "本体 SQL 影子模式未启用", legacy_sql)
         if self._runtime is None:
             return _empty_result("unavailable", "尚未配置外部本体包", legacy_sql)
+        package: ShadowPackage | None = None
         try:
             snapshot = self._runtime.snapshot()
+            package = ShadowPackage(
+                package_id=snapshot.info.package_id,
+                version=snapshot.info.version,
+                sha256=snapshot.info.sha256[:12],
+            )
             plan = OntologyPlanner(OntologyResolver(snapshot)).plan(
                 query,
                 system_time=system_time,
@@ -266,17 +274,13 @@ class OntologyShadowService:
                         )
                     ),
                 ),
-                package=ShadowPackage(
-                    package_id=snapshot.info.package_id,
-                    version=snapshot.info.version,
-                    sha256=snapshot.info.sha256[:12],
-                ),
+                package=package,
                 temporal_decisions=tuple(temporal_evidence),
             )
         except NoMatchingConceptError:
-            return _empty_result("no_match", "当前本体包未匹配到查询概念", legacy_sql)
+            return _empty_result("no_match", "当前本体包未匹配到查询概念", legacy_sql, package)
         except AmbiguousQueryConceptError:
-            return _empty_result("ambiguous", "查询命中了多个同等本体概念", legacy_sql)
+            return _empty_result("ambiguous", "查询命中了多个同等本体概念", legacy_sql, package)
         except TemporalIntentError as exc:
             reason = exc.details.get("reason")
             if reason == "conflicting_partition_time":
@@ -284,22 +288,26 @@ class OntologyShadowService:
                     "clarification_required",
                     "需求中存在多个冲突账期，请确认最终账期",
                     legacy_sql,
+                    package,
                 )
             if reason == "unbounded_time":
                 return _empty_result(
                     "clarification_required",
                     "需求未限定安全时间范围，请明确账期",
                     legacy_sql,
+                    package,
                 )
-            return _empty_result("unsupported", "时间条件无法安全解析", legacy_sql)
+            return _empty_result("unsupported", "时间条件无法安全解析", legacy_sql, package)
         except (UnsupportedQueryPlanError, OntologyCompileError):
-            return _empty_result("unsupported", "当前本体映射不足以生成安全 SQL", legacy_sql)
+            return _empty_result(
+                "unsupported", "当前本体映射不足以生成安全 SQL", legacy_sql, package
+            )
         except OntologyError as exc:
             logger.warning("本体影子运行失败: %s", type(exc).__name__)
-            return _empty_result("unavailable", "本体影子链路当前不可用", legacy_sql)
+            return _empty_result("unavailable", "本体影子链路当前不可用", legacy_sql, package)
         except Exception as exc:
             logger.warning("本体影子运行异常: %s", type(exc).__name__)
-            return _empty_result("unavailable", "本体影子链路当前不可用", legacy_sql)
+            return _empty_result("unavailable", "本体影子链路当前不可用", legacy_sql, package)
 
 
 @lru_cache(maxsize=8)
