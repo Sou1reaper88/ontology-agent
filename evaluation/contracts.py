@@ -7,6 +7,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 StructureStatus = Literal["parsed", "unparsed", "unsupported"]
+DimensionStatus = Literal[
+    "matched",
+    "partial",
+    "mismatched",
+    "not_applicable",
+    "unscorable",
+]
 
 
 class FrozenModel(BaseModel):
@@ -45,3 +52,34 @@ class SqlStructure(FrozenModel):
     has_cte: bool = False
     has_subquery: bool = False
     warnings: tuple[str, ...] = ()
+
+
+class DimensionResult(FrozenModel):
+    status: DimensionStatus
+    score: int | None
+    missing: tuple[str, ...] = ()
+    extra: tuple[str, ...] = ()
+    conflicts: tuple[str, ...] = ()
+
+
+class CandidateEvaluation(FrozenModel):
+    score: int | None
+    strict_pass: bool
+    manual_review: bool
+    dimensions: dict[str, DimensionResult]
+    diagnosis_codes: tuple[str, ...] = ()
+
+
+class MetricCount(FrozenModel):
+    numerator: int
+    denominator: int
+    rate: float | None
+
+
+class CandidateSummary(FrozenModel):
+    total: int
+    scorable: int
+    strict_pass: MetricCount
+    manual_review: MetricCount
+    average_score: float | None
+    dimensions: dict[str, MetricCount]
