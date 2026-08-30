@@ -83,3 +83,9 @@ class CandidateSummary(FrozenModel):
     manual_review: MetricCount
     average_score: float | None
     dimensions: dict[str, MetricCount]
+
+
+class ImportedCase(FrozenModel):
+    row_number: int
+    requirement: str
+    reference_sql: str
