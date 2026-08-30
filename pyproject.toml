@@ -28,6 +28,7 @@ dependencies = [
     "pyshacl>=0.40,<0.41",
     "python-multipart>=0.0.9",
     "openpyxl>=3.1,<4",
+    "sqlglot>=28.6,<29",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +55,7 @@ include = [
     "auth*",
     "config*",
     "executor*",
+    "evaluation*",
     "models*",
     "monitoring*",
     "ontology_core*",
