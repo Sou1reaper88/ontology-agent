@@ -14,6 +14,7 @@ from api.routes import (
     audit,
     auth,
     conversation,
+    evaluations,
     execute,
     ontology,
     ontology_packages,
@@ -41,6 +42,7 @@ app.include_router(users.router)
 app.include_router(roles.router)
 app.include_router(permissions.router)
 app.include_router(execute.router)
+app.include_router(evaluations.router)
 app.include_router(conversation.router)
 app.include_router(sql.router)
 app.include_router(ontology.router)
