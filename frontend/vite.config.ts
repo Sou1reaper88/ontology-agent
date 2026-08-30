@@ -15,6 +15,7 @@ export default defineConfig({
       "/sql": "http://127.0.0.1:8001",
       "/ontology/": "http://127.0.0.1:8001",
       "/ontology-packages": "http://127.0.0.1:8001",
+      "/evaluations": "http://127.0.0.1:8001",
       "/audit-logs": "http://127.0.0.1:8001",
     },
   },

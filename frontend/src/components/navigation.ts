@@ -1,6 +1,7 @@
 export const NAV_ITEMS = [
   { key: "chat", label: "智能取数", path: "/chat" },
   { key: "ontology", label: "本体工作台", path: "/ontology" },
+  { key: "evaluation", label: "评测中心", path: "/evaluation" },
   { key: "query", label: "数据查询", path: "/query" },
   { key: "admin", label: "管理", path: "/admin" },
 ] as const;

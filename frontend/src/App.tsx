@@ -6,6 +6,7 @@ import Chat from "./pages/Chat";
 import DataQuery from "./pages/DataQuery";
 import Ontology from "./pages/Ontology";
 import Admin from "./pages/Admin";
+import Evaluation from "./pages/Evaluation";
 
 function App() {
   return (
@@ -15,6 +16,8 @@ function App() {
         <Route index element={<Navigate to="/chat" replace />} />
         <Route path="chat" element={<Chat />} />
         <Route path="ontology" element={<Ontology />} />
+        <Route path="evaluation" element={<Evaluation />} />
+        <Route path="evaluation/:runId" element={<Evaluation />} />
         <Route path="query" element={<DataQuery />} />
         <Route path="result/:queryId" element={<Result />} />
         <Route path="admin" element={<Admin />} />
