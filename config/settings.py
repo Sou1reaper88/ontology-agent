@@ -96,6 +96,11 @@ class OntologySettings(BaseSettings):
     maintainer_roles: tuple[str, ...] = ("本体维护者", "全省管理员")
     administrator_roles: tuple[str, ...] = ("全省管理员",)
 
+    @property
+    def management_configured(self) -> bool:
+        """Return whether durable ontology-management storage was configured."""
+        return bool(self.management_root.strip())
+
 
 class Settings(BaseSettings):
     """全局配置入口。"""
