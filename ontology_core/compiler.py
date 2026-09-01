@@ -57,7 +57,12 @@ _COMPARISONS = {
 
 
 class SqlCompiler(Protocol):
-    def compile(self, plan: QueryPlan) -> CompiledQuery: ...
+    def compile(
+        self,
+        plan: QueryPlan,
+        *,
+        source_table_overrides: Mapping[str, str] | None = None,
+    ) -> CompiledQuery: ...
 
 
 def _compile_error(message: str) -> OntologyCompileError:
@@ -111,7 +116,12 @@ def _literal(value: RdfLiteral) -> str:
 
 
 class GenericSqlCompiler:
-    def compile(self, plan: QueryPlan) -> CompiledQuery:
+    def compile(
+        self,
+        plan: QueryPlan,
+        *,
+        source_table_overrides: Mapping[str, str] | None = None,
+    ) -> CompiledQuery:
         if not plan.selections:
             raise _compile_error("查询计划没有可编译的选择字段")
         qualify = len(plan.objects) == 2
@@ -136,12 +146,25 @@ class GenericSqlCompiler:
         where = ""
         if predicates:
             where = " WHERE " + " AND ".join(predicates)
-        tables = tuple(self._table(item) for item in plan.objects)
-        from_sql = self._table_sql(plan.objects[0], alias=qualify)
+        overrides = source_table_overrides or {}
+        tables = tuple(
+            overrides.get(item.semantic.uri, self._table(item)) for item in plan.objects
+        )
+        from_sql = self._table_sql(
+            plan.objects[0],
+            alias=qualify,
+            override=overrides.get(plan.objects[0].semantic.uri),
+        )
         if qualify:
             join = plan.joins[0]
+            joined_table = self._table_sql(
+                plan.objects[1],
+                alias=True,
+                override=overrides.get(plan.objects[1].semantic.uri),
+            )
             from_sql += (
-                f" INNER JOIN {self._table_sql(plan.objects[1], alias=True)}"
+                " INNER JOIN "
+                f"{joined_table}"
                 f" ON {self._field(join.left, qualify=True)}"
                 f" = {self._field(join.right, qualify=True)}"
             )
@@ -162,7 +185,18 @@ class GenericSqlCompiler:
         return f"{namespace}.{object_name}" if namespace else object_name
 
     @classmethod
-    def _table_sql(cls, object_: BoundObject, *, alias: bool) -> str:
+    def _table_sql(
+        cls,
+        object_: BoundObject,
+        *,
+        alias: bool,
+        override: str | None = None,
+    ) -> str:
+        if override is not None:
+            table_sql = _quote_identifier(override)
+            if alias:
+                table_sql += f" AS {_quote_identifier(object_.alias)}"
+            return table_sql
         object_name = object_.binding.object_name
         table_sql = _quote_identifier(object_name)
         namespace = object_.binding.physical_namespace
