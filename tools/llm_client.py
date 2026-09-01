@@ -6,15 +6,26 @@ SQL 执行与结果存储在本地，数据不流出。
 
 from __future__ import annotations
 
+import json
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 
 from config.settings import settings
 from monitoring.metrics import LLM_CALL_DURATION
+from ontology_core.program_models import (
+    DraftSqlProgramPlan,
+    ProgramDiagnostic,
+)
 
 PLACEHOLDER_KEY = "your-api-key-here"
+
+
+class StructuredPlanningError(RuntimeError):
+    """Safe error raised when the provider does not return the required contract."""
 
 
 class LLMClient:
@@ -35,6 +46,70 @@ class LLMClient:
             return self._generate(system_prompt, user_query)
         finally:
             LLM_CALL_DURATION.observe(time.time() - start)
+
+    def plan_sql_program(
+        self,
+        *,
+        system_prompt: str,
+        user_query: str,
+    ) -> DraftSqlProgramPlan:
+        """Request and validate one SQL-free semantic program draft."""
+        return self._generate_program(system_prompt, user_query)
+
+    def repair_sql_program(
+        self,
+        *,
+        original_query: str,
+        draft: DraftSqlProgramPlan,
+        diagnostics: Sequence[ProgramDiagnostic],
+    ) -> DraftSqlProgramPlan:
+        """Repair one draft using only stable diagnostics and no generated SQL."""
+        system_prompt = (
+            "你只能修复结构化取数程序草案。"
+            "仅输出一个符合 JSON Schema 的 JSON 对象；"
+            "禁止输出 SQL，禁止输出目标表名或任意物理标识符；"
+            "不得改变无关的业务意图。"
+        )
+        repair_request = json.dumps(
+            {
+                "original_request": original_query,
+                "draft": draft.model_dump(mode="json"),
+                "diagnostics": [item.model_dump(mode="json") for item in diagnostics],
+                "schema": DraftSqlProgramPlan.model_json_schema(),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return self._generate_program(system_prompt, repair_request)
+
+    def _generate_program(
+        self,
+        system_prompt: str,
+        user_query: str,
+    ) -> DraftSqlProgramPlan:
+        start = time.time()
+        try:
+            try:
+                raw = self._generate(system_prompt, user_query)
+            except Exception as error:
+                raise StructuredPlanningError("结构化规划服务不可用") from error
+        finally:
+            LLM_CALL_DURATION.observe(time.time() - start)
+        text = self._unwrap_json_fence(raw)
+        try:
+            return DraftSqlProgramPlan.model_validate_json(text)
+        except (ValidationError, ValueError, TypeError) as error:
+            raise StructuredPlanningError("结构化计划格式无效") from error
+
+    @staticmethod
+    def _unwrap_json_fence(raw: str) -> str:
+        text = raw.strip()
+        if not text.startswith("```"):
+            return text
+        lines = text.splitlines()
+        if len(lines) < 3 or lines[-1].strip() != "```":
+            raise StructuredPlanningError("结构化计划格式无效")
+        return "\n".join(lines[1:-1]).strip()
 
     def _generate(self, system_prompt: str, user_query: str) -> str:
         if not self.api_key or self.api_key == PLACEHOLDER_KEY:
