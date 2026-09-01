@@ -8,6 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from urllib.parse import unquote
 
+from agent.ontology_shadow import OntologyRuntime
 from ontology_core.errors import OntologyError
 from ontology_core.management.editor import DraftEditor
 from ontology_core.management.imports import BatchImportService, ImportPreview, UploadPayload
@@ -93,6 +94,7 @@ class OntologyManagementService:
         repository_root: Path | None = None,
         limits: UploadLimits | None = None,
         import_token_ttl: timedelta = timedelta(minutes=15),
+        runtime: OntologyRuntime | None = None,
     ) -> None:
         try:
             self._store = FileDraftStore(root, repository_root=repository_root)
@@ -109,7 +111,7 @@ class OntologyManagementService:
             ),
             token_ttl=import_token_ttl,
         )
-        self._publisher = PackagePublisher(self._store, self.root)
+        self._publisher = PackagePublisher(self._store, self.root, runtime=runtime)
 
     @staticmethod
     def upload_payload(file_name: str, content: bytes) -> UploadPayload:
