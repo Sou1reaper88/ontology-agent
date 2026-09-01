@@ -16,6 +16,16 @@ from ontology_core.management.paths import (
 )
 
 
+def test_env_example_documents_external_management_root() -> None:
+    content = (Path(__file__).resolve().parents[2] / ".env.example").read_text("utf-8")
+
+    assert (
+        "ONTOLOGY__MANAGEMENT_ROOT=D:/path/outside/repository/ontology-management"
+        in content
+    )
+    assert "ONTOLOGY__MANAGEMENT_WORKSPACE=evaluation" in content
+
+
 def test_ontology_settings_expose_management_defaults() -> None:
     settings = OntologySettings()
 
