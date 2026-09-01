@@ -91,6 +91,93 @@ def test_shadow_exception_does_not_fail_legacy_agent(monkeypatch) -> None:
     assert "fictional-shadow-secret" not in str(output["ontology_shadow"])
 
 
+def test_run_agent_uses_native_program_as_default_without_legacy_graph(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+    from agent.program_generation import (
+        ProgramGenerationMode,
+        ProgramGenerationResult,
+    )
+    from ontology_core.program_compiler import HiveProgramCompiler
+    from tests.test_program_planner import _bound_plan
+
+    plan = _bound_plan()
+    program = HiveProgramCompiler().compile(plan)
+    calls: list[tuple[str, str]] = []
+
+    def fake_generate(query, *, request_id, system_time, legacy_sql_factory):
+        calls.append((query, request_id))
+        return ProgramGenerationResult(
+            sql=program.sql,
+            program=program,
+            plan=plan,
+            intent=plan.intent,
+            mode=ProgramGenerationMode.PROGRAM,
+            diagnostics=(),
+        )
+
+    monkeypatch.setattr(orchestrator, "generate_program", fake_generate)
+    monkeypatch.setattr(
+        orchestrator,
+        "build_graph",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy graph called")),
+    )
+
+    output = orchestrator.run_agent(
+        "生成客户结果",
+        request_id="message-001",
+        system_time="2026-08-24",
+    )
+
+    assert output["success"] is True
+    assert output["sql"] == program.sql
+    assert output["generation_mode"] == "program"
+    assert output["program_id"] == plan.program_id
+    assert output["intent"] == plan.intent.model_dump(mode="json")
+    assert output["program_plan"]["package_sha256"] == "a" * 64
+    assert output["program_steps"][0]["target_table"] == program.result_table
+    assert output["temporal_evidence"] == []
+    assert output["trace"][0]["node"] == "program_generation"
+    assert calls == [("生成客户结果", "message-001")]
+
+
+def test_run_agent_does_not_fallback_when_clarification_is_required(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+    from agent.program_generation import (
+        ProgramGenerationMode,
+        ProgramGenerationResult,
+    )
+    from ontology_core.program_models import ProgramDiagnostic
+
+    diagnostic = ProgramDiagnostic(
+        code="ambiguous_business_term",
+        message="请确认客户口径",
+    )
+
+    def fake_generate(query, *, request_id, system_time, legacy_sql_factory):
+        return ProgramGenerationResult(
+            sql=None,
+            program=None,
+            plan=None,
+            intent=None,
+            mode=ProgramGenerationMode.CLARIFICATION_REQUIRED,
+            diagnostics=(diagnostic,),
+            clarification="请确认客户口径",
+        )
+
+    monkeypatch.setattr(orchestrator, "generate_program", fake_generate)
+
+    output = orchestrator.run_agent(
+        "生成客户结果",
+        request_id="message-002",
+        system_time="2026-08-24",
+    )
+
+    assert output["success"] is False
+    assert output.get("sql") is None
+    assert output["generation_mode"] == "clarification_required"
+    assert output["clarification"] == "请确认客户口径"
+
+
 def test_irrelevant_question_short_circuits(monkeypatch) -> None:
     """无关问题：检索器返回 irrelevant → 编排短路输出友好提示，不生成 SQL。"""
 
