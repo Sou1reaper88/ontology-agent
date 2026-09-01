@@ -79,7 +79,9 @@ def test_bootstrap_recovers_exact_active_version(tmp_path, synthetic_published_w
     assert runtime.snapshot().info.version == synthetic_published_workspace.version
 
 
-def test_bootstrap_hides_unconfigured_root(tmp_path):
+def test_bootstrap_hides_unconfigured_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(Path(tmp_path.anchor))
+
     with pytest.raises(ManagedRuntimeBootstrapError) as exc_info:
         recover_managed_runtime(
             root="",
@@ -88,4 +90,5 @@ def test_bootstrap_hides_unconfigured_root(tmp_path):
             runtime=OntologyRuntime(),
         )
     assert exc_info.value.code == "ontology_runtime_bootstrap_failed"
+    assert exc_info.value.details == {"reason": "ontology_management_configuration_error"}
     assert str(tmp_path) not in str(exc_info.value)

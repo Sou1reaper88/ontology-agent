@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 from ontology_core.errors import OntologyError
+
+_RESERVED_MANAGEMENT_ROOT_SEGMENTS = frozenset({".local", ".worktrees"})
 
 
 class OntologyManagementConfigurationError(OntologyError):
@@ -27,13 +30,18 @@ def resolve_management_root(configured: str, repository_root: Path) -> Path:
         raise OntologyManagementConfigurationError("本体管理根目录必须配置")
 
     configured_path = Path(configured).expanduser()
-    if _contains_reparse_point(configured_path):
-        raise OntologyManagementConfigurationError("本体管理根目录不能经过符号链接或 reparse point")
-
     management_root = configured_path.resolve(strict=False)
     resolved_repository = repository_root.resolve(strict=False)
     if _is_within(management_root, resolved_repository):
         raise OntologyManagementConfigurationError("本体管理根目录必须位于 Git 工作树之外")
+    if _is_within(management_root, Path(tempfile.gettempdir()).resolve(strict=False)):
+        raise OntologyManagementConfigurationError("本体管理根目录不能位于系统临时目录")
+    if _contains_reserved_management_segment(management_root):
+        raise OntologyManagementConfigurationError(
+            "本体管理根目录不能位于 .local 或 .worktrees 保留目录"
+        )
+    if _contains_reparse_point(configured_path):
+        raise OntologyManagementConfigurationError("本体管理根目录不能经过符号链接或 reparse point")
     return management_root
 
 
@@ -64,6 +72,11 @@ def _require_plain_child_part(part: str) -> None:
         raise OntologyPathError("管理路径包含绝对或空子路径")
     if len(segment.parts) != 1 or segment.parts[0] in {".", ".."}:
         raise OntologyPathError("管理路径包含不安全的子路径")
+
+
+def _contains_reserved_management_segment(path: Path) -> bool:
+    reserved = {os.path.normcase(segment) for segment in _RESERVED_MANAGEMENT_ROOT_SEGMENTS}
+    return any(os.path.normcase(part) in reserved for part in path.parts)
 
 
 def _contains_reparse_point(path: Path) -> bool:

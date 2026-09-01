@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent.ontology_shadow import OntologyRuntime, RuntimeHealth
 from ontology_core.errors import OntologyError
+from ontology_core.management.paths import OntologyManagementConfigurationError
 from ontology_core.management.service import OntologyManagementService
 
 
@@ -23,6 +24,9 @@ def recover_managed_runtime(
     repository_root: Path,
     runtime: OntologyRuntime,
 ) -> RuntimeHealth:
+    if isinstance(root, str) and not root.strip():
+        raise ManagedRuntimeBootstrapError(reason=OntologyManagementConfigurationError.code)
+
     try:
         service = OntologyManagementService(
             Path(root),

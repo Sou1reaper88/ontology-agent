@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -41,11 +42,32 @@ def test_management_root_must_be_outside_repository(tmp_path: Path) -> None:
         resolve_management_root(str(repository / ".local"), repository)
 
 
-def test_management_root_accepts_a_valid_sibling_directory(tmp_path: Path) -> None:
-    repository = tmp_path / "repo"
-    management_root = tmp_path / "management"
-    repository.mkdir()
-    management_root.mkdir()
+@pytest.mark.parametrize("reserved_segment", (".local", ".worktrees"))
+def test_management_root_rejects_reserved_path_segments(reserved_segment: str) -> None:
+    base = Path(Path.cwd().anchor) / "ontology-management-boundary-tests"
+    repository = base / "repo"
+    management_root = base / reserved_segment / "management"
+
+    with pytest.raises(OntologyManagementConfigurationError, match="保留目录"):
+        resolve_management_root(str(management_root), repository)
+
+
+@pytest.mark.parametrize("suffix", ((), ("ontology-management",)))
+def test_management_root_rejects_system_temp_root_and_descendants(
+    suffix: tuple[str, ...],
+) -> None:
+    system_temp = Path(tempfile.gettempdir()).resolve()
+    repository = Path(Path.cwd().anchor) / "ontology-management-boundary-tests" / "repo"
+    management_root = system_temp.joinpath(*suffix)
+
+    with pytest.raises(OntologyManagementConfigurationError, match="系统临时目录"):
+        resolve_management_root(str(management_root), repository)
+
+
+def test_management_root_accepts_a_valid_sibling_directory() -> None:
+    base = Path(Path.cwd().anchor) / "ontology-management-boundary-tests"
+    repository = base / "repo"
+    management_root = base / "management"
 
     assert resolve_management_root(str(management_root), repository) == management_root.resolve()
 

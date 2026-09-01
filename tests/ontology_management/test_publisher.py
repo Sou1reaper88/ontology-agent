@@ -30,7 +30,6 @@ PACKAGE_FILES = {
     "shapes.ttl",
 }
 
-
 def _draft(*, revision: int = 1) -> WorkspaceDraft:
     return WorkspaceDraft(
         workspace_id="evaluation",
