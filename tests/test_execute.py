@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 _MOCK_SQL = (
@@ -27,9 +28,21 @@ def _do_execute_sql(client: TestClient, token: str, sql: str = _MOCK_SQL) -> int
     return data["query_id"]
 
 
-def _create_pending_via_conversation(client: TestClient, token: str) -> int:
+def _create_pending_via_conversation(client: TestClient, token: str, monkeypatch) -> int:
     """通过对话接口创建一条未执行的取数记录，返回 query_id。"""
+    import api.routes.conversation as conv_route
     from tests.conftest import last_assistant_message, send_and_wait
+
+    monkeypatch.setattr(
+        conv_route,
+        "run_agent",
+        lambda query, **kwargs: {
+            "success": True,
+            "sql": _MOCK_SQL,
+            "markdown": "已生成只读查询。",
+            "trace": [],
+        },
+    )
 
     resp = client.post("/conversations", json={}, headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 201, resp.text
@@ -89,9 +102,47 @@ def test_execute_requires_query_id_or_sql(client: TestClient, admin_token: str) 
     assert resp.status_code == 400
 
 
-def test_result_before_execute(client: TestClient, admin_token: str) -> None:
+def test_execute_rejects_program_id_even_with_read_only_sql(
+    client: TestClient,
+    admin_token: str,
+) -> None:
+    resp = client.post(
+        "/execute",
+        json={"program_id": "a1b2c3d4e5f6", "sql": "SELECT 1;"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert resp.status_code == 400
+    assert "仅生成" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    (
+        "SELECT 1; SELECT 2;",
+        "DROP TABLE dm.customer;",
+        "INSERT INTO dm.customer SELECT 1;",
+        "CREATE TABLE dm.result AS SELECT 1;",
+    ),
+)
+def test_execute_rejects_program_or_mutating_sql(
+    client: TestClient,
+    admin_token: str,
+    sql: str,
+) -> None:
+    resp = client.post(
+        "/execute",
+        json={"sql": sql},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert resp.status_code == 400
+    assert "单条只读查询" in resp.json()["detail"]
+
+
+def test_result_before_execute(client: TestClient, admin_token: str, monkeypatch) -> None:
     """未执行的记录拉取结果 → 400（对话创建记录默认不执行）。"""
-    qid = _create_pending_via_conversation(client, admin_token)
+    qid = _create_pending_via_conversation(client, admin_token, monkeypatch)
     resp = client.get(
         f"/execute/result/{qid}",
         headers={"Authorization": f"Bearer {admin_token}"},

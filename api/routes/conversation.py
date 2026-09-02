@@ -54,6 +54,31 @@ class BatchDeleteRequest(BaseModel):
     ids: list[int]
 
 
+class ProgramStepSummary(BaseModel):
+    step_id: str
+    target_table: str
+    drop_sql: str
+    create_sql: str
+
+
+class ProgramDiagnosticSummary(BaseModel):
+    code: str
+    message: str
+    step_id: str | None = None
+    location: str | None = None
+    candidates: list[str] = []
+
+
+class ProgramSummary(BaseModel):
+    program_id: str
+    platform: str
+    mode: str
+    steps: list[ProgramStepSummary]
+    diagnostics: list[ProgramDiagnosticSummary] = []
+    package: dict | None = None
+    temporal_evidence: list[dict] = []
+
+
 class MessageOut(BaseModel):
     id: int
     role: str
@@ -62,6 +87,7 @@ class MessageOut(BaseModel):
     query_id: int | None = None
     trace: list[dict] | None = None
     ontology_shadow: dict | None = None
+    program: ProgramSummary | None = None
     created_at: str
 
 
@@ -82,6 +108,29 @@ def _extract_ontology_shadow(trace: list[dict] | None) -> dict | None:
             if item.get("node") == "ontology_shadow"
         ),
         None,
+    )
+
+
+def _extract_program(trace: list[dict] | None) -> ProgramSummary | None:
+    payload = next(
+        (
+            item.get("payload")
+            for item in reversed(trace or [])
+            if item.get("node") == "program_generation"
+            and item.get("status") == "success"
+        ),
+        None,
+    )
+    if not isinstance(payload, dict) or not payload.get("program_id"):
+        return None
+    return ProgramSummary(
+        program_id=payload["program_id"],
+        platform=payload.get("platform") or "hive",
+        mode=payload.get("generation_mode") or "program",
+        steps=payload.get("program_steps") or [],
+        diagnostics=payload.get("diagnostics") or [],
+        package=payload.get("package"),
+        temporal_evidence=payload.get("temporal_evidence") or [],
     )
 
 
@@ -156,6 +205,7 @@ def get_conversation(
             query_id=m.query_id,
             trace=m.trace,
             ontology_shadow=_extract_ontology_shadow(m.trace),
+            program=_extract_program(m.trace),
             created_at=m.created_at.isoformat(),
         )
         for m in conv.messages
@@ -255,6 +305,7 @@ def message_status(
             "steps": tr["steps"],
             "error": tr["error"],
             "ontology_shadow": _extract_ontology_shadow(tr["steps"]),
+            "program": _extract_program(tr["steps"]),
         }
     # 进程重启后内存 trace 丢失：从 DB 读最终态
     if msg.sql or msg.trace:
@@ -265,6 +316,7 @@ def message_status(
             "steps": msg.trace or [],
             "error": None,
             "ontology_shadow": _extract_ontology_shadow(msg.trace),
+            "program": _extract_program(msg.trace),
         }
     if msg.content and msg.content != "生成中…":
         return {
@@ -273,6 +325,7 @@ def message_status(
             "steps": msg.trace or [],
             "error": msg.content,
             "ontology_shadow": _extract_ontology_shadow(msg.trace),
+            "program": _extract_program(msg.trace),
         }
     return {
         "message_id": msg_id,
@@ -280,6 +333,7 @@ def message_status(
         "steps": [],
         "error": "服务重启，生成中断",
         "ontology_shadow": None,
+        "program": None,
     }
 
 
@@ -312,11 +366,13 @@ def _generate_async(
             history=history,
             conversation_context=conversation_context,
             on_step=lambda s: append_step(msg_id, s),
+            request_id=f"conversation:{conv_id}:message:{msg_id}",
         )
 
         sql = output.get("sql") if output.get("success") else None
+        program = _extract_program(output.get("trace"))
         query_id: int | None = None
-        if sql:
+        if sql and program is None:
             user = db.get(User, user_id)
             if user is not None:
                 require_table_permissions(user, sql, db)
@@ -340,7 +396,7 @@ def _generate_async(
                 "request_text": content,
                 "conversation_id": conv_id,
                 "success": bool(output.get("success")),
-                "sql": sql if output.get("success") else None,
+                "sql": sql if output.get("success") and program is None else None,
             },
             status="success" if output.get("success") else "failed",
         )

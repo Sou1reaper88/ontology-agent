@@ -1056,6 +1056,7 @@ def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
         }
     return {
         "program_id": program.program_id if program is not None else None,
+        "platform": program.dialect if program is not None else None,
         "generation_mode": result.mode.value,
         "intent": (
             result.intent.model_dump(mode="json") if result.intent is not None else None
@@ -1223,7 +1224,7 @@ def run_agent(
                 "## 取数程序\n"
                 f"- 生成模式：{result.mode.value}\n"
                 f"- 物化步骤：{len(payload['program_steps'])}\n\n"
-                f"## SQL 脚本\n\n{result.sql}"
+                "脚本已生成，请在下方取数程序区域查看和复制。"
             ),
             "trace": [step, *(legacy_output or {}).get("trace", [])],
         }
