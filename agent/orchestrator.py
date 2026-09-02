@@ -35,6 +35,7 @@ class AgentState(TypedDict, total=False):
     system_time: str | None
     history: list[dict[str, str]]
     conversation_context: str | None
+    assembled_context: str | None
     ttl_def: dict[str, Any]
     attr_map: dict[str, Any]
     field_map: dict[str, str]
@@ -301,7 +302,7 @@ def _build_rules_prompt(state: AgentState) -> str:
     if not lines:
         lines.append("（无候选字段）")
     logdefs = _render_logical_defs(ttl, state)
-    return (
+    prompt = (
         "你是电信业务取数口径分析助手。根据用户取数需求与候选表字段信息，推导业务口径"
         "（过滤条件/统计口径），明确到物理字段与取值条件。\n"
         "候选表为电信用户业务宽表，包含通话/流量/费用/订购等业务字段；"
@@ -320,6 +321,32 @@ def _build_rules_prompt(state: AgentState) -> str:
         '- 只输出 JSON，格式 {"business_rules": "自然语言口径说明", "rule_fields": ["物理字段(大写)"], "rule_condition": "可直接拼入 WHERE 的 SQL 条件片段，字段大写，不含分区/账期条件"}\n'
         '- 若需求与候选表字段完全无关或无法推导，返回 {"business_rules": "", "rule_fields": [], "rule_condition": ""}'
     )
+    context = _conversation_context_text(state)
+    if context:
+        prompt += f"\n\n本轮共享会话上下文：\n{context}"
+    return prompt
+
+
+def _conversation_context_text(state: AgentState) -> str:
+    """Return preassembled context, with a raw-history compatibility path."""
+
+    assembled = (state.get("assembled_context") or "").strip()
+    if assembled:
+        return assembled
+    parts: list[str] = []
+    conversation_context = (state.get("conversation_context") or "").strip()
+    if conversation_context:
+        parts.append(f"会话约束：\n{conversation_context}")
+    history = state.get("history") or []
+    if history:
+        lines = ["历史对话："]
+        for item in history:
+            role = "用户" if item.get("role") == "user" else "助手"
+            lines.append(f"{role}：{item.get('content', '')}")
+            if item.get("sql"):
+                lines.append(f"助手已生成 SQL：{item['sql']}")
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
 
 
 def _parse_rules(raw: str) -> dict[str, Any] | None:
@@ -470,19 +497,9 @@ def _build_system_prompt(state: AgentState) -> str:
         "- 涉及多表时，必须按上方关系定义给出的关联键 JOIN，禁止自行猜测关联键。\n"
         "- 只输出一条完整 HiveSQL，以分号结束，不要任何解释文字。\n"
     )
-    ctx = state.get("conversation_context")
-    if ctx:
-        prompt += f"对话上下文（常驻约束，必须遵守）：{ctx}\n"
-    history = state.get("history") or []
-    if history:
-        prompt += (
-            "历史对话（用户之前的提问与已生成的 SQL，供继续完善参考，仅作上下文不要重复回答）：\n"
-        )
-        for h in history[-6:]:
-            role = "用户" if h.get("role") == "user" else "助手"
-            prompt += f"{role}：{h.get('content', '')}\n"
-            if h.get("sql"):
-                prompt += f"助手已生成SQL：{h['sql']}\n"
+    context = _conversation_context_text(state)
+    if context:
+        prompt += f"本轮共享会话上下文（必须遵守，不要重复回答）：\n{context}\n"
     return prompt
 
 
@@ -998,6 +1015,7 @@ def _run_legacy_agent(
     system_time: str | None = None,
     history: list[dict[str, str]] | None = None,
     conversation_context: str | None = None,
+    assembled_context: str | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     g = build_graph(on_step) if on_step else graph
@@ -1009,6 +1027,7 @@ def _run_legacy_agent(
             "system_time": system_time,
             "history": history or [],
             "conversation_context": conversation_context,
+            "assembled_context": assembled_context,
             "retry_count": 0,
             "errors": [],
         }
@@ -1147,6 +1166,7 @@ def run_agent(
     system_time: str | None = None,
     history: list[dict[str, str]] | None = None,
     conversation_context: str | None = None,
+    assembled_context: str | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     request_id: str | None = None,
 ) -> dict[str, Any]:
@@ -1157,11 +1177,12 @@ def run_agent(
         nonlocal legacy_output
         legacy_output = _run_legacy_agent(
             user_query,
-            additional_context=additional_context,
+            additional_context=assembled_context or additional_context,
             ontology_id=ontology_id,
             system_time=system_time,
             history=history,
             conversation_context=conversation_context,
+            assembled_context=assembled_context,
             on_step=on_step,
         )
         sql = legacy_output.get("sql") if legacy_output.get("success") else None
@@ -1170,13 +1191,15 @@ def run_agent(
         return sql
 
     started_at = time.time()
-    result = generate_program(
-        user_query,
-        request_id=request_id
+    generation_kwargs = {
+        "request_id": request_id
         or _default_request_id(user_query, system_time, ontology_id),
-        system_time=_program_system_time(system_time),
-        legacy_sql_factory=legacy_sql_factory,
-    )
+        "system_time": _program_system_time(system_time),
+        "legacy_sql_factory": legacy_sql_factory,
+    }
+    if assembled_context:
+        generation_kwargs["conversation_context"] = assembled_context
+    result = generate_program(user_query, **generation_kwargs)
     step = _program_step(
         result,
         duration_ms=int((time.time() - started_at) * 1000),

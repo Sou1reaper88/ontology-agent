@@ -375,7 +375,10 @@ class DbOntologyClient:
         return list(tables.values())
 
     def _llm_select_tables(
-        self, user_query: str, tables: list[dict[str, Any]]
+        self,
+        user_query: str,
+        tables: list[dict[str, Any]],
+        conversation_context: str | None = None,
     ) -> list[str]:
         """LLM 语义检索：从候选表中选出与问题最相关的表名。失败返回 []。"""
         llm = get_llm_client()
@@ -395,6 +398,8 @@ class DbOntologyClient:
             '只输出 JSON，格式 {"tables": ["表名1", "表名2"]}，表名必须与候选表完全一致。'
             "若用户问题与候选表业务完全无关（如闲聊、天气、算术），返回 {\"tables\": []}。"
         )
+        if conversation_context:
+            prompt += f"\n本轮共享会话上下文：\n{conversation_context}"
         try:
             raw = llm.generate_sql(prompt, user_query)
             m = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -536,7 +541,14 @@ class DbOntologyClient:
         if _is_irrelevant_query(user_query):
             return _irrelevant_definition(ontology_id)
 
-        selected_names = self._llm_select_tables(user_query, tables)
+        if additional_context:
+            selected_names = self._llm_select_tables(
+                user_query,
+                tables,
+                additional_context,
+            )
+        else:
+            selected_names = self._llm_select_tables(user_query, tables)
         if not selected_names:
             selected_names = self._keyword_select_tables(user_query, tables)
         selected = [t for t in tables if t["table_name"] in selected_names]

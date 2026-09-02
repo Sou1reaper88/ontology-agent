@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
+from agent.context_engineering import ContextMessage
 from config.settings import settings
 from monitoring.metrics import LLM_CALL_DURATION
 from ontology_core.program_models import (
@@ -62,6 +63,7 @@ class LLMClient:
         original_query: str,
         draft: DraftSqlProgramPlan,
         diagnostics: Sequence[ProgramDiagnostic],
+        conversation_context: str | None = None,
     ) -> DraftSqlProgramPlan:
         """Repair one draft using only stable diagnostics and no generated SQL."""
         system_prompt = (
@@ -75,12 +77,50 @@ class LLMClient:
                 "original_request": original_query,
                 "draft": draft.model_dump(mode="json"),
                 "diagnostics": [item.model_dump(mode="json") for item in diagnostics],
+                "conversation_context": conversation_context,
                 "schema": DraftSqlProgramPlan.model_json_schema(),
             },
             ensure_ascii=False,
             separators=(",", ":"),
         )
         return self._generate_program(system_prompt, repair_request)
+
+    def summarize_conversation(
+        self,
+        *,
+        existing_summary: str | None,
+        messages: tuple[ContextMessage, ...],
+        target_tokens: int,
+    ) -> str:
+        """Compress old turns into business-state memory without changing raw storage."""
+
+        system_prompt = (
+            "你是取数智能体的上下文压缩器。只总结已经发生的对话，不推测新口径。"
+            "优先保留当前目标、用户确认的业务口径、对象与字段、表关系与关联键、"
+            "账期和分区规则、用户纠正、最新有效 SQL、未决问题。旧 SQL 只保留关键差异。"
+            f"摘要尽量控制在 {target_tokens} tokens 内，直接输出摘要正文。"
+        )
+        request = json.dumps(
+            {
+                "existing_summary": existing_summary,
+                "messages": [
+                    {
+                        "id": item.message_id,
+                        "role": item.role,
+                        "content": item.content,
+                        "sql": item.sql,
+                    }
+                    for item in messages
+                ],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        start = time.time()
+        try:
+            return self._generate(system_prompt, request)
+        finally:
+            LLM_CALL_DURATION.observe(time.time() - start)
 
     def _generate_program(
         self,

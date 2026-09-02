@@ -110,6 +110,7 @@ class ContextAssembler:
         messages: Sequence[ContextMessage],
         *,
         persistent_prompt: str | None = None,
+        current_input: str | None = None,
         previous_summary: str | None = None,
         previous_summary_through_message_id: int | None = None,
     ) -> AssembledContext:
@@ -124,6 +125,7 @@ class ContextAssembler:
             summary=previous_summary,
             messages=active,
             boundary=previous_summary_through_message_id,
+            current_input=current_input,
             compressed=False,
             method="none",
         )
@@ -146,6 +148,7 @@ class ContextAssembler:
                     messages=recent,
                 )
             )
+            - estimate_tokens(current_input or "")
             - estimate_tokens("\n\n较早对话摘要：\n"),
         )
         method: Literal["model", "fallback"] = "model"
@@ -170,6 +173,7 @@ class ContextAssembler:
             summary=summary,
             messages=recent,
             boundary=prefix[-1].message_id,
+            current_input=current_input,
             compressed=True,
             method=method,
         )
@@ -181,6 +185,7 @@ class ContextAssembler:
         summary: str | None,
         messages: tuple[ContextMessage, ...],
         boundary: int | None,
+        current_input: str | None,
         compressed: bool,
         method: Literal["none", "model", "fallback"],
     ) -> AssembledContext:
@@ -194,7 +199,9 @@ class ContextAssembler:
             summary=summary,
             messages=messages,
             compacted_through_message_id=boundary,
-            estimated_tokens=estimate_tokens(rendered),
+            estimated_tokens=(
+                estimate_tokens(rendered) + estimate_tokens(current_input or "")
+            ),
             trigger_tokens=self._trigger_tokens,
             target_tokens=self._target_tokens,
             compressed=compressed,
@@ -249,3 +256,20 @@ class ContextAssembler:
             else:
                 high = mid - 1
         return text[:low].rstrip()
+
+
+def get_context_assembler() -> ContextAssembler:
+    """Build an assembler from live provider settings for the current request."""
+
+    from config.settings import settings
+    from tools.llm_client import get_llm_client
+
+    return ContextAssembler(
+        context_window_tokens=settings.llm.context_window_tokens,
+        max_output_tokens=settings.llm.max_tokens,
+        static_prompt_reserve_tokens=settings.llm.context_static_prompt_reserve_tokens,
+        trigger_ratio=settings.llm.context_compression_trigger_ratio,
+        target_ratio=settings.llm.context_compression_target_ratio,
+        keep_recent_turns=settings.llm.context_keep_recent_turns,
+        summarizer=get_llm_client(),
+    )

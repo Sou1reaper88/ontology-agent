@@ -91,6 +91,22 @@ def test_shadow_exception_does_not_fail_legacy_agent(monkeypatch) -> None:
     assert "fictional-shadow-secret" not in str(output["ontology_shadow"])
 
 
+def test_assembled_context_is_shared_by_rules_and_sql_prompts() -> None:
+    from agent.orchestrator import _build_rules_prompt, _build_system_prompt
+
+    state = {
+        "user_query": "查询客户",
+        "ttl_def": {"object_classes": {}, "logical_definitions": {}},
+        "field_map": {},
+        "assembled_context": "已确认业务口径：仅查询正常在网客户",
+        "p_day": "20260822",
+        "p_mon": "202607",
+    }
+
+    assert "已确认业务口径：仅查询正常在网客户" in _build_rules_prompt(state)
+    assert "已确认业务口径：仅查询正常在网客户" in _build_system_prompt(state)
+
+
 def test_run_agent_uses_native_program_as_default_without_legacy_graph(monkeypatch) -> None:
     import agent.orchestrator as orchestrator
     from agent.program_generation import (

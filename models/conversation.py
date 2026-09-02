@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, SmallInteger, String, Text
+from sqlalchemy import ForeignKey, Integer, SmallInteger, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
@@ -21,6 +21,12 @@ class Conversation(Base):
     context: Mapped[str | None] = mapped_column(
         Text, nullable=True, default=None
     )  # 上下文设置：常驻约束/补充信息，随每轮提问传给智能体
+    context_summary: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    context_summary_through_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+    )
     status: Mapped[int] = mapped_column(SmallInteger, default=1)  # 1启用 0归档
     created_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(timezone.utc)

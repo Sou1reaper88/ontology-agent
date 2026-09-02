@@ -155,7 +155,7 @@ class _Client:
         self.initial = initial
         self.repaired = repaired
         self.plan_calls: list[tuple[str, str]] = []
-        self.repair_calls: list[tuple[str, DraftSqlProgramPlan, tuple]] = []
+        self.repair_calls: list[tuple[str, DraftSqlProgramPlan, tuple, str | None]] = []
 
     def plan_sql_program(self, *, system_prompt: str, user_query: str):
         self.plan_calls.append((system_prompt, user_query))
@@ -163,8 +163,17 @@ class _Client:
             raise self.initial
         return self.initial
 
-    def repair_sql_program(self, *, original_query: str, draft, diagnostics):
-        self.repair_calls.append((original_query, draft, tuple(diagnostics)))
+    def repair_sql_program(
+        self,
+        *,
+        original_query: str,
+        draft,
+        diagnostics,
+        conversation_context: str | None = None,
+    ):
+        self.repair_calls.append(
+            (original_query, draft, tuple(diagnostics), conversation_context)
+        )
         if isinstance(self.repaired, Exception):
             raise self.repaired
         assert self.repaired is not None
@@ -191,6 +200,29 @@ def _plan(planner: AdaptiveProgramPlanner):
         program_id="a1b2c3d4e5f6",
         system_time=datetime(2026, 8, 24, tzinfo=UTC),
     )
+
+
+def test_planning_and_repair_receive_the_same_conversation_context() -> None:
+    diagnostic = ProgramDiagnostic(
+        code="repairable_reference",
+        message="步骤引用未知步骤",
+    )
+    client = _Client(_draft(), _draft(purpose="修复后的结果"))
+    binder = _Binder(
+        ProgramValidationResult(diagnostics=(diagnostic,), should_repair=True),
+        ProgramValidationResult(plan=_bound_plan()),
+    )
+
+    outcome = _planner(client, binder).plan(
+        "生成客户结果",
+        program_id="a1b2c3d4e5f6",
+        system_time=datetime(2026, 8, 24, tzinfo=UTC),
+        conversation_context="用户已确认仅查询浙江客户",
+    )
+
+    assert outcome.status == "ready"
+    assert "用户已确认仅查询浙江客户" in client.plan_calls[0][0]
+    assert client.repair_calls[0][3] == "用户已确认仅查询浙江客户"
 
 
 def test_valid_first_draft_uses_one_call_and_sql_free_prompt() -> None:

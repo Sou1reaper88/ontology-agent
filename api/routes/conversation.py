@@ -17,6 +17,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from agent.context_engineering import (
+    AssembledContext,
+    ContextMessage,
+    get_context_assembler,
+)
 from agent.orchestrator import run_agent
 from agent.trace_store import (
     append_step,
@@ -139,6 +144,38 @@ def _own_conversation(conv_id: int, user: User, db: Session) -> Conversation:
     if not conv or conv.user_id != user.id:
         raise HTTPException(status_code=404, detail="对话不存在")
     return conv
+
+
+def _prepare_conversation_context(
+    conversation: Conversation,
+    history: list[ConversationMessage],
+    current_input: str | None = None,
+) -> AssembledContext:
+    """Assemble one bounded context and persist only a newly produced summary."""
+
+    assembled = get_context_assembler().assemble(
+        tuple(
+            ContextMessage(
+                message_id=item.id,
+                role=item.role,
+                content=item.content,
+                sql=item.sql,
+            )
+            for item in history
+        ),
+        persistent_prompt=conversation.context,
+        current_input=current_input,
+        previous_summary=conversation.context_summary,
+        previous_summary_through_message_id=(
+            conversation.context_summary_through_message_id
+        ),
+    )
+    if assembled.compressed:
+        conversation.context_summary = assembled.summary
+        conversation.context_summary_through_message_id = (
+            assembled.compacted_through_message_id
+        )
+    return assembled
 
 
 @router.post("", status_code=201)
@@ -354,10 +391,21 @@ def _generate_async(
         if conv is None:
             set_failed(msg_id, "对话不存在")
             return
-        history = [
-            {"role": m.role, "content": m.content, "sql": m.sql}
+        history_messages = [
+            m
             for m in conv.messages
             if m.role in ("user", "assistant") and m.id not in (msg_id, user_msg_id)
+        ]
+        assembled = _prepare_conversation_context(
+            conv,
+            history_messages,
+            current_input=content,
+        )
+        if assembled.compressed:
+            db.commit()
+        history = [
+            {"role": m.role, "content": m.content, "sql": m.sql}
+            for m in assembled.messages
         ]
         output = run_agent(
             content,
@@ -365,6 +413,7 @@ def _generate_async(
             system_time=system_time,
             history=history,
             conversation_context=conversation_context,
+            assembled_context=assembled.render(),
             on_step=lambda s: append_step(msg_id, s),
             request_id=f"conversation:{conv_id}:message:{msg_id}",
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.context_engineering import ContextAssembler, ContextMessage
+from agent.context_engineering import AssembledContext, ContextAssembler, ContextMessage
 
 
 class _Summarizer:
@@ -104,6 +104,22 @@ def test_existing_summary_boundary_is_not_summarized_twice() -> None:
     assert result.compacted_through_message_id == 8
 
 
+def test_current_request_is_counted_before_deciding_to_compact_old_history() -> None:
+    summarizer = _Summarizer()
+    messages = tuple(
+        _message(index, "user" if index % 2 else "assistant", "历史口径" * 8)
+        for index in range(1, 9)
+    )
+
+    result = _assembler(summarizer, keep_recent_turns=1).assemble(
+        messages,
+        current_input="本轮新增的复杂取数要求" * 30,
+    )
+
+    assert result.compressed is True
+    assert summarizer.calls[0][1] == (1, 2, 3, 4, 5, 6)
+
+
 def test_summarizer_failure_uses_bounded_deterministic_fallback() -> None:
     summarizer = _FailingSummarizer()
     messages = tuple(
@@ -119,3 +135,52 @@ def test_summarizer_failure_uses_bounded_deterministic_fallback() -> None:
     assert tuple(item.message_id for item in result.messages) == (7, 8, 9, 10)
     assert "历史上下文提取" in (result.summary or "")
     assert result.estimated_tokens <= result.target_tokens
+
+
+def test_conversation_helper_persists_only_new_summary_state(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import api.routes.conversation as route
+
+    captured = {}
+    assembled = AssembledContext(
+        persistent_prompt="口径约束",
+        summary="压缩后的摘要",
+        messages=(_message(9, "user", "最近需求"),),
+        compacted_through_message_id=8,
+        estimated_tokens=120,
+        trigger_tokens=640,
+        target_tokens=480,
+        compressed=True,
+        compression_method="model",
+    )
+
+    class _Assembler:
+        def assemble(self, messages, **kwargs):
+            captured["ids"] = tuple(item.message_id for item in messages)
+            captured.update(kwargs)
+            return assembled
+
+    monkeypatch.setattr(route, "get_context_assembler", lambda: _Assembler())
+    conversation = SimpleNamespace(
+        context="口径约束",
+        context_summary="旧摘要",
+        context_summary_through_message_id=4,
+    )
+    history = [
+        SimpleNamespace(id=5, role="user", content="历史需求", sql=None),
+        SimpleNamespace(id=6, role="assistant", content="历史回答", sql="SELECT 1;"),
+    ]
+
+    result = route._prepare_conversation_context(conversation, history)
+
+    assert result is assembled
+    assert captured == {
+        "ids": (5, 6),
+        "persistent_prompt": "口径约束",
+        "current_input": None,
+        "previous_summary": "旧摘要",
+        "previous_summary_through_message_id": 4,
+    }
+    assert conversation.context_summary == "压缩后的摘要"
+    assert conversation.context_summary_through_message_id == 8

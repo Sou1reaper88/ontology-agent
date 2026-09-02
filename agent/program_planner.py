@@ -37,6 +37,7 @@ class StructuredPlanningClient(Protocol):
         original_query: str,
         draft: DraftSqlProgramPlan,
         diagnostics: Sequence[ProgramDiagnostic],
+        conversation_context: str | None = None,
     ) -> DraftSqlProgramPlan: ...
 
 
@@ -76,11 +77,12 @@ class AdaptiveProgramPlanner:
         *,
         program_id: str,
         system_time: datetime,
+        conversation_context: str | None = None,
     ) -> ProgramPlanningOutcome:
         snapshot = self._repository.current()
         try:
             draft = self._client.plan_sql_program(
-                system_prompt=self._planning_prompt(snapshot),
+                system_prompt=self._planning_prompt(snapshot, conversation_context),
                 user_query=query,
             )
         except StructuredPlanningError:
@@ -111,11 +113,19 @@ class AdaptiveProgramPlanner:
                 llm_call_count=1,
             )
         try:
-            repaired = self._client.repair_sql_program(
-                original_query=query,
-                draft=draft,
-                diagnostics=validation.diagnostics,
-            )
+            if conversation_context:
+                repaired = self._client.repair_sql_program(
+                    original_query=query,
+                    draft=draft,
+                    diagnostics=validation.diagnostics,
+                    conversation_context=conversation_context,
+                )
+            else:
+                repaired = self._client.repair_sql_program(
+                    original_query=query,
+                    draft=draft,
+                    diagnostics=validation.diagnostics,
+                )
         except StructuredPlanningError:
             return self._invalid_output(call_count=2)
         repaired_validation = self._bind(
@@ -174,14 +184,18 @@ class AdaptiveProgramPlanner:
         )
 
     @classmethod
-    def _planning_prompt(cls, snapshot: OntologySnapshot) -> str:
+    def _planning_prompt(
+        cls,
+        snapshot: OntologySnapshot,
+        conversation_context: str | None = None,
+    ) -> str:
         summary = cls._semantic_summary(snapshot)
         schema = json.dumps(
             DraftSqlProgramPlan.model_json_schema(),
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        return (
+        prompt = (
             "你是本体驱动的取数程序规划器。"
             "仅输出一个符合 JSON Schema 的 JSON 对象。"
             "禁止输出 SQL；禁止输出目标表名、物理表名、物理字段名。"
@@ -191,6 +205,9 @@ class AdaptiveProgramPlanner:
             f"JSON Schema: {schema}\n"
             f"本体语义摘要: {summary}"
         )
+        if conversation_context:
+            prompt += f"\n本轮共享会话上下文：{conversation_context}"
+        return prompt
 
     @staticmethod
     def _semantic_summary(snapshot: OntologySnapshot) -> str:

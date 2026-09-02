@@ -65,6 +65,7 @@ class ProgramPlanner(Protocol):
         *,
         program_id: str,
         system_time: datetime,
+        conversation_context: str | None = None,
     ) -> ProgramPlanningOutcome: ...
 
 
@@ -96,14 +97,23 @@ class ProgramGenerationService:
         request_id: str,
         system_time: datetime,
         legacy_sql_factory: Callable[[], str] | None = None,
+        conversation_context: str | None = None,
     ) -> ProgramGenerationResult:
         program_id = derive_program_id(request_id)
         try:
-            outcome = self._planner.plan(
-                query,
-                program_id=program_id,
-                system_time=system_time,
-            )
+            if conversation_context:
+                outcome = self._planner.plan(
+                    query,
+                    program_id=program_id,
+                    system_time=system_time,
+                    conversation_context=conversation_context,
+                )
+            else:
+                outcome = self._planner.plan(
+                    query,
+                    program_id=program_id,
+                    system_time=system_time,
+                )
         except PackageNotFoundError:
             return self._fallback(
                 program_id,
@@ -326,10 +336,12 @@ def generate_program(
     request_id: str,
     system_time: datetime,
     legacy_sql_factory: Callable[[], str] | None = None,
+    conversation_context: str | None = None,
 ) -> ProgramGenerationResult:
     return get_program_generation_service().generate(
         query,
         request_id=request_id,
         system_time=system_time,
         legacy_sql_factory=legacy_sql_factory,
+        conversation_context=conversation_context,
     )
