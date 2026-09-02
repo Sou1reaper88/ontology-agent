@@ -57,3 +57,23 @@
 - [ ] Run focused tests, followed by the relevant backend suite.
 - [ ] Commit the verified implementation and start the existing local services for user review.
 
+### Task 3: Model-aware token defaults
+
+**Files:**
+- Create: `agent/model_capabilities.py`
+- Modify: `config/settings.py`
+- Modify: `agent/context_engineering.py`
+- Modify: `tools/llm_client.py`
+- Modify: `.env.example`
+- Test: `tests/test_model_capabilities.py`
+- Test: `tests/test_context_engineering.py`
+
+**Interfaces:**
+- Produces: `resolve_model_token_limits(settings: LLMSettings) -> ModelTokenLimits`
+- Consumes: optional `max_input_tokens` / `max_output_tokens` and legacy `context_window_tokens` / `max_tokens`.
+
+- [ ] Add failing tests proving explicit values win, `deepseek-v4-flash` resolves to 1,000,000/384,000 when unset, unknown models use 32,768/4,096, and legacy settings remain compatible.
+- [ ] Run `pytest tests/test_model_capabilities.py tests/test_context_engineering.py -q` and confirm the new resolution tests fail because the resolver does not exist.
+- [ ] Implement the immutable model capability registry and resolver, then use the resolved limits in context assembly and LLM output configuration.
+- [ ] Update `.env.example` so optional capability overrides are documented without forcing values.
+- [ ] Run the focused tests and commit the verified implementation.
