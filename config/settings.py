@@ -77,6 +77,11 @@ class LLMSettings(BaseSettings):
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout_seconds: int = 60
+    context_window_tokens: int = 32768
+    context_static_prompt_reserve_tokens: int = 8192
+    context_compression_trigger_ratio: float = 0.8
+    context_compression_target_ratio: float = 0.6
+    context_keep_recent_turns: int = 6
 
 
 class OntologySettings(BaseSettings):
