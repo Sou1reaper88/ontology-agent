@@ -75,9 +75,12 @@ class LLMSettings(BaseSettings):
     api_key: str = ""
     model: str = "qwen2.5-coder-32b-instruct"
     temperature: float = 0.0
-    max_tokens: int = 4096
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    # Deprecated compatibility fields. New deployments should use the limits above.
+    max_tokens: int | None = Field(default=None, gt=0)
     timeout_seconds: int = 60
-    context_window_tokens: int = 32768
+    context_window_tokens: int | None = Field(default=None, gt=0)
     context_static_prompt_reserve_tokens: int = 8192
     context_compression_trigger_ratio: float = 0.8
     context_compression_target_ratio: float = 0.6

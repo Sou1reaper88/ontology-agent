@@ -83,6 +83,7 @@ class ContextAssembler:
         self,
         *,
         context_window_tokens: int,
+        max_input_tokens: int,
         max_output_tokens: int,
         static_prompt_reserve_tokens: int,
         trigger_ratio: float,
@@ -90,9 +91,11 @@ class ContextAssembler:
         keep_recent_turns: int,
         summarizer: ContextSummarizer | None,
     ) -> None:
-        history_budget = (
-            context_window_tokens - max_output_tokens - static_prompt_reserve_tokens
+        available_input_tokens = min(
+            max_input_tokens,
+            context_window_tokens - max_output_tokens,
         )
+        history_budget = available_input_tokens - static_prompt_reserve_tokens
         if history_budget <= 0:
             raise ValueError("上下文窗口必须大于输出与静态提示预留之和")
         if not 0 < target_ratio < trigger_ratio < 1:
@@ -261,12 +264,15 @@ class ContextAssembler:
 def get_context_assembler() -> ContextAssembler:
     """Build an assembler from live provider settings for the current request."""
 
+    from agent.model_capabilities import resolve_model_token_limits
     from config.settings import settings
     from tools.llm_client import get_llm_client
 
+    limits = resolve_model_token_limits(settings.llm)
     return ContextAssembler(
-        context_window_tokens=settings.llm.context_window_tokens,
-        max_output_tokens=settings.llm.max_tokens,
+        context_window_tokens=limits.context_window_tokens,
+        max_input_tokens=limits.max_input_tokens,
+        max_output_tokens=limits.max_output_tokens,
         static_prompt_reserve_tokens=settings.llm.context_static_prompt_reserve_tokens,
         trigger_ratio=settings.llm.context_compression_trigger_ratio,
         target_ratio=settings.llm.context_compression_target_ratio,

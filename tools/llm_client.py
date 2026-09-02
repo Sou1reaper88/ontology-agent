@@ -15,6 +15,7 @@ import httpx
 from pydantic import ValidationError
 
 from agent.context_engineering import ContextMessage
+from agent.model_capabilities import resolve_model_token_limits
 from config.settings import settings
 from monitoring.metrics import LLM_CALL_DURATION
 from ontology_core.program_models import (
@@ -37,7 +38,7 @@ class LLMClient:
         self.api_key = settings.llm.api_key
         self.model = settings.llm.model
         self.temperature = settings.llm.temperature
-        self.max_tokens = settings.llm.max_tokens
+        self.max_tokens = resolve_model_token_limits(settings.llm).max_output_tokens
         self.timeout = settings.llm.timeout_seconds
 
     def generate_sql(self, system_prompt: str, user_query: str) -> str:

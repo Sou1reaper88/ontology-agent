@@ -39,6 +39,7 @@ def _message(message_id: int, role: str, text: str) -> ContextMessage:
 def _assembler(summarizer, *, keep_recent_turns: int = 2) -> ContextAssembler:
     return ContextAssembler(
         context_window_tokens=1_000,
+        max_input_tokens=1_000,
         max_output_tokens=100,
         static_prompt_reserve_tokens=100,
         trigger_ratio=0.8,
@@ -66,6 +67,24 @@ def test_short_history_remains_verbatim_without_summarizer_call() -> None:
     assert result.summary is None
     assert summarizer.calls == []
     assert "查询客户号码" in result.render()
+
+
+def test_explicit_input_limit_caps_the_history_budget() -> None:
+    assembler = ContextAssembler(
+        context_window_tokens=1_000,
+        max_input_tokens=500,
+        max_output_tokens=100,
+        static_prompt_reserve_tokens=100,
+        trigger_ratio=0.8,
+        target_ratio=0.6,
+        keep_recent_turns=2,
+        summarizer=None,
+    )
+
+    result = assembler.assemble(())
+
+    assert result.trigger_tokens == 320
+    assert result.target_tokens == 240
 
 
 def test_long_history_compacts_only_prefix_and_keeps_recent_turns_verbatim() -> None:
