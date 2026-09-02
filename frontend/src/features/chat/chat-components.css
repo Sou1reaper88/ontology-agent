@@ -581,6 +581,48 @@
   border-radius: 10px;
 }
 
+.legacy-sql-editor[data-kind="program"] {
+  border-color: rgba(23, 107, 95, 0.36);
+}
+
+.program-sql-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 16px;
+  border-bottom: 1px solid var(--oa-border);
+  background: linear-gradient(110deg, rgba(23, 107, 95, 0.09), transparent 68%);
+}
+
+.program-sql-header strong {
+  display: block;
+  color: var(--oa-text);
+  font-size: 15px;
+}
+
+.program-sql-header p {
+  margin: 4px 0 0;
+  color: var(--oa-text-muted);
+  font-size: 12px;
+}
+
+.program-sql-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.program-sql-meta span {
+  padding: 4px 7px;
+  border: 1px solid rgba(23, 107, 95, 0.24);
+  border-radius: 999px;
+  color: var(--oa-accent-strong);
+  background: var(--oa-accent-soft);
+  font-size: 11px;
+}
+
 .sql-edit-textarea.ant-input {
   border: 0;
   border-radius: 0;

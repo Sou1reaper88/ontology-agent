@@ -6,6 +6,10 @@ import {
 } from "@ant-design/icons";
 import { Button, Input, Skeleton, Space } from "antd";
 import { OntologyComparison } from "../../components/OntologyComparison";
+import {
+  getAssistantContent,
+  getSqlPresentation,
+} from "./messagePresentation";
 import { TraceSteps } from "./TraceSteps";
 import type { ChatMessage, EditingSql } from "./types";
 import "./chat-components.css";
@@ -63,6 +67,7 @@ export function MessageTimeline({
               : message.steps) || [];
           const isEditing = editing?.msgId === message.id;
           const evidenceSelected = selectedEvidenceId === message.id;
+          const sqlPresentation = getSqlPresentation(message, isEditing);
 
           return (
             <article
@@ -88,7 +93,8 @@ export function MessageTimeline({
               </header>
 
               <div className="assistant-answer">
-                {message.content || (message.generating ? "正在理解需求并生成 SQL…" : "")}
+                {getAssistantContent(message.content, Boolean(message.program)) ||
+                  (message.generating ? "正在理解需求并生成 SQL…" : "")}
               </div>
 
               {message.error ? <div className="assistant-error">{message.error}</div> : null}
@@ -97,7 +103,7 @@ export function MessageTimeline({
                 <TraceSteps steps={traceSteps} generating={message.generating} />
               ) : null}
 
-              {message.ontology_shadow && !isEditing ? (
+              {sqlPresentation.showComparison && message.ontology_shadow ? (
                 <OntologyComparison
                   legacySql={message.sql}
                   result={message.ontology_shadow}
@@ -109,9 +115,25 @@ export function MessageTimeline({
                 />
               ) : null}
 
-              {message.sql &&
-              (message.ontology_shadow?.status !== "generated" || isEditing) ? (
-                <section className="legacy-sql-editor" aria-label="现有 SQL">
+              {message.sql && sqlPresentation.showSqlPanel ? (
+                <section
+                  className="legacy-sql-editor"
+                  aria-label={sqlPresentation.label}
+                  data-kind={sqlPresentation.kind}
+                >
+                  {sqlPresentation.kind === "program" ? (
+                    <header className="program-sql-header">
+                      <div>
+                        <span className="ontology-kicker">GENERATED PROGRAM</span>
+                        <strong>取数程序</strong>
+                        <p>仅生成脚本，不会由智能体自动执行。</p>
+                      </div>
+                      <div className="program-sql-meta">
+                        <span>{message.program?.platform.toUpperCase()}</span>
+                        <span>{message.program?.steps.length ?? 0} 个物化步骤</span>
+                      </div>
+                    </header>
+                  ) : null}
                   {isEditing ? (
                     <>
                       <Input.TextArea
@@ -141,24 +163,26 @@ export function MessageTimeline({
                       <pre className="chat-sql-block">
                         <code>{message.sql}</code>
                       </pre>
-                      <div className="legacy-sql-actions">
-                        <Button
-                          size="small"
-                          icon={<EditOutlined />}
-                          onClick={() =>
-                            onEditChange({ msgId: message.id, sql: message.sql! })
-                          }
-                        >
-                          编辑 SQL
-                        </Button>
-                      </div>
+                      {sqlPresentation.allowEdit ? (
+                        <div className="legacy-sql-actions">
+                          <Button
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() =>
+                              onEditChange({ msgId: message.id, sql: message.sql! })
+                            }
+                          >
+                            编辑 SQL
+                          </Button>
+                        </div>
+                      ) : null}
                     </>
                   )}
                 </section>
               ) : null}
 
               <div className="assistant-actions">
-                {message.query_id && !isEditing ? (
+                {message.query_id && sqlPresentation.allowExecute ? (
                   <Button
                     size="small"
                     type="primary"

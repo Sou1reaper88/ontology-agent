@@ -54,6 +54,31 @@ export interface ConversationItem {
   updated_at: string;
 }
 
+export interface ProgramStepSummary {
+  step_id: string;
+  target_table: string;
+  drop_sql: string;
+  create_sql: string;
+}
+
+export interface ProgramSummary {
+  program_id: string;
+  platform: string;
+  mode: string;
+  steps: ProgramStepSummary[];
+  diagnostics: Array<{
+    code: string;
+    message: string;
+    step_id?: string | null;
+  }>;
+  package: {
+    package_id: string;
+    version: string;
+    sha256: string;
+  } | null;
+  temporal_evidence: Array<Record<string, unknown>>;
+}
+
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant";
@@ -65,6 +90,7 @@ export interface ChatMessage {
   generating: boolean;
   error: string | null;
   ontology_shadow: OntologyShadowResult | null;
+  program: ProgramSummary | null;
   created_at: string;
 }
 

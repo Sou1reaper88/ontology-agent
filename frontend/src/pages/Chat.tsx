@@ -138,6 +138,7 @@ export default function Chat() {
                   generating: data.status === "generating",
                   error: data.error || null,
                   ontology_shadow: data.ontology_shadow || null,
+                  program: data.program || null,
                 }
               : item
           )
@@ -188,6 +189,7 @@ export default function Chat() {
         generating: false,
         error: null,
         ontology_shadow: null,
+        program: null,
         created_at: "",
       },
     ]);
@@ -224,6 +226,7 @@ export default function Chat() {
           generating: true,
           error: null,
           ontology_shadow: null,
+          program: null,
           created_at: "",
         },
       ]);
