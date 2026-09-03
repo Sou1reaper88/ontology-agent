@@ -1335,6 +1335,35 @@ def test_catalog_credential_scan_visits_shared_configuration_once(
     assert visits == 1
 
 
+def test_credential_scan_budget_excludes_large_catalog_root_overhead() -> None:
+    graph = _graph("""
+        @prefix ex: <https://example.invalid/ontology/> .
+        @prefix oa: <urn:ontology-agent:core#> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Record a owl:Class, oa:Concept ; oa:shortName "Record" ;
+            rdfs:label "Record" .
+        ex:Source a oa:DataSource ; oa:shortName "Source" ;
+            rdfs:label "Source" ; oa:platformType "generic" .
+        """)
+    record = URIRef("https://example.invalid/ontology/Record")
+    source = URIRef("https://example.invalid/ontology/Source")
+    mapping_count = semantic_parser.MAX_CREDENTIAL_SCAN_NODES + 1
+    for index in range(mapping_count):
+        mapping = URIRef(f"https://example.invalid/ontology/Mapping{index}")
+        graph.add((mapping, RDF.type, OA.PhysicalMapping))
+        graph.add((mapping, OA.shortName, Literal(f"Mapping{index}")))
+        graph.add((mapping, RDFS.label, Literal(f"Mapping {index}")))
+        graph.add((mapping, OA.semanticElement, record))
+        graph.add((mapping, OA.dataSource, source))
+        graph.add((mapping, OA.objectName, Literal(f"TABLE_{index}")))
+
+    catalog = parse_catalog(graph)
+
+    assert len(catalog.mappings) == mapping_count
+
+
 def test_credential_configuration_edge_budget_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1362,7 +1391,7 @@ def test_credential_configuration_scan_budget_fails_closed(
     graph = _nested_config_graph(
         "oa:DataSource",
         "ex:Config",
-        'ex:Config ex:setting "neutral" .',
+        'ex:Config ex:child ex:Nested . ex:Nested ex:setting "neutral" .',
     )
     monkeypatch.setattr(semantic_parser, "MAX_CREDENTIAL_SCAN_NODES", 1)
 

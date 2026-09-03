@@ -799,6 +799,8 @@ def _scan_forbidden_credentials(
     visited: set[Identifier] = set()
     pending = deque(roots)
     queued: set[Identifier] = set(roots)
+    catalog_roots = set(roots)
+    configuration_node_count = 0
     edge_count = 0
     credential_found = False
     while pending:
@@ -806,7 +808,8 @@ def _scan_forbidden_credentials(
         queued.discard(node)
         if node in visited:
             continue
-        if len(visited) >= MAX_CREDENTIAL_SCAN_NODES:
+        is_catalog_root = node in catalog_roots
+        if not is_catalog_root and configuration_node_count >= MAX_CREDENTIAL_SCAN_NODES:
             violations.append(
                 _violation(
                     "credential_scan_budget_exceeded",
@@ -816,13 +819,16 @@ def _scan_forbidden_credentials(
                 )
             )
             return
+        if not is_catalog_root:
+            configuration_node_count += 1
         visited.add(node)
         edges = sorted(
             graph.predicate_objects(node),
             key=lambda item: (str(item[0]), type(item[1]).__name__, str(item[1])),
         )
         for predicate, value in edges:
-            edge_count += 1
+            if not is_catalog_root:
+                edge_count += 1
             if edge_count > MAX_CREDENTIAL_SCAN_EDGES:
                 violations.append(
                     _violation(
