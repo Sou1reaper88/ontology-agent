@@ -33,6 +33,10 @@ from ontology_core.inference_models import (
     ValidatedInferredJoin,
     ValidatedInferredProgram,
 )
+from ontology_core.inference_validation import (
+    InferenceValidationResult,
+    MetadataInferenceValidator,
+)
 from ontology_core.inspection import inspect_package
 from ontology_core.manifest import load_manifest, resolve_package_files
 from ontology_core.metadata_candidates import MetadataCandidateCatalog
@@ -133,6 +137,7 @@ __all__ = [
     "DraftSqlProgramPlan",
     "IntentSpec",
     "InferenceEvidence",
+    "InferenceValidationResult",
     "InferredFilterDraft",
     "InferredJoinDraft",
     "InferredProgramDraft",
@@ -166,6 +171,7 @@ __all__ = [
     "LocalizedText",
     "MetadataImportResult",
     "MetadataCandidateCatalog",
+    "MetadataInferenceValidator",
     "MetadataOverrides",
     "OntologyError",
     "OntologyImportError",

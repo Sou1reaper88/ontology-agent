@@ -149,6 +149,10 @@ def test_retrieval_is_stable_and_ranks_relevant_fields_first() -> None:
     assert first == second
     assert first.objects[0].ref == "GsmHu"
     assert first.objects[0].fields[0].physical_name == "MOBILE_NO"
+    assert {item.physical_name for item in first.objects[0].fields} == {
+        "MOBILE_NO",
+        "P_DAY",
+    }
     assert first.objects[0].matched_terms
     assert first.objects[0].fields[0].matched_terms
 

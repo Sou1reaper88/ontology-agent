@@ -301,6 +301,21 @@ class MetadataCandidateCatalog:
                     )
                 )
             fields.sort(key=lambda item: (-item.retrieval_score, item.ref))
+            selected_fields = list(fields[:field_limit_per_object])
+            policy = object_.temporal_policy
+            if policy is not None and all(
+                item.ref != policy.partition_field_ref for item in selected_fields
+            ):
+                partition_field = next(
+                    (
+                        item
+                        for item in fields
+                        if item.ref == policy.partition_field_ref
+                    ),
+                    None,
+                )
+                if partition_field is not None:
+                    selected_fields.append(partition_field)
             object_score, object_terms = _rank(
                 terms,
                 (
@@ -313,7 +328,7 @@ class MetadataCandidateCatalog:
             ranked.append(
                 object_.model_copy(
                     update={
-                        "fields": tuple(fields[:field_limit_per_object]),
+                        "fields": tuple(selected_fields),
                         "retrieval_score": object_score + field_score,
                         "matched_terms": object_terms,
                     }
