@@ -68,6 +68,9 @@ export function MessageTimeline({
           const isEditing = editing?.msgId === message.id;
           const evidenceSelected = selectedEvidenceId === message.id;
           const sqlPresentation = getSqlPresentation(message, isEditing);
+          const isInferredProgram =
+            message.program?.mode === "inferred_program";
+          const inferenceEvidence = message.program?.inference_evidence;
 
           return (
             <article
@@ -122,17 +125,65 @@ export function MessageTimeline({
                   data-kind={sqlPresentation.kind}
                 >
                   {sqlPresentation.kind === "program" ? (
-                    <header className="program-sql-header">
+                    <header
+                      className="program-sql-header"
+                      data-inferred={isInferredProgram || undefined}
+                    >
                       <div>
-                        <span className="ontology-kicker">GENERATED PROGRAM</span>
-                        <strong>取数程序</strong>
-                        <p>仅生成脚本，不会由智能体自动执行。</p>
+                        <span className="ontology-kicker">
+                          {isInferredProgram
+                            ? "CANDIDATE INFERENCE"
+                            : "GENERATED PROGRAM"}
+                        </span>
+                        <strong>
+                          {isInferredProgram ? "候选取数程序" : "取数程序"}
+                        </strong>
+                        <p>
+                          {isInferredProgram
+                            ? "LLM 推断、未经本体确认、不可自动执行。"
+                            : "仅生成脚本，不会由智能体自动执行。"}
+                        </p>
                       </div>
                       <div className="program-sql-meta">
                         <span>{message.program?.platform.toUpperCase()}</span>
                         <span>{message.program?.steps.length ?? 0} 个物化步骤</span>
+                        {inferenceEvidence ? (
+                          <span>置信度 {inferenceEvidence.overall_confidence}</span>
+                        ) : null}
                       </div>
                     </header>
+                  ) : null}
+                  {isInferredProgram && inferenceEvidence ? (
+                    <section className="inference-evidence" aria-label="候选推断依据">
+                      <div>
+                        <strong>为什么这样生成</strong>
+                        <ul>
+                          {inferenceEvidence.reasons.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      {inferenceEvidence.unresolved_items.length ? (
+                        <div>
+                          <strong>尚未确认</strong>
+                          <ul>
+                            {inferenceEvidence.unresolved_items.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      {inferenceEvidence.ontology_suggestions.length ? (
+                        <div>
+                          <strong>如何补充本体</strong>
+                          <ul>
+                            {inferenceEvidence.ontology_suggestions.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </section>
                   ) : null}
                   {isEditing ? (
                     <>

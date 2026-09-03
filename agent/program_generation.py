@@ -14,9 +14,14 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from agent.metadata_inference import (
+    MetadataInferenceOutcome,
+    MetadataInferenceService,
+)
 from agent.ontology_shadow import get_ontology_runtime
 from agent.program_planner import AdaptiveProgramPlanner, ProgramPlanningOutcome
 from ontology_core.errors import OntologyCompileError, PackageNotFoundError
+from ontology_core.inference_models import ValidatedInferredProgram
 from ontology_core.program_compiler import (
     HiveProgramCompiler,
     ProgramCompilerRegistry,
@@ -41,6 +46,7 @@ _PROGRAM_NAMESPACE = b"ontology-agent:program:v1\0"
 class ProgramGenerationMode(StrEnum):
     PROGRAM = "program"
     REPAIRED_PROGRAM = "repaired_program"
+    INFERRED_PROGRAM = "inferred_program"
     WRAPPED_LEGACY = "wrapped_legacy"
     CLARIFICATION_REQUIRED = "clarification_required"
     UNSUPPORTED = "unsupported"
@@ -56,6 +62,8 @@ class ProgramGenerationResult:
     mode: ProgramGenerationMode
     diagnostics: tuple[ProgramDiagnostic, ...]
     clarification: str | None = None
+    inferred_plan: ValidatedInferredProgram | None = None
+    missing_information: tuple[str, ...] = ()
 
 
 class ProgramPlanner(Protocol):
@@ -73,6 +81,17 @@ class SnapshotRuntime(Protocol):
     def snapshot(self) -> OntologySnapshot: ...
 
 
+class MetadataInference(Protocol):
+    def infer(
+        self,
+        request: str,
+        *,
+        program_id: str,
+        system_time: datetime,
+        conversation_context: str | None = None,
+    ) -> MetadataInferenceOutcome: ...
+
+
 def derive_program_id(request_id: str) -> str:
     digest = hashlib.sha256(_PROGRAM_NAMESPACE + request_id.encode("utf-8")).hexdigest()
     return digest[:16]
@@ -85,10 +104,12 @@ class ProgramGenerationService:
         planner: ProgramPlanner,
         runtime: SnapshotRuntime,
         registry: ProgramCompilerRegistry | None = None,
+        inference_service: MetadataInference | None = None,
     ) -> None:
         self._planner = planner
         self._runtime = runtime
         self._registry = registry or ProgramCompilerRegistry.default()
+        self._inference = inference_service
 
     def generate(
         self,
@@ -98,8 +119,45 @@ class ProgramGenerationService:
         system_time: datetime,
         legacy_sql_factory: Callable[[], str] | None = None,
         conversation_context: str | None = None,
+        allow_legacy_compatibility: bool = False,
     ) -> ProgramGenerationResult:
         program_id = derive_program_id(request_id)
+        if self._inference is not None:
+            try:
+                routing_snapshot = self._runtime.snapshot()
+            except PackageNotFoundError:
+                return self._fallback(
+                    program_id,
+                    ProgramGenerationMode.UNAVAILABLE,
+                    (
+                        ProgramDiagnostic(
+                            code="ontology_unavailable",
+                            message="当前没有可用的本体快照",
+                        ),
+                    ),
+                    legacy_sql_factory,
+                    allow_legacy_compatibility=allow_legacy_compatibility,
+                )
+            if self._is_metadata_only_snapshot(routing_snapshot):
+                inferred = self._infer(
+                    query,
+                    program_id=program_id,
+                    system_time=system_time,
+                    conversation_context=conversation_context,
+                    origin_diagnostics=(),
+                    failure_mode=ProgramGenerationMode.UNSUPPORTED,
+                )
+                if inferred is not None and (
+                    inferred.sql is not None or not allow_legacy_compatibility
+                ):
+                    return inferred
+                return self._fallback(
+                    program_id,
+                    ProgramGenerationMode.UNSUPPORTED,
+                    inferred.diagnostics if inferred is not None else (),
+                    legacy_sql_factory,
+                    allow_legacy_compatibility=allow_legacy_compatibility,
+                )
         try:
             if conversation_context:
                 outcome = self._planner.plan(
@@ -125,6 +183,7 @@ class ProgramGenerationService:
                     ),
                 ),
                 legacy_sql_factory,
+                allow_legacy_compatibility=allow_legacy_compatibility,
             )
         if outcome.status == "clarification_required":
             clarification = (
@@ -143,11 +202,24 @@ class ProgramGenerationService:
             )
         if outcome.plan is None:
             mode = self._failure_mode(outcome)
+            inferred = self._infer(
+                query,
+                program_id=program_id,
+                system_time=system_time,
+                conversation_context=conversation_context,
+                origin_diagnostics=outcome.diagnostics,
+                failure_mode=mode,
+            )
+            if inferred is not None and (
+                inferred.sql is not None or not allow_legacy_compatibility
+            ):
+                return inferred
             return self._fallback(
                 program_id,
                 mode,
-                outcome.diagnostics,
+                inferred.diagnostics if inferred is not None else outcome.diagnostics,
                 legacy_sql_factory,
+                allow_legacy_compatibility=allow_legacy_compatibility,
             )
         plan = outcome.plan
         try:
@@ -163,6 +235,7 @@ class ProgramGenerationService:
                     ),
                 ),
                 legacy_sql_factory,
+                allow_legacy_compatibility=allow_legacy_compatibility,
             )
         if not self._same_snapshot(plan, live_snapshot):
             return ProgramGenerationResult(
@@ -182,16 +255,29 @@ class ProgramGenerationService:
             compiler = self._registry.get(plan.dialect)
             program = compiler.compile(plan)
         except OntologyCompileError:
+            inferred = self._infer(
+                query,
+                program_id=program_id,
+                system_time=system_time,
+                conversation_context=conversation_context,
+                origin_diagnostics=(
+                    ProgramDiagnostic(
+                        code="unsupported_dialect",
+                        message="当前方言无法安全编译确认本体取数程序",
+                    ),
+                ),
+                failure_mode=ProgramGenerationMode.UNSUPPORTED,
+            )
+            if inferred is not None and (
+                inferred.sql is not None or not allow_legacy_compatibility
+            ):
+                return inferred
             return self._fallback(
                 program_id,
                 ProgramGenerationMode.UNSUPPORTED,
-                (
-                    ProgramDiagnostic(
-                        code="unsupported_dialect",
-                        message="当前方言无法安全编译取数程序",
-                    ),
-                ),
+                inferred.diagnostics if inferred is not None else (),
                 legacy_sql_factory,
+                allow_legacy_compatibility=allow_legacy_compatibility,
             )
         mode = (
             ProgramGenerationMode.REPAIRED_PROGRAM
@@ -213,8 +299,10 @@ class ProgramGenerationService:
         origin_mode: ProgramGenerationMode,
         diagnostics: tuple[ProgramDiagnostic, ...],
         legacy_sql_factory: Callable[[], str] | None,
+        *,
+        allow_legacy_compatibility: bool,
     ) -> ProgramGenerationResult:
-        if legacy_sql_factory is None:
+        if legacy_sql_factory is None or not allow_legacy_compatibility:
             return ProgramGenerationResult(
                 sql=None,
                 program=None,
@@ -250,6 +338,51 @@ class ProgramGenerationService:
             diagnostics=diagnostics,
         )
 
+    def _infer(
+        self,
+        query: str,
+        *,
+        program_id: str,
+        system_time: datetime,
+        conversation_context: str | None,
+        origin_diagnostics: tuple[ProgramDiagnostic, ...],
+        failure_mode: ProgramGenerationMode,
+    ) -> ProgramGenerationResult | None:
+        if self._inference is None:
+            return None
+        kwargs = {
+            "program_id": program_id,
+            "system_time": system_time,
+        }
+        if conversation_context:
+            kwargs["conversation_context"] = conversation_context
+        outcome = self._inference.infer(query, **kwargs)
+        diagnostics = (*origin_diagnostics, *outcome.diagnostics)
+        if outcome.status == "ready" and outcome.program is not None and outcome.plan is not None:
+            return ProgramGenerationResult(
+                sql=outcome.program.sql,
+                program=outcome.program,
+                plan=None,
+                intent=None,
+                mode=ProgramGenerationMode.INFERRED_PROGRAM,
+                diagnostics=diagnostics,
+                inferred_plan=outcome.plan,
+            )
+        mode = (
+            ProgramGenerationMode.UNAVAILABLE
+            if outcome.status == "unavailable"
+            else failure_mode
+        )
+        return ProgramGenerationResult(
+            sql=None,
+            program=None,
+            plan=None,
+            intent=None,
+            mode=mode,
+            diagnostics=diagnostics,
+            missing_information=outcome.missing_information,
+        )
+
     @staticmethod
     def _failure_mode(outcome: ProgramPlanningOutcome) -> ProgramGenerationMode:
         if any(item.code == "unsupported_plan" for item in outcome.diagnostics):
@@ -267,6 +400,15 @@ class ProgramGenerationService:
             snapshot.info.version,
             snapshot.info.sha256,
         )
+
+    @staticmethod
+    def _is_metadata_only_snapshot(snapshot: OntologySnapshot) -> bool:
+        catalog = getattr(snapshot, "catalog", None)
+        if catalog is None:
+            return False
+        relations = getattr(catalog, "relations", None)
+        rules = getattr(catalog, "rules", None)
+        return relations == () and rules == ()
 
     @staticmethod
     def _wrap_legacy(program_id: str, legacy_sql: str) -> CompiledProgram:
@@ -327,7 +469,12 @@ def get_program_generation_service() -> ProgramGenerationService:
         client=get_llm_client(),
         repository=_RuntimeRepository(runtime),
     )
-    return ProgramGenerationService(planner=planner, runtime=runtime)
+    inference = MetadataInferenceService(client=get_llm_client(), runtime=runtime)
+    return ProgramGenerationService(
+        planner=planner,
+        runtime=runtime,
+        inference_service=inference,
+    )
 
 
 def generate_program(
@@ -337,6 +484,7 @@ def generate_program(
     system_time: datetime,
     legacy_sql_factory: Callable[[], str] | None = None,
     conversation_context: str | None = None,
+    allow_legacy_compatibility: bool = False,
 ) -> ProgramGenerationResult:
     return get_program_generation_service().generate(
         query,
@@ -344,4 +492,5 @@ def generate_program(
         system_time=system_time,
         legacy_sql_factory=legacy_sql_factory,
         conversation_context=conversation_context,
+        allow_legacy_compatibility=allow_legacy_compatibility,
     )

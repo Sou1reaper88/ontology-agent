@@ -21,13 +21,27 @@ def _create_conv(client: TestClient, token: str, **kw) -> dict:
     return resp.json()
 
 
+def _enable_legacy_compatibility(monkeypatch) -> None:
+    original = conv_route.run_agent
+
+    def run_with_legacy(*args, **kwargs):
+        return original(*args, **kwargs, allow_legacy_compatibility=True)
+
+    monkeypatch.setattr(conv_route, "run_agent", run_with_legacy)
+
+
 def test_create_conversation(client: TestClient, admin_token: str) -> None:
     data = _create_conv(client, admin_token, context="用户范围为浙江省")
     assert data["id"] > 0
     assert data["context"] == "用户范围为浙江省"
 
 
-def test_send_message_generates_sql(client: TestClient, admin_token: str) -> None:
+def test_send_message_generates_sql(
+    client: TestClient,
+    admin_token: str,
+    monkeypatch,
+) -> None:
+    _enable_legacy_compatibility(monkeypatch)
     conv = _create_conv(client, admin_token)
     _, msg_id = send_and_wait(
         client,
@@ -116,7 +130,12 @@ def test_conversation_persists_and_returns_shadow_payload(
     assert message["query_id"] is not None
 
 
-def test_send_message_status_steps_progress(client: TestClient, admin_token: str) -> None:
+def test_send_message_status_steps_progress(
+    client: TestClient,
+    admin_token: str,
+    monkeypatch,
+) -> None:
+    _enable_legacy_compatibility(monkeypatch)
     """异步发消息返回 202 generating；轮询状态逐步返回步骤。"""
     conv = _create_conv(client, admin_token)
     resp = client.post(
@@ -181,6 +200,7 @@ def test_irrelevant_question_returns_hint(
             return {}
 
     monkeypatch.setattr(orch, "get_ontology_client", lambda: _FakeClient())
+    _enable_legacy_compatibility(monkeypatch)
     conv = _create_conv(client, admin_token)
     _, msg_id = send_and_wait(client, admin_token, conv["id"], "今天天气怎么样")
     asst = last_assistant_message(client, admin_token, conv["id"])
@@ -238,6 +258,13 @@ def test_program_metadata_survives_message_reload_without_query_action(
         "diagnostics": [],
         "package": {"package_id": "example.program", "version": "1.0.0", "sha256": "a" * 64},
         "temporal_evidence": [],
+        "inference_evidence": {
+            "overall_confidence": "medium",
+            "reasons": ["对象描述命中需求"],
+            "unresolved_items": ["业务口径尚未确认"],
+            "ontology_suggestions": ["补充业务口径规则"],
+        },
+        "missing_information": [],
     }
     step = {
         "node": "program_generation",
@@ -275,6 +302,7 @@ def test_program_metadata_survives_message_reload_without_query_action(
     assert first["program"] == reloaded["program"]
     assert reloaded["program"]["program_id"] == "a1b2c3d4e5f6"
     assert reloaded["program"]["steps"][0]["step_id"] == "result"
+    assert reloaded["program"]["inference_evidence"]["overall_confidence"] == "medium"
 
 
 def test_context_update(client: TestClient, admin_token: str) -> None:

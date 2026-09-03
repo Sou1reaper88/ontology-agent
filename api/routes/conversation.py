@@ -82,6 +82,8 @@ class ProgramSummary(BaseModel):
     diagnostics: list[ProgramDiagnosticSummary] = []
     package: dict | None = None
     temporal_evidence: list[dict] = []
+    inference_evidence: dict | None = None
+    missing_information: list[str] = []
 
 
 class MessageOut(BaseModel):
@@ -136,6 +138,8 @@ def _extract_program(trace: list[dict] | None) -> ProgramSummary | None:
         diagnostics=payload.get("diagnostics") or [],
         package=payload.get("package"),
         temporal_evidence=payload.get("temporal_evidence") or [],
+        inference_evidence=payload.get("inference_evidence"),
+        missing_information=payload.get("missing_information") or [],
     )
 
 

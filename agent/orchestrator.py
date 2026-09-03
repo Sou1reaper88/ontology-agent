@@ -1058,6 +1058,7 @@ def _default_request_id(
 def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
     program = result.program
     plan = result.plan
+    inferred_plan = result.inferred_plan
     steps: list[dict[str, Any]] = []
     temporal: list[dict[str, Any]] = []
     if program is not None:
@@ -1073,6 +1074,12 @@ def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
             "version": plan.package_version,
             "sha256": plan.package_sha256,
         }
+    elif inferred_plan is not None:
+        package = {
+            "package_id": inferred_plan.package_id,
+            "version": inferred_plan.package_version,
+            "sha256": inferred_plan.package_sha256,
+        }
     return {
         "program_id": program.program_id if program is not None else None,
         "platform": program.dialect if program is not None else None,
@@ -1081,10 +1088,21 @@ def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
             result.intent.model_dump(mode="json") if result.intent is not None else None
         ),
         "program_plan": plan.model_dump(mode="json") if plan is not None else None,
+        "inferred_plan": (
+            inferred_plan.model_dump(mode="json")
+            if inferred_plan is not None
+            else None
+        ),
         "program_steps": steps,
         "diagnostics": [item.model_dump(mode="json") for item in result.diagnostics],
         "package": package,
         "temporal_evidence": temporal,
+        "inference_evidence": (
+            program.evidence.inference.model_dump(mode="json")
+            if program is not None and program.evidence.inference is not None
+            else None
+        ),
+        "missing_information": list(result.missing_information),
     }
 
 
@@ -1096,7 +1114,8 @@ def _program_step(
     payload = _program_payload(result)
     if result.sql is not None:
         status = "success"
-        summary = f"已生成 {len(payload['program_steps'])} 个物化步骤"
+        prefix = "已生成候选" if result.mode.value == "inferred_program" else "已生成"
+        summary = f"{prefix} {len(payload['program_steps'])} 个物化步骤"
     elif result.clarification is not None:
         status = "skipped"
         summary = result.clarification
@@ -1169,6 +1188,7 @@ def run_agent(
     assembled_context: str | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     request_id: str | None = None,
+    allow_legacy_compatibility: bool = False,
 ) -> dict[str, Any]:
     """默认生成本体绑定的多步取数程序，旧图仅用于受控回退。"""
     legacy_output: dict[str, Any] | None = None
@@ -1196,6 +1216,7 @@ def run_agent(
         or _default_request_id(user_query, system_time, ontology_id),
         "system_time": _program_system_time(system_time),
         "legacy_sql_factory": legacy_sql_factory,
+        "allow_legacy_compatibility": allow_legacy_compatibility,
     }
     if assembled_context:
         generation_kwargs["conversation_context"] = assembled_context
@@ -1233,6 +1254,7 @@ def run_agent(
             "generation_mode": result.mode.value,
             "clarification": result.clarification,
             "diagnostics": diagnostics,
+            "missing_information": list(result.missing_information),
             "trace": [step],
         }
 
@@ -1244,18 +1266,24 @@ def run_agent(
             "success": True,
             "sql": result.sql,
             "markdown": (
-                "## 取数程序\n"
-                f"- 生成模式：{result.mode.value}\n"
+                (
+                    "## 候选取数程序\n"
+                    "- 状态：LLM 推断、未经本体确认、不可自动执行\n"
+                    if result.mode.value == "inferred_program"
+                    else "## 取数程序\n"
+                )
+                + f"- 生成模式：{result.mode.value}\n"
                 f"- 物化步骤：{len(payload['program_steps'])}\n\n"
                 "脚本已生成，请在下方取数程序区域查看和复制。"
             ),
             "trace": [step, *(legacy_output or {}).get("trace", [])],
         }
     )
-    _append_shadow(
-        output,
-        user_query=user_query,
-        system_time=system_time,
-        on_step=on_step,
-    )
+    if result.mode.value == "wrapped_legacy":
+        _append_shadow(
+            output,
+            user_query=user_query,
+            system_time=system_time,
+            on_step=on_step,
+        )
     return output

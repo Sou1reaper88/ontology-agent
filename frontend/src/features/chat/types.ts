@@ -77,6 +77,13 @@ export interface ProgramSummary {
     sha256: string;
   } | null;
   temporal_evidence: Array<Record<string, unknown>>;
+  inference_evidence: {
+    overall_confidence: "high" | "medium" | "low";
+    reasons: string[];
+    unresolved_items: string[];
+    ontology_suggestions: string[];
+  } | null;
+  missing_information: string[];
 }
 
 export interface ChatMessage {

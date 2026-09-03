@@ -595,6 +595,14 @@
   background: linear-gradient(110deg, rgba(23, 107, 95, 0.09), transparent 68%);
 }
 
+.program-sql-header[data-inferred="true"] {
+  background: linear-gradient(110deg, rgba(184, 112, 27, 0.13), transparent 68%);
+}
+
+.program-sql-header[data-inferred="true"] .ontology-kicker {
+  color: #9a5c14;
+}
+
 .program-sql-header strong {
   display: block;
   color: var(--oa-text);
@@ -621,6 +629,33 @@
   color: var(--oa-accent-strong);
   background: var(--oa-accent-soft);
   font-size: 11px;
+}
+
+.inference-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  border-bottom: 1px solid var(--oa-border);
+  background: var(--oa-border);
+}
+
+.inference-evidence > div {
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--oa-surface);
+}
+
+.inference-evidence strong {
+  color: var(--oa-text);
+  font-size: 12px;
+}
+
+.inference-evidence ul {
+  margin: 8px 0 0;
+  padding-left: 17px;
+  color: var(--oa-text-muted);
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .sql-edit-textarea.ant-input {
@@ -667,5 +702,9 @@
 
   .conversation-delete {
     opacity: 1;
+  }
+
+  .inference-evidence {
+    grid-template-columns: 1fr;
   }
 }

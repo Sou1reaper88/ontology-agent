@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent.metadata_inference import MetadataInferenceOutcome
 from agent.program_generation import (
     ProgramGenerationMode,
     ProgramGenerationService,
@@ -46,18 +47,40 @@ class _Planner:
         self.outcome = outcome
         self.calls: list[tuple[str, str, datetime]] = []
 
-    def plan(self, query: str, *, program_id: str, system_time: datetime):
+    def plan(
+        self,
+        query: str,
+        *,
+        program_id: str,
+        system_time: datetime,
+        conversation_context: str | None = None,
+    ):
         self.calls.append((query, program_id, system_time))
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
 
 
-def _service(planner: _Planner, runtime: _Runtime) -> ProgramGenerationService:
+class _Inference:
+    def __init__(self, outcome: MetadataInferenceOutcome) -> None:
+        self.outcome = outcome
+        self.calls = []
+
+    def infer(self, query: str, **kwargs):
+        self.calls.append((query, kwargs))
+        return self.outcome
+
+
+def _service(
+    planner: _Planner,
+    runtime: _Runtime,
+    inference: _Inference | None = None,
+) -> ProgramGenerationService:
     return ProgramGenerationService(
         planner=planner,
         runtime=runtime,
         registry=ProgramCompilerRegistry.default(),
+        inference_service=inference,
     )
 
 
@@ -141,6 +164,7 @@ def test_safe_legacy_select_is_wrapped_in_one_system_named_ctas() -> None:
         request_id="request-001",
         system_time=SYSTEM_TIME,
         legacy_sql_factory=lambda: 'SELECT "customer_id" FROM "dm"."customer";',
+        allow_legacy_compatibility=True,
     )
 
     assert result.mode == ProgramGenerationMode.WRAPPED_LEGACY
@@ -173,6 +197,7 @@ def test_unsafe_legacy_output_is_never_wrapped(legacy_sql: str) -> None:
         request_id="request-001",
         system_time=SYSTEM_TIME,
         legacy_sql_factory=lambda: legacy_sql,
+        allow_legacy_compatibility=True,
     )
 
     assert result.mode == ProgramGenerationMode.UNAVAILABLE
@@ -206,3 +231,125 @@ def test_clarification_never_calls_legacy_fallback() -> None:
     assert result.clarification == "客户口径需要确认"
     assert legacy_calls == []
 
+
+def test_failed_strict_plan_uses_inferred_program_before_legacy() -> None:
+    from tests.test_metadata_inference import _program
+
+    strict_diagnostic = ProgramDiagnostic(
+        code="unsupported_plan",
+        message="本体缺少已确认关系",
+    )
+    planner = _Planner(
+        ProgramPlanningOutcome(
+            status="failed",
+            diagnostics=(strict_diagnostic,),
+            llm_call_count=1,
+        )
+    )
+    inferred = _Inference(
+        MetadataInferenceOutcome(
+            status="ready",
+            program=_program(),
+            plan=SimpleNamespace(evidence="candidate"),  # type: ignore[arg-type]
+        )
+    )
+    legacy_calls: list[str] = []
+
+    result = _service(planner, _Runtime(SimpleNamespace()), inferred).generate(
+        "查询客户结果",
+        request_id="request-001",
+        system_time=SYSTEM_TIME,
+        legacy_sql_factory=lambda: legacy_calls.append("called") or "SELECT 1",
+        conversation_context="客户指个人客户",
+    )
+
+    assert result.mode == ProgramGenerationMode.INFERRED_PROGRAM
+    assert result.program == inferred.outcome.program
+    assert result.inferred_plan == inferred.outcome.plan
+    assert inferred.calls[0][1]["conversation_context"] == "客户指个人客户"
+    assert legacy_calls == []
+
+
+def test_metadata_only_snapshot_routes_directly_to_inference() -> None:
+    from tests.test_metadata_inference import _program
+
+    snapshot = SimpleNamespace(
+        info=SimpleNamespace(
+            package_id="evaluation",
+            version="1.0.0",
+            sha256="a" * 64,
+        ),
+        catalog=SimpleNamespace(relations=(), rules=()),
+    )
+    planner = _Planner(AssertionError("strict planner must not be called"))
+    inferred = _Inference(
+        MetadataInferenceOutcome(
+            status="ready",
+            program=_program(),
+            plan=SimpleNamespace(evidence="candidate"),  # type: ignore[arg-type]
+        )
+    )
+
+    result = _service(planner, _Runtime(snapshot), inferred).generate(
+        "查询全省 GSM 用户",
+        request_id="request-001",
+        system_time=SYSTEM_TIME,
+    )
+
+    assert result.mode == ProgramGenerationMode.INFERRED_PROGRAM
+    assert planner.calls == []
+    assert len(inferred.calls) == 1
+
+
+def test_failed_inference_returns_missing_information_without_silent_legacy() -> None:
+    planner = _Planner(
+        ProgramPlanningOutcome(
+            status="failed",
+            diagnostics=(
+                ProgramDiagnostic(code="unsupported_plan", message="本体关系不足"),
+            ),
+            llm_call_count=1,
+        )
+    )
+    inferred = _Inference(
+        MetadataInferenceOutcome(
+            status="failed",
+            diagnostics=(
+                ProgramDiagnostic(
+                    code="missing_candidate_join",
+                    message="候选关联路径不完整",
+                ),
+            ),
+            missing_information=("请补充客户表与订购表的关联键",),
+        )
+    )
+    legacy_calls: list[str] = []
+
+    result = _service(planner, _Runtime(SimpleNamespace()), inferred).generate(
+        "查询客户结果",
+        request_id="request-001",
+        system_time=SYSTEM_TIME,
+        legacy_sql_factory=lambda: legacy_calls.append("called") or "SELECT 1",
+    )
+
+    assert result.sql is None
+    assert result.mode == ProgramGenerationMode.UNSUPPORTED
+    assert result.missing_information == ("请补充客户表与订购表的关联键",)
+    assert result.diagnostics[-1].code == "missing_candidate_join"
+    assert legacy_calls == []
+
+
+def test_legacy_factory_is_not_called_without_explicit_compatibility_flag() -> None:
+    planner = _Planner(PackageNotFoundError("当前没有有效本体快照"))
+    calls: list[str] = []
+
+    result = _service(planner, _Runtime(SimpleNamespace())).generate(
+        "查询客户结果",
+        request_id="request-001",
+        system_time=SYSTEM_TIME,
+        legacy_sql_factory=lambda: calls.append("called") or "SELECT 1",
+    )
+
+    assert result.mode == ProgramGenerationMode.UNAVAILABLE
+    assert result.sql is None
+    assert calls == []

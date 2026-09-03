@@ -8,7 +8,7 @@ const programMessage = {
   sql: "DROP TABLE IF EXISTS temp_result;\nCREATE TABLE temp_result AS SELECT 1;",
   query_id: null,
   ontology_shadow: { status: "unavailable" },
-  program: { program_id: "a1b2c3d4e5f6" },
+  program: { program_id: "a1b2c3d4e5f6", mode: "inferred_program" },
 };
 
 assert.deepEqual(getSqlPresentation(programMessage, false), {

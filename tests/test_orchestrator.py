@@ -63,6 +63,7 @@ def test_run_agent_appends_shadow_without_changing_legacy_sql(monkeypatch) -> No
         "查询6月沉默用户",
         system_time="2026-08-14",
         on_step=steps.append,
+        allow_legacy_compatibility=True,
     )
 
     assert output["success"] is True
@@ -83,7 +84,11 @@ def test_shadow_exception_does_not_fail_legacy_agent(monkeypatch) -> None:
 
     monkeypatch.setattr(orchestrator, "get_ontology_shadow_service", lambda: _RaisingService())
 
-    output = orchestrator.run_agent("查询6月沉默用户", system_time="2026-08-14")
+    output = orchestrator.run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )
 
     assert output["success"] is True
     assert "D_BBZX_DW_PRODUCT_M" in output["sql"]
@@ -120,7 +125,14 @@ def test_run_agent_uses_native_program_as_default_without_legacy_graph(monkeypat
     program = HiveProgramCompiler().compile(plan)
     calls: list[tuple[str, str]] = []
 
-    def fake_generate(query, *, request_id, system_time, legacy_sql_factory):
+    def fake_generate(
+        query,
+        *,
+        request_id,
+        system_time,
+        legacy_sql_factory,
+        allow_legacy_compatibility,
+    ):
         calls.append((query, request_id))
         return ProgramGenerationResult(
             sql=program.sql,
@@ -156,6 +168,47 @@ def test_run_agent_uses_native_program_as_default_without_legacy_graph(monkeypat
     assert calls == [("生成客户结果", "message-001")]
 
 
+def test_run_agent_exposes_inferred_evidence_without_running_shadow(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+    from agent.program_generation import ProgramGenerationMode, ProgramGenerationResult
+    from ontology_core.inference_compiler import HiveInferenceCompiler
+    from tests.ontology_core.test_inference_compiler import _object, _plan
+
+    plan = _plan(_object("Customer"))
+    program = HiveInferenceCompiler().compile(plan, program_id="a1b2c3d4e5f6")
+
+    def fake_generate(query, **kwargs):
+        return ProgramGenerationResult(
+            sql=program.sql,
+            program=program,
+            plan=None,
+            intent=None,
+            mode=ProgramGenerationMode.INFERRED_PROGRAM,
+            diagnostics=(),
+            inferred_plan=plan,
+        )
+
+    monkeypatch.setattr(orchestrator, "generate_program", fake_generate)
+    monkeypatch.setattr(
+        orchestrator,
+        "get_ontology_shadow_service",
+        lambda: (_ for _ in ()).throw(AssertionError("shadow must not run")),
+    )
+
+    output = orchestrator.run_agent(
+        "查询客户手机号码",
+        request_id="message-003",
+        system_time="2026-08-24",
+    )
+
+    assert output["success"] is True
+    assert output["generation_mode"] == "inferred_program"
+    assert output["inference_evidence"]["overall_confidence"] == "medium"
+    assert output["package"]["sha256"] == "a" * 64
+    assert "未经本体确认" in output["markdown"]
+    assert "ontology_shadow" not in output
+
+
 def test_run_agent_does_not_fallback_when_clarification_is_required(monkeypatch) -> None:
     import agent.orchestrator as orchestrator
     from agent.program_generation import (
@@ -169,7 +222,14 @@ def test_run_agent_does_not_fallback_when_clarification_is_required(monkeypatch)
         message="请确认客户口径",
     )
 
-    def fake_generate(query, *, request_id, system_time, legacy_sql_factory):
+    def fake_generate(
+        query,
+        *,
+        request_id,
+        system_time,
+        legacy_sql_factory,
+        allow_legacy_compatibility,
+    ):
         return ProgramGenerationResult(
             sql=None,
             program=None,
@@ -206,7 +266,7 @@ def test_irrelevant_question_short_circuits(monkeypatch) -> None:
             }
 
     monkeypatch.setattr("agent.orchestrator.get_ontology_client", lambda: _FakeClient())
-    out = run_agent("今天天气怎么样")
+    out = run_agent("今天天气怎么样", allow_legacy_compatibility=True)
     assert out["success"] is False
     assert out.get("sql") is None
     assert "与取数业务无关" in out["markdown"]
@@ -311,7 +371,11 @@ def test_mock_template_uses_rule_condition() -> None:
 
 def test_normal_flow_success() -> None:
     """正常流程：生成 SQL 且通过语法+语义审计。"""
-    out = run_agent("查询6月沉默用户", system_time="2026-08-14")
+    out = run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )
     assert out["success"] is True
     sql = out["sql"]
     # 零幻觉：仅物理字段名
@@ -329,10 +393,26 @@ def test_normal_flow_success() -> None:
 
 def test_mock_template_varies_by_query() -> None:
     """不同问题应生成不同 SQL（模板按业务/账期/月数动态变化）。"""
-    a = run_agent("查询6月沉默用户", system_time="2026-08-14")["sql"]
-    b = run_agent("查询5月沉默用户", system_time="2026-08-14")["sql"]
-    c = run_agent("查询沉默6个月的用户", system_time="2026-08-14")["sql"]
-    d = run_agent("查询4月用户清单", system_time="2026-08-14")["sql"]
+    a = run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
+    b = run_agent(
+        "查询5月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
+    c = run_agent(
+        "查询沉默6个月的用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
+    d = run_agent(
+        "查询4月用户清单",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
     assert a != b, "不同账期应生成不同 SQL"
     assert "P_MON IN ('202606')" in a
     assert "P_MON IN ('202605')" in b
@@ -343,7 +423,11 @@ def test_mock_template_varies_by_query() -> None:
 
 def test_date_calculation_month_boundary() -> None:
     """日期推算：8 月初 → p_mon 回退 7 月，p_day 跨月。"""
-    out = run_agent("查询沉默用户", system_time="2026-08-01")
+    out = run_agent(
+        "查询沉默用户",
+        system_time="2026-08-01",
+        allow_legacy_compatibility=True,
+    )
     assert out["p_day"] == "20260730"
     assert out["p_mon"] == "202607"
 
