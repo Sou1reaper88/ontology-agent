@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from ontology_core.inference_models import InferenceEvidence
 from ontology_core.models import FrozenModel
 from ontology_core.query_plan import QueryPlan
 from ontology_core.semantic_models import RuleOperator
@@ -213,6 +214,7 @@ class ProgramCompilationEvidence(ProgramModel):
     relations: tuple[str, ...] = ()
     rules: tuple[str, ...] = ()
     temporal_decisions: tuple[TemporalCompilationEvidence, ...] = ()
+    inference: InferenceEvidence | None = None
 
 
 class CompiledProgram(ProgramModel):

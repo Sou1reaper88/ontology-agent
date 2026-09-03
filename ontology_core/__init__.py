@@ -17,6 +17,7 @@ from ontology_core.errors import (
     QueryPlanningError,
     UnsupportedQueryPlanError,
 )
+from ontology_core.inference_compiler import HiveInferenceCompiler
 from ontology_core.inference_models import (
     CandidateContext,
     CandidateField,
@@ -164,6 +165,7 @@ __all__ = [
     "InvalidRuleExpressionError",
     "NoMatchingConceptError",
     "GenericSqlCompiler",
+    "HiveInferenceCompiler",
     "inspect_package",
     "InspectedPackage",
     "ImportDiagnostic",

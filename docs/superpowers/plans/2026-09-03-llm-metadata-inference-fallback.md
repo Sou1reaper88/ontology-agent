@@ -192,13 +192,13 @@ class HiveInferenceCompiler:
     def compile(self, plan: ValidatedInferredProgram, *, program_id: str) -> CompiledProgram: ...
 ```
 
-- [ ] 写失败测试：单表过滤、双表等值关联、指定城市单成员、全省同构表族 `UNION ALL`、字段投影和默认分区生成精确 SQL。
-- [ ] 目标表名继续使用 `ProgramTableNamer`；源表/字段只从已校验绑定获取；标识符统一引用，值统一按类型构造 SQLGlot Literal。
-- [ ] 表族先生成一个系统中间步骤，各成员投影同一字段集合并各自带分区条件，再由后续步骤消费；不生成目录外成员。
-- [ ] 复用 `HiveProgramCompiler.validate_program` 验证 DROP/CREATE 配对、依赖顺序、无悬空临时表和源表不成为目标表。
-- [ ] 在 `ProgramCompilationEvidence` 增加可序列化的候选依据、置信度、未确认项和本体建议，不把候选关系写入 `relations`（该字段只保留已确认本体 URI）。
-- [ ] 运行聚焦测试、现有 program compiler 回归和 `ruff`。
-- [ ] 自动提交：`feat: 编译候选 Hive 取数程序`。
+- [x] 写失败测试：单表过滤、双表等值关联、指定城市单成员、全省同构表族 `UNION ALL`、字段投影和默认分区生成精确 SQL。
+- [x] 目标表名继续使用 `ProgramTableNamer`；源表/字段只从已校验绑定获取；标识符统一引用，值统一按类型构造 SQLGlot Literal。
+- [x] 表族先生成一个系统中间步骤，各成员投影同一字段集合并各自带分区条件，再由后续步骤消费；不生成目录外成员。
+- [x] 复用 `HiveProgramCompiler.validate_program` 验证 DROP/CREATE 配对、依赖顺序、无悬空临时表和源表不成为目标表。
+- [x] 在 `ProgramCompilationEvidence` 增加可序列化的候选依据、置信度、未确认项和本体建议，不把候选关系写入 `relations`（该字段只保留已确认本体 URI）。
+- [x] 运行聚焦测试、现有 program compiler 回归和 `ruff`。
+- [x] 自动提交：`feat: 编译候选 Hive 取数程序`。
 
 ### Task 6：接入 run_agent、会话 API 与候选展示
 
