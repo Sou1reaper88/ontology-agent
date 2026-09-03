@@ -93,11 +93,11 @@ class ValidatedInferredProgram(FrozenModel):
     evidence: InferenceEvidence
 ```
 
-- [ ] 写失败测试：额外字段（`sql`、`target_table`、任意物理标识）被拒绝；对象/字段引用格式、置信度、空依据、重复引用和 JSON 往返符合约束。
-- [ ] 运行 `D:\Projects\ontology-agent\.venv\Scripts\python.exe -m pytest tests/ontology_core/test_inference_models.py -q`，确认先失败。
-- [ ] 实现冻结、`extra="forbid"` 的合同，并只在合同层校验内在结构，不访问本体状态。
-- [ ] 运行聚焦测试与 `ruff`。
-- [ ] 自动提交：`feat: 定义元数据候选推断合同`。
+- [x] 写失败测试：额外字段（`sql`、`target_table`、任意物理标识）被拒绝；对象/字段引用格式、置信度、空依据、重复引用和 JSON 往返符合约束。
+- [x] 运行 `D:\Projects\ontology-agent\.venv\Scripts\python.exe -m pytest tests/ontology_core/test_inference_models.py -q`，确认先失败。
+- [x] 实现冻结、`extra="forbid"` 的合同，并只在合同层校验内在结构，不访问本体状态。
+- [x] 运行聚焦测试与 `ruff`。
+- [x] 自动提交：`feat: 定义元数据候选推断合同`。
 
 ### Task 2：构建活动本体候选目录、召回与表族识别
 
@@ -267,4 +267,3 @@ class HiveInferenceCompiler:
 2. Task 6 完成后立即启动服务，让用户先看候选 SQL、依据和不可执行标识。
 3. 用户确认可见效果后再执行 Task 7 的多步骤评测升级。
 4. 用户补完表描述并发布活动版本后，才运行真实测试集并完成 Task 8。
-
