@@ -18,6 +18,7 @@ from agent.context_engineering import ContextMessage
 from agent.model_capabilities import resolve_model_token_limits
 from config.settings import settings
 from monitoring.metrics import LLM_CALL_DURATION
+from ontology_core.inference_models import CandidateContext, InferredProgramDraft
 from ontology_core.program_models import (
     DraftSqlProgramPlan,
     ProgramDiagnostic,
@@ -85,6 +86,52 @@ class LLMClient:
             separators=(",", ":"),
         )
         return self._generate_program(system_prompt, repair_request)
+
+    def infer_metadata_program(
+        self,
+        *,
+        request: str,
+        candidates: CandidateContext,
+        conversation_context: str | None = None,
+    ) -> InferredProgramDraft:
+        """Infer a SQL-free candidate plan from a bounded published catalog."""
+
+        system_prompt = (
+            "你是取数智能体的元数据候选规划器。"
+            "仅输出一个符合 JSON Schema 的 JSON 对象。"
+            "禁止输出 SQL，禁止输出目标表名，禁止创建或改写任何物理标识符。"
+            "只能引用候选目录中已有的对象 ref、字段 ref 和表族 ref。"
+            "物理表名和字段名只用于理解，不能填入引用字段。"
+            "关系、过滤口径和表族选择都属于候选推断，必须提供可核验依据和"
+            "high、medium 或 low 置信度。过滤值优先逐字取自用户需求。"
+            "无法确认的内容写入 unresolved_items，并给出 ontology_suggestions；"
+            "不得为了生成结果而虚构目录外对象、字段、城市分表或关联键。"
+        )
+        payload: dict[str, Any] = {
+            "request": request,
+            "candidates": candidates.model_dump(mode="json"),
+            "schema": InferredProgramDraft.model_json_schema(),
+        }
+        if conversation_context:
+            payload["conversation_context"] = conversation_context
+        user_query = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        start = time.time()
+        try:
+            try:
+                raw = self._generate(system_prompt, user_query)
+            except Exception as error:
+                raise StructuredPlanningError("元数据候选推断服务不可用") from error
+        finally:
+            LLM_CALL_DURATION.observe(time.time() - start)
+        text = self._unwrap_json_fence(raw)
+        try:
+            return InferredProgramDraft.model_validate_json(text)
+        except (ValidationError, ValueError, TypeError) as error:
+            raise StructuredPlanningError("元数据候选计划格式无效") from error
 
     def summarize_conversation(
         self,

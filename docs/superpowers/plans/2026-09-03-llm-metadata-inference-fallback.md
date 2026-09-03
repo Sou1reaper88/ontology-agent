@@ -144,11 +144,11 @@ def infer_metadata_program(
 ) -> InferredProgramDraft: ...
 ```
 
-- [ ] 写失败测试：请求中包含需求、候选目录、对话上下文和 JSON Schema；系统提示明确禁止 SQL、目录外引用与事实化表述。
-- [ ] 复用现有 `_generate` 和 JSON fence 清理逻辑；Pydantic 验证失败统一转换为不泄露模型原文的 `StructuredPlanningError`。
-- [ ] 确认候选目录经过对象/字段上限裁剪，并计入现有上下文 Token 预算，而不是注入 1,270 个字段。
-- [ ] 运行聚焦测试、`tests/test_program_planner.py` 和 `ruff`。
-- [ ] 自动提交：`feat: 增加结构化元数据推断调用`。
+- [x] 写失败测试：请求中包含需求、候选目录、对话上下文和 JSON Schema；系统提示明确禁止 SQL、目录外引用与事实化表述。
+- [x] 复用现有 `_generate` 和 JSON fence 清理逻辑；Pydantic 验证失败统一转换为不泄露模型原文的 `StructuredPlanningError`。
+- [x] 确认候选目录经过对象/字段上限裁剪，并计入现有上下文 Token 预算，而不是注入 1,270 个字段。
+- [x] 运行聚焦测试、`tests/test_program_planner.py` 和 `ruff`。
+- [x] 自动提交：`feat: 增加结构化元数据推断调用`。
 
 ### Task 4：实现 Python 候选安全校验和时间决策
 
