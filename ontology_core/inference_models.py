@@ -89,7 +89,7 @@ class CandidateContext(FrozenModel):
     package_id: str = Field(min_length=1)
     package_version: str = Field(min_length=1)
     package_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    objects: tuple[CandidateObject, ...] = Field(min_length=1)
+    objects: tuple[CandidateObject, ...] = ()
     families: tuple[CandidateTableFamily, ...] = ()
 
 
@@ -189,4 +189,3 @@ class ValidatedInferredProgram(FrozenModel):
     filters: tuple[ValidatedInferredFilter, ...] = ()
     temporal_decisions: tuple[ValidatedInferenceTemporalDecision, ...] = ()
     evidence: InferenceEvidence
-

@@ -35,6 +35,7 @@ from ontology_core.inference_models import (
 )
 from ontology_core.inspection import inspect_package
 from ontology_core.manifest import load_manifest, resolve_package_files
+from ontology_core.metadata_candidates import MetadataCandidateCatalog
 from ontology_core.metadata_package import (
     MetadataImportResult,
     PackageGenerationOptions,
@@ -164,6 +165,7 @@ __all__ = [
     "initialize_package",
     "LocalizedText",
     "MetadataImportResult",
+    "MetadataCandidateCatalog",
     "MetadataOverrides",
     "OntologyError",
     "OntologyImportError",
