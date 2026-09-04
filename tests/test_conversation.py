@@ -6,9 +6,36 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import json
+from types import SimpleNamespace
+import httpx
+import pytest
+import agent.conversation_agent as conversation_agent
 
 import api.routes.conversation as conv_route
 from tests.conftest import last_assistant_message, send_and_wait
+
+
+@pytest.fixture(autouse=True)
+def _conversation_provider(monkeypatch):
+    """Simulate provider tool responses; never contact a real model in API tests."""
+    monkeypatch.setattr(conversation_agent, "get_llm_client", lambda: SimpleNamespace(
+        api_key="synthetic", base_url="https://example.invalid", model="test", timeout=1))
+    def post(url, **kwargs):
+        payload = kwargs["json"]
+        if payload["tool_choice"] == "none":
+            message = {"role": "assistant", "content": "本轮工具结果已返回，请查看脚本与诊断。"}
+        else:
+            query = json.loads(payload["messages"][1]["content"])["input"]
+            if "天气" in query:
+                message = {"role": "assistant", "content": "我无法获取实时天气。"}
+            else:
+                message = {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "test1", "type": "function", "function": {
+                        "name": "generate_sql_program", "arguments": json.dumps({"requirement": query})}}]}
+        return httpx.Response(200, request=httpx.Request("POST", url),
+            json={"choices": [{"finish_reason": "stop", "message": message}]})
+    monkeypatch.setattr(conversation_agent.httpx, "post", post)
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -168,7 +195,8 @@ def test_send_message_status_steps_progress(
     assert nodes.index("get_ttl_definition") < nodes.index("build_sql")
 
 
-def test_multi_turn_accumulates(client: TestClient, admin_token: str) -> None:
+def test_multi_turn_accumulates(client: TestClient, admin_token: str, monkeypatch) -> None:
+    _enable_legacy_compatibility(monkeypatch)
     conv = _create_conv(client, admin_token)
     for content in ["查询6月沉默用户", "把沉默时间改成3个月"]:
         send_and_wait(client, admin_token, conv["id"], content, system_time="2026-08-14")
@@ -205,7 +233,9 @@ def test_irrelevant_question_returns_hint(
     _, msg_id = send_and_wait(client, admin_token, conv["id"], "今天天气怎么样")
     asst = last_assistant_message(client, admin_token, conv["id"])
     assert asst["id"] == msg_id
-    assert "与取数业务无关" in asst["content"]
+    assert "无法获取实时天气" in asst["content"]
+    assert asst["trace"][-1]["node"] == "conversation_response"
+    assert not any(step["node"] == "program_generation" for step in asst["trace"])
     assert asst["sql"] is None
     assert asst["query_id"] is None
 

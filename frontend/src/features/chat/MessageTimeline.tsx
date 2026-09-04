@@ -97,7 +97,7 @@ export function MessageTimeline({
 
               <div className="assistant-answer">
                 {getAssistantContent(message.content, Boolean(message.program)) ||
-                  (message.generating ? "正在理解需求并生成 SQL…" : "")}
+                  (message.generating ? "正在理解你的问题并准备回复…" : "")}
               </div>
 
               {message.error ? <div className="assistant-error">{message.error}</div> : null}

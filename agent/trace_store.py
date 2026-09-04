@@ -36,11 +36,12 @@ def append_step(message_id: int, step: dict[str, Any]) -> None:
 
 
 def set_output(message_id: int, output: dict[str, Any]) -> None:
-    """标记生成成功并缓存输出。"""
+    """缓存已完成输出，并保留实际成功/失败状态。"""
     with _lock:
         tr = _traces.get(message_id)
         if tr is not None:
-            tr["status"] = "success"
+            tr["status"] = "success" if output.get("success") else "failed"
+            tr["error"] = None if output.get("success") else output.get("markdown") or "生成失败"
             tr["output"] = output
 
 

@@ -45,10 +45,15 @@ export function TraceSteps({ steps, generating }: Props) {
           key: "trace",
           label: (
             <span>
-              生成链路 · {steps.length} 步{generating ? " · 执行中" : ""}
+              处理过程摘要 · {steps.length} 步{generating ? " · 执行中" : ""}
             </span>
           ),
-          children: <Steps size="small" direction="vertical" items={items} />,
+          children: (
+            <>
+              <p>展示处理说明与工具执行记录，不是内部推理原文。</p>
+              <Steps size="small" direction="vertical" items={items} />
+            </>
+          ),
         },
       ]}
     />

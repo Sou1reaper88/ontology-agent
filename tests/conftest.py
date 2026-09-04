@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import agent.orchestrator as orch
+import agent.conversation_agent as conversation_agent
 import tools.ontology_client as ont_client
 from api.main import app
 from auth.jwt import create_access_token
@@ -36,6 +37,7 @@ def _force_mock_sql(monkeypatch):
     保证编排/接口测试快速稳定、不依赖用户手工维护的表结构。
     """
     monkeypatch.setattr(orch, "get_llm_client", lambda: _NoKeyClient())
+    monkeypatch.setattr(conversation_agent, "get_llm_client", lambda: _NoKeyClient())
     monkeypatch.setattr(ont_client, "get_llm_client", lambda: _NoKeyClient())
     # 编排流程使用固定 mock 本体（5 字段示例表），与真实 MySQL 表结构解耦
     monkeypatch.setattr(orch, "get_ontology_client", lambda: MockOntologyClient())

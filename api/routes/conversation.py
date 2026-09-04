@@ -22,7 +22,7 @@ from agent.context_engineering import (
     ContextMessage,
     get_context_assembler,
 )
-from agent.orchestrator import run_agent
+from agent.conversation_agent import run_conversation_agent as run_agent, history_content
 from agent.trace_store import (
     append_step,
     clear_trace,
@@ -162,7 +162,7 @@ def _prepare_conversation_context(
             ContextMessage(
                 message_id=item.id,
                 role=item.role,
-                content=item.content,
+                content=history_content(item.content, getattr(item, "trace", None)),
                 sql=item.sql,
             )
             for item in history
@@ -331,6 +331,9 @@ def message_status(
     db: Session = Depends(get_db),
 ) -> dict:
     """生成进度轮询：返回状态 + 已完成的链路步骤（实时可视化）。"""
+    # Read memory first: a missing trace means completion was already committed.
+    # Loading the row first can retain the placeholder across that commit.
+    tr = get_trace(msg_id)
     msg = db.get(ConversationMessage, msg_id)
     if not msg:
         raise HTTPException(status_code=404, detail="消息不存在")
@@ -338,7 +341,6 @@ def message_status(
     if not conv or conv.user_id != user.id:
         raise HTTPException(status_code=404, detail="消息不存在")
 
-    tr = get_trace(msg_id)
     if tr is not None:
         return {
             "message_id": msg_id,
@@ -349,6 +351,14 @@ def message_status(
             "program": _extract_program(tr["steps"]),
         }
     # 进程重启后内存 trace 丢失：从 DB 读最终态
+    completion = next((step for step in reversed(msg.trace or [])
+                       if step.get("node") == "conversation_response"), None)
+    if completion is not None:
+        succeeded = (completion.get("payload") or {}).get("success", False)
+        return {"message_id": msg_id, "status": "success" if succeeded else "failed",
+                "steps": msg.trace, "error": None if succeeded else msg.content,
+                "ontology_shadow": _extract_ontology_shadow(msg.trace),
+                "program": _extract_program(msg.trace)}
     if msg.sql or msg.trace:
         # 有 SQL 或完整链路 trace → 生成流程已完成（含无关问题提示等无 SQL 场景）
         return {
