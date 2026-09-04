@@ -95,6 +95,8 @@ class CandidateContext(FrozenModel):
 
 
 class InferredJoinDraft(FrozenModel):
+    join_type: Literal["inner", "left", "anti"] = "inner"
+    anti_strategy: Literal["left_join", "not_exists"] = "left_join"
     left_object_ref: SemanticRef
     left_field_ref: SemanticRef
     right_object_ref: SemanticRef
@@ -104,6 +106,7 @@ class InferredJoinDraft(FrozenModel):
 
 
 class InferredFilterDraft(FrozenModel):
+    scope: Literal["match", "where"] = "match"
     field_ref: SemanticRef
     operator: RuleOperator
     values: tuple[str, ...] = ()
@@ -121,6 +124,7 @@ class InferredFilterDraft(FrozenModel):
 
 
 class InferredProgramDraft(FrozenModel):
+    blocking_issues: tuple[str, ...] = ()
     selected_object_refs: tuple[SemanticRef, ...] = Field(min_length=1)
     selected_family_refs: tuple[FamilyRef, ...] = ()
     requested_field_refs: tuple[SemanticRef, ...] = Field(min_length=1)
@@ -149,10 +153,12 @@ class ValidatedInferredJoin(FrozenModel):
     right_field: CandidateField
     confidence: Confidence
     evidence: tuple[str, ...] = Field(min_length=1)
-    join_type: Literal["inner"] = "inner"
+    join_type: Literal["inner", "left", "anti"] = "inner"
+    anti_strategy: Literal["left_join", "not_exists"] = "left_join"
 
 
 class ValidatedInferredFilter(FrozenModel):
+    scope: Literal["match", "where"] = "match"
     field: CandidateField
     operator: RuleOperator
     values: tuple[str, ...] = ()

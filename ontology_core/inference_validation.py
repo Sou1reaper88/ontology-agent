@@ -8,6 +8,7 @@ from datetime import datetime
 from pydantic import Field
 
 from ontology_core.errors import TemporalIntentError
+from ontology_core.inference_join_semantics import join_semantics_error
 from ontology_core.inference_models import (
     CandidateContext,
     CandidateField,
@@ -124,6 +125,11 @@ class MetadataInferenceValidator:
         system_time: datetime,
         request: str,
     ) -> InferenceValidationResult:
+        if draft.blocking_issues:
+            return _failure(
+                "incomplete_inferred_semantics", "候选计划存在未实现的核心业务语义",
+                "；".join(draft.blocking_issues),
+            )
         snapshot = catalog.snapshot
         if (
             candidates.package_id,
@@ -272,6 +278,8 @@ class MetadataInferenceValidator:
             )
             validated_joins.append(
                 ValidatedInferredJoin(
+                    join_type=join.join_type,
+                    anti_strategy=join.anti_strategy,
                     left_object_ref=join.left_object_ref,
                     left_field=left,
                     right_object_ref=join.right_object_ref,
@@ -280,6 +288,9 @@ class MetadataInferenceValidator:
                     evidence=join.evidence,
                 )
             )
+        semantic_error = join_semantics_error(validated_joins, requested_fields, member_family)
+        if semantic_error:
+            return _failure("unsupported_join_semantics", semantic_error, "请调整关联方向或排除集合")
         if len(logical_nodes) > 1 and not self._connected(logical_nodes, edges):
             return _failure(
                 "missing_candidate_join",
@@ -310,6 +321,7 @@ class MetadataInferenceValidator:
                 )
             validated_filters.append(
                 ValidatedInferredFilter(
+                    scope=filter_.scope,
                     field=field,
                     operator=filter_.operator,
                     values=filter_.values,

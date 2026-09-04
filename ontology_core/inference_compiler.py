@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ontology_core.compiler import _literal, _quote_identifier
 from ontology_core.errors import OntologyCompileError
+from ontology_core.inference_join_semantics import join_semantics_error
 from ontology_core.inference_models import (
     CandidateField,
     CandidateObject,
@@ -112,6 +113,9 @@ class HiveInferenceCompiler:
         family_by_member = {
             member: family.ref for family in plan.families for member in family.member_refs
         }
+        semantic_error = join_semantics_error(plan.joins, plan.requested_fields, family_by_member)
+        if semantic_error:
+            raise _error(semantic_error)
         decisions_by_object = {item.object_ref: item for item in plan.temporal_decisions}
         statements: list[CompiledStatement] = []
         lineage: list[LineageEdge] = []
@@ -303,10 +307,38 @@ class HiveInferenceCompiler:
         )
         if not selections:
             raise _error("候选程序没有可编译的输出字段")
-        first = logical_keys[0]
+        directed_rights = {
+            key_for_object(join.right_object_ref) for join in plan.joins
+            if join.join_type != "inner"
+        }
+        roots = [key for key in logical_keys if key not in directed_rights]
+        if not roots:
+            raise _error("左连接/排除连接没有可保留的主表")
+        first = roots[0]
         from_sql = source_sql(first)
         visited = {first}
-        remaining = set(logical_keys[1:])
+        remaining = set(logical_keys) - visited
+        consumed = set()
+        predicates = []
+        scoped = {key: [] for key in logical_keys}
+        anti_rights = {
+            key_for_object(join.right_object_ref) for join in plan.joins
+            if join.join_type == "anti"
+        }
+        for item in plan.filters:
+            key = key_for_object(item.field.object_ref)
+            predicate = _filter_sql(item, aliases[key])
+            if key in anti_rights and item.scope == "where":
+                raise _error("排除表不能提供连接后的WHERE条件")
+            if key in directed_rights and item.scope == "match":
+                scoped[key].append(predicate)
+            else:
+                predicates.append(predicate)
+        for item in plan.temporal_decisions:
+            if item.object_ref not in family_by_member:
+                key = key_for_object(item.object_ref)
+                predicate = _temporal_sql(item, aliases[key])
+                (scoped[key] if key in directed_rights else predicates).append(predicate)
         usable_joins = tuple(
             item
             for item in plan.joins
@@ -315,39 +347,44 @@ class HiveInferenceCompiler:
         while remaining:
             selected: tuple[ValidatedInferredJoin, str] | None = None
             for join in usable_joins:
+                if id(join) in consumed:
+                    continue
                 left = key_for_object(join.left_object_ref)
                 right = key_for_object(join.right_object_ref)
                 if left in visited and right in remaining:
                     selected = (join, right)
                     break
-                if right in visited and left in remaining:
+                if join.join_type == "inner" and right in visited and left in remaining and left not in directed_rights:
                     selected = (join, left)
                     break
             if selected is None:
                 raise _error("候选程序连接图不完整，拒绝生成笛卡尔积")
             join, new_key = selected
+            consumed.add(id(join))
             left_alias = aliases[key_for_object(join.left_object_ref)]
             right_alias = aliases[key_for_object(join.right_object_ref)]
             condition = (
                 f"{_field_sql(join.left_field, left_alias)} = "
                 f"{_field_sql(join.right_field, right_alias)}"
             )
-            from_sql += f" INNER JOIN {source_sql(new_key)} ON {condition}"
+            if join.join_type == "inner":
+                if new_key in directed_rights:
+                    raise _error("不能用内连接替代左连接/排除连接的引入方向")
+                from_sql += f" INNER JOIN {source_sql(new_key)} ON {condition}"
+            else:
+                conditions = [condition, *scoped[new_key]]
+                match_sql = " AND ".join(conditions)
+                if join.join_type == "anti" and join.anti_strategy == "not_exists":
+                    predicates.append(f"NOT EXISTS (SELECT 1 FROM {source_sql(new_key)} WHERE {match_sql})")
+                else:
+                    from_sql += f" LEFT JOIN {source_sql(new_key)} ON {match_sql}"
+                    if join.join_type == "anti":
+                        predicates.append(f"{_field_sql(join.right_field, right_alias)} IS NULL")
             visited.add(new_key)
             remaining.remove(new_key)
 
-        predicates = [
-            _filter_sql(
-                item,
-                aliases[key_for_object(item.field.object_ref)],
-            )
-            for item in plan.filters
-        ]
-        predicates.extend(
-            _temporal_sql(item, aliases[item.object_ref])
-            for item in plan.temporal_decisions
-            if item.object_ref not in family_by_member
-        )
+        if len(consumed) != len(usable_joins):
+            raise _error("候选连接图包含未编译的额外关联条件")
         where = f" WHERE {' AND '.join(predicates)}" if predicates else ""
         create_sql = (
             f"CREATE TABLE {result_target} AS\n"
@@ -377,4 +414,3 @@ class HiveInferenceCompiler:
                     )
                 )
         return create_sql, tuple(lineage)
-
