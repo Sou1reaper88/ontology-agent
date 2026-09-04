@@ -17,7 +17,7 @@ export const WORKBENCH_STAGES: readonly WorkbenchStageDefinition[] = [
   { key: "import", number: "01", title: "导入元数据", description: "载入对象与字段定义" },
   { key: "objects", number: "02", title: "对象与字段", description: "校准业务语义说明" },
   { key: "relations", number: "03", title: "关系", description: "确认跨对象关联路径" },
-  { key: "temporal", number: "04", title: "时间策略", description: "定义业务账期规则" },
+  { key: "temporal", number: "04", title: "自动账期", description: "按表名识别分区与默认账期" },
   { key: "diagnostics", number: "05", title: "诊断", description: "处理质量与一致性问题" },
   { key: "versions", number: "06", title: "发布版本", description: "固化并切换活动版本" },
 ];

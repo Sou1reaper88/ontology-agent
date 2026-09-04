@@ -42,6 +42,42 @@ def test_parse_system_date_is_strict() -> None:
         parse_system_date("2026/08/24")
 
 
+@pytest.mark.parametrize("query", ["查询账期20260820", "P_DAY=20260820"])
+def test_compact_day_overrides_default(query: str) -> None:
+    parsed = parse_temporal_intents(
+        query,
+        system_date=SYSTEM_DATE,
+        grain=TemporalGrain.DAY,
+        default_strategy=TemporalDefaultStrategy.T_MINUS_2,
+        partition_target=_partition_target(),
+    )
+    assert parsed.partition.start == "20260820"
+    assert parsed.partition.source == TemporalIntentSource.EXPLICIT_ABSOLUTE
+
+
+@pytest.mark.parametrize(
+    "today,day,month",
+    [
+        (date(2026, 1, 1), "20251230", "202512"),
+        (date(2024, 3, 1), "20240228", "202402"),
+        (date(2024, 3, 2), "20240229", "202402"),
+    ],
+)
+def test_default_periods_use_calendar_arithmetic(today, day, month) -> None:
+    for grain, strategy, expected in (
+        (TemporalGrain.DAY, TemporalDefaultStrategy.T_MINUS_2, day),
+        (TemporalGrain.MONTH, TemporalDefaultStrategy.PREVIOUS_COMPLETE_MONTH, month),
+    ):
+        result = parse_temporal_intents(
+            "查询客户编码",
+            system_date=today,
+            grain=grain,
+            default_strategy=strategy,
+            partition_target=_partition_target(),
+        )
+        assert result.partition.start == expected
+
+
 def test_default_period_comes_from_the_ontology_strategy() -> None:
     monthly = _parse_month("查询客户编码")
     daily = parse_temporal_intents(

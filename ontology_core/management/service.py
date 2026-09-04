@@ -25,6 +25,7 @@ from ontology_core.management.paths import OntologyManagementConfigurationError,
 from ontology_core.management.publisher import PackagePublisher, PublishedVersionNotFoundError
 from ontology_core.management.store import FileDraftStore
 from ontology_core.management.templates import GeneratedImportTemplate, build_import_template
+from ontology_core.management.temporal import effective_temporal_policies
 from ontology_core.management.validation import DraftValidator
 from ontology_core.repository import OntologyRepository
 
@@ -68,7 +69,7 @@ class WorkspaceOverview:
             "objects": [item.model_dump(mode="json") for item in self.draft.objects],
             "relations": [item.model_dump(mode="json") for item in self.draft.relations],
             "temporal_policies": [
-                item.model_dump(mode="json") for item in self.draft.temporal_policies
+                item.model_dump(mode="json") for item in effective_temporal_policies(self.draft)
             ],
             "dispositions": [item.model_dump(mode="json") for item in self.draft.dispositions],
             "diagnostics": [item.model_dump(mode="json") for item in self.diagnostics],
@@ -79,7 +80,7 @@ class WorkspaceOverview:
                 "objects": len(self.draft.objects),
                 "fields": sum(len(item.fields) for item in self.draft.objects),
                 "relations": len(self.draft.relations),
-                "temporal_policies": len(self.draft.temporal_policies),
+                "temporal_policies": len(effective_temporal_policies(self.draft)),
             },
         }
 

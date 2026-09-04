@@ -20,6 +20,7 @@ from ontology_core.models import PackageFileRole, PackageInfo
 from ontology_core.parse_diagnostics import safe_parse_details
 from ontology_core.semantic_models import SemanticCatalog
 from ontology_core.semantic_parser import parse_catalog
+from ontology_core.temporal_conventions import with_automatic_temporal_policies
 from ontology_core.validator import OntologyValidator
 
 
@@ -158,7 +159,7 @@ class OntologyRepository:
                 "本体包未通过 SHACL 校验",
                 details={"violations": [item.model_dump() for item in report.violations]},
             )
-        catalog = parse_catalog(data_graph)
+        catalog = with_automatic_temporal_policies(parse_catalog(data_graph))
         info = PackageInfo(
             package_id=manifest.package_id,
             version=manifest.version,

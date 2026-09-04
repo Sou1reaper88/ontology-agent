@@ -13,6 +13,7 @@ from ontology_core.management.models import (
     DraftObject,
     WorkspaceDraft,
 )
+from ontology_core.management.temporal import effective_temporal_policies
 from ontology_core.management.validation import DraftValidator, managed_short_name
 from ontology_core.metadata_package import (
     _add_element_text,
@@ -204,7 +205,7 @@ class PackageBuilder:
         objects_by_id = {object_.id: object_ for object_ in draft.objects}
         fields_by_id = {field.id: field for object_ in draft.objects for field in object_.fields}
         policies = sorted(
-            draft.temporal_policies,
+            effective_temporal_policies(draft),
             key=lambda item: (item.object_id, item.partition_field_id, item.status),
         )
         for policy in policies:

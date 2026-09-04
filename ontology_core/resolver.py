@@ -8,6 +8,7 @@ from ontology_core.errors import (
     AmbiguousIdentifierError,
     ConceptNotFoundError,
     PropertyNotFoundError,
+    TemporalIntentError,
 )
 from ontology_core.normalization import normalize_text
 from ontology_core.repository import OntologySnapshot
@@ -21,6 +22,7 @@ from ontology_core.semantic_models import (
     SemanticElement,
     TemporalPartitionPolicy,
 )
+from ontology_core.temporal_conventions import catalog_partition_rules
 
 _Element = TypeVar("_Element", bound=SemanticElement)
 
@@ -46,6 +48,7 @@ class OntologyResolver:
 
     def __init__(self, snapshot: OntologySnapshot) -> None:
         catalog = snapshot.catalog
+        self._partition_rules = catalog_partition_rules(catalog)
         self._concepts = tuple(sorted(catalog.concepts, key=_sort_key))
         self._concepts_by_uri = _index(self._concepts, lambda concept: concept.uri)
         self._concepts_by_short_name = _index(
@@ -230,6 +233,12 @@ class OntologyResolver:
 
     def get_temporal_policy(self, concept_id: str) -> TemporalPartitionPolicy | None:
         concept = self.get_concept(concept_id)
+        rule = self._partition_rules.get(concept.uri)
+        if rule is not None and len(rule[4]) != 1:
+            raise TemporalIntentError(
+                f"表 {rule[0]} 缺少唯一启用的 {rule[1]} 分区字段，请补充字段定义",
+                details={"reason": "automatic_partition_field_missing"},
+            )
         active = tuple(
             item
             for item in self._temporal_policies_by_concept.get(concept.uri, ())

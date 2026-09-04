@@ -14,6 +14,7 @@ from ontology_core.semantic_models import TemporalDefaultStrategy, TemporalGrain
 _XSD_DATE = "http://www.w3.org/2001/XMLSchema#date"
 _UNBOUNDED = ("全部历史", "不限时间", "不限制账期", "全量数据")
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_COMPACT_DAY = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
 _MONTH_RANGE = re.compile(
     r"(?P<sy>\d{4})年(?P<sm>1[0-2]|0?[1-9])月(?:至|到)"
     r"(?:(?P<ey>\d{4})年)?(?P<em>1[0-2]|0?[1-9])月"
@@ -176,6 +177,13 @@ def _month_tokens(query: str, system_date: date) -> list[_Token]:
 def _day_tokens(query: str, system_date: date) -> list[_Token]:
     tokens: list[_Token] = []
     occupied: list[tuple[int, int]] = []
+    for match in _COMPACT_DAY.finditer(query):
+        try:
+            value_date = date(int(match[1]), int(match[2]), int(match[3]))
+        except ValueError as exc:
+            raise _error("日账期格式无效", "invalid_day_period") from exc
+        value = value_date.strftime("%Y%m%d")
+        _add_token(tokens, occupied, match, value, value, TemporalIntentSource.EXPLICIT_ABSOLUTE)
     for match in _DAY_RANGE.finditer(query):
         start_date = parse_system_date(match["start"])
         end_date = parse_system_date(match["end"])

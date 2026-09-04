@@ -229,6 +229,27 @@ class DraftValidator:
         self, draft: WorkspaceDraft, fields_by_id: dict[str, str]
     ) -> list[DraftDiagnostic]:
         diagnostics: list[DraftDiagnostic] = []
+        from ontology_core.temporal_conventions import partition_convention
+
+        for object_ in draft.objects:
+            convention = partition_convention(object_.physical_name)
+            if convention is None or object_.status != "active":
+                continue
+            partition_name = convention[0]
+            matches = [
+                field
+                for field in object_.fields
+                if field.physical_name.upper() == partition_name and field.status == "active"
+            ]
+            if len(matches) != 1:
+                diagnostics.append(
+                    _diagnostic(
+                        "automatic_partition_field_missing",
+                        f"对象 {object_.physical_name} 需要唯一启用的 {partition_name} 分区字段",
+                        "error",
+                        (object_.id,),
+                    )
+                )
         object_ids = {item.id for item in draft.objects}
         policy_counts = Counter(policy.object_id for policy in draft.temporal_policies)
         for object_id, count in policy_counts.items():

@@ -113,12 +113,8 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
     ),
     temporal: (
       <TemporalPanel
-        workspaceId={workspaceId}
-        revision={overview.revision}
         objects={overview.objects}
         policies={overview.temporalPolicies}
-        onChanged={refreshWorkspace}
-        onConflict={handleConflict}
       />
     ),
     diagnostics: (

@@ -1,195 +1,47 @@
-import { useEffect, useState } from "react";
-import { Alert, Button, Card, InputNumber, Select, Space, Switch, Tag, Typography, message } from "antd";
-import { apiErrorMessage, isDraftRevisionConflict, upsertTemporalPolicy } from "./api";
+import { Alert, Card, Space, Table, Tag, Typography } from "antd";
 import type { DraftObject, DraftTemporalPolicy } from "./types";
 
 interface TemporalPanelProps {
-  workspaceId: string;
-  revision: number;
   objects: DraftObject[];
   policies: DraftTemporalPolicy[];
-  onChanged: () => Promise<void>;
-  onConflict: () => Promise<void>;
 }
 
-export const strategyOptions = {
-  day: [{ value: "t_minus_2", label: "系统日 T-2" }],
-  month: [{ value: "previous_complete_month", label: "上一个完整月" }],
-} as const;
-
-function objectLabel(item: DraftObject): string {
-  return item.label ? `${item.label}（${item.physicalName}）` : item.physicalName;
-}
-
-function emptyPolicy(objectId: string): DraftTemporalPolicy {
-  return {
-    objectId,
-    partitionFieldId: "",
-    grain: "day",
-    defaultStrategy: "t_minus_2",
-    allowQueryOverride: true,
-    status: "active",
-    priority: 100,
-  };
-}
-
-export default function TemporalPanel({
-  workspaceId,
-  revision,
-  objects,
-  policies,
-  onChanged,
-  onConflict,
-}: TemporalPanelProps) {
-  const [drafts, setDrafts] = useState<Record<string, DraftTemporalPolicy>>({});
-  const [savingObjectId, setSavingObjectId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDrafts(
-      Object.fromEntries(
-        objects.map((object) => [
-          object.id,
-          policies.find((policy) => policy.objectId === object.id) ?? emptyPolicy(object.id),
-        ])
-      )
-    );
-  }, [objects, policies]);
-
-  const update = <K extends keyof DraftTemporalPolicy>(
-    objectId: string,
-    key: K,
-    value: DraftTemporalPolicy[K]
-  ) => {
-    setDrafts((current) => ({
-      ...current,
-      [objectId]: { ...(current[objectId] ?? emptyPolicy(objectId)), [key]: value },
-    }));
-  };
-
-  const changeGrain = (objectId: string, grain: DraftTemporalPolicy["grain"]) => {
-    setDrafts((current) => ({
-      ...current,
-      [objectId]: {
-        ...(current[objectId] ?? emptyPolicy(objectId)),
-        grain,
-        defaultStrategy: strategyOptions[grain][0].value,
-      },
-    }));
-  };
-
-  const save = async (object: DraftObject) => {
-    const policy = drafts[object.id] ?? emptyPolicy(object.id);
-    if (!policy.partitionFieldId) {
-      message.error("请选择该对象拥有的分区字段");
-      return;
-    }
-    setSavingObjectId(object.id);
-    try {
-      await upsertTemporalPolicy(workspaceId, policy, revision);
-      message.success(`${objectLabel(object)} 的时间策略已保存`);
-      await onChanged();
-    } catch (error) {
-      if (isDraftRevisionConflict(error)) {
-        await onConflict();
-      } else {
-        message.error(apiErrorMessage(error, "时间策略保存失败"));
-      }
-    } finally {
-      setSavingObjectId(null);
-    }
-  };
+export default function TemporalPanel({ objects, policies }: TemporalPanelProps) {
+  const rows = objects.map((object) => {
+    const policy = policies.find((item) => item.objectId === object.id);
+    const field = object.fields.find((item) => item.id === policy?.partitionFieldId);
+    const suffix = object.physicalName.toUpperCase();
+    const expectedField = suffix.endsWith("_D") ? "P_DAY" : suffix.endsWith("_M") ? "P_MON" : null;
+    return { ...object, policy, field, expectedField };
+  });
 
   return (
-    <Card id="temporal-editor" title="对象时间策略" bordered={false}>
+    <Card id="temporal-editor" title="自动账期" bordered={false}>
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-        <Alert
-          type="info"
-          showIcon
-          message="每个对象独立配置一个时间策略"
-          description="只可选择该对象拥有的分区字段；不存在全局默认策略。"
-        />
-        {objects.map((object) => {
-          const policy = drafts[object.id] ?? emptyPolicy(object.id);
-          return (
-            <Card key={object.id} size="small" title={objectLabel(object)}>
-              <Space wrap align="start">
-                <div>
-                  <Typography.Text type="secondary">分区字段</Typography.Text>
-                  <Select
-                    style={{ display: "block", width: 220, marginTop: 4 }}
-                    value={policy.partitionFieldId || undefined}
-                    placeholder="选择本对象字段"
-                    options={object.fields.map((field) => ({
-                      value: field.id,
-                      label: field.label ? `${field.label}（${field.physicalName}）` : field.physicalName,
-                    }))}
-                    onChange={(value) => update(object.id, "partitionFieldId", value)}
-                  />
-                </div>
-                <div>
-                  <Typography.Text type="secondary">粒度</Typography.Text>
-                  <Select
-                    style={{ display: "block", width: 120, marginTop: 4 }}
-                    value={policy.grain}
-                    options={[
-                      { value: "day", label: "日" },
-                      { value: "month", label: "月" },
-                    ]}
-                    onChange={(value: DraftTemporalPolicy["grain"]) => changeGrain(object.id, value)}
-                  />
-                </div>
-                <div>
-                  <Typography.Text type="secondary">默认算法</Typography.Text>
-                  <Select
-                    style={{ display: "block", width: 180, marginTop: 4 }}
-                    value={policy.defaultStrategy}
-                    options={[...strategyOptions[policy.grain]]}
-                    onChange={(value) => update(object.id, "defaultStrategy", value)}
-                  />
-                </div>
-                <div>
-                  <Typography.Text type="secondary">状态</Typography.Text>
-                  <Select
-                    style={{ display: "block", width: 110, marginTop: 4 }}
-                    value={policy.status}
-                    options={[
-                      { value: "active", label: "启用" },
-                      { value: "inactive", label: "停用" },
-                    ]}
-                    onChange={(value) => update(object.id, "status", value)}
-                  />
-                </div>
-                <div>
-                  <Typography.Text type="secondary">优先级</Typography.Text>
-                  <InputNumber
-                    min={0}
-                    style={{ display: "block", width: 110, marginTop: 4 }}
-                    value={policy.priority}
-                    onChange={(value) => update(object.id, "priority", value ?? 100)}
-                  />
-                </div>
-                <div>
-                  <Typography.Text type="secondary">查询可覆盖</Typography.Text>
-                  <Switch
-                    style={{ display: "block", marginTop: 8 }}
-                    checked={policy.allowQueryOverride}
-                    checkedChildren="允许"
-                    unCheckedChildren="不允许"
-                    onChange={(value) => update(object.id, "allowQueryOverride", value)}
-                  />
-                </div>
-                <Button type="primary" loading={savingObjectId === object.id} onClick={() => void save(object)}>
-                  保存此对象策略
-                </Button>
+        <Alert type="info" showIcon message="无需逐表配置，按表名后缀自动识别"
+          description="_D 表使用 P_DAY，默认系统日期前两天（YYYYMMDD）；_M 表使用 P_MON，默认上一个完整自然月（YYYYMM）。需求明确指定账期时优先使用指定值。表名与字段名不区分大小写。" />
+        <Typography.Text type="secondary">
+          例如系统日期为 2026-08-24：默认 P_DAY = 20260822，P_MON = 202607。
+          以下展示当前草稿；取数仍使用已发布版本的表字段定义，并自动应用同一规则。
+        </Typography.Text>
+        <Table rowKey="id" dataSource={rows} pagination={{ pageSize: 10 }} scroll={{ x: 800 }}
+          columns={[
+            { title: "对象", dataIndex: "physicalName", render: (name, row) => (
+              <Space direction="vertical" size={0}>
+                <Typography.Text code>{name}</Typography.Text>
+                {row.label && <Typography.Text type="secondary">{row.label}</Typography.Text>}
               </Space>
-              <div style={{ marginTop: 12 }}>
-                <Tag color={policy.grain === "day" ? "blue" : "purple"}>
-                  {policy.grain === "day" ? "日粒度仅支持系统日 T-2" : "月粒度仅支持上一个完整月"}
-                </Tag>
-              </div>
-            </Card>
-          );
-        })}
+            ) },
+            { title: "分区字段", render: (_, row) => row.field?.physicalName ?? row.expectedField ?? "—" },
+            { title: "默认账期", render: (_, row) => row.policy
+              ? row.policy.grain === "day" ? "系统日期 − 2 天" : "上一个完整自然月"
+              : "—" },
+            { title: "识别状态", render: (_, row) => row.status === "inactive"
+              ? <Tag>对象已停用</Tag>
+              : row.policy ? <Tag color="green">{row.expectedField ? "自动应用" : "兼容原有策略"}</Tag>
+              : row.expectedField ? <Tag color="red">缺少唯一启用的 {row.expectedField} 字段</Tag>
+              : <Tag>非 _D / _M 表，不自动推断</Tag> },
+          ]} />
       </Space>
     </Card>
   );

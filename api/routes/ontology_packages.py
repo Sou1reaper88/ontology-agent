@@ -428,22 +428,28 @@ def _envelope(data: Any, revision: int | None) -> dict[str, Any]:
 
 
 def _draft_envelope(draft) -> dict[str, Any]:
+    from ontology_core.management.temporal import effective_temporal_policies
+
     return _envelope(
         {
             "objects": [item.model_dump(mode="json") for item in draft.objects],
             "relations": [item.model_dump(mode="json") for item in draft.relations],
-            "temporal_policies": [item.model_dump(mode="json") for item in draft.temporal_policies],
+            "temporal_policies": [
+                item.model_dump(mode="json") for item in effective_temporal_policies(draft)
+            ],
         },
         draft.revision,
     )
 
 
 def _counts(draft) -> dict[str, int]:
+    from ontology_core.management.temporal import effective_temporal_policies
+
     return {
         "objects": len(draft.objects),
         "fields": sum(len(item.fields) for item in draft.objects),
         "relations": len(draft.relations),
-        "temporal_policies": len(draft.temporal_policies),
+        "temporal_policies": len(effective_temporal_policies(draft)),
     }
 
 

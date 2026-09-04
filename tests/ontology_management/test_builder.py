@@ -136,6 +136,107 @@ def _workspace(*, relation_confirmed: bool = True) -> WorkspaceDraft:
     )
 
 
+def test_builder_derives_partition_policies_without_manual_configuration(tmp_path: Path) -> None:
+    draft = _workspace().model_copy(update={"temporal_policies": ()})
+    snapshot = PackageBuilder().build(draft, tmp_path / "automatic", "1.0.0")
+    policies = snapshot.catalog.temporal_policies
+    assert len(policies) == 2
+    assert {p.grain for p in policies} == {TemporalGrain.DAY, TemporalGrain.MONTH}
+    assert all(p.allow_query_override for p in policies)
+    from ontology_core.metadata_candidates import MetadataCandidateCatalog
+    from ontology_core.resolver import OntologyResolver
+
+    candidates = MetadataCandidateCatalog.from_snapshot(snapshot)
+    assert sum(o.temporal_policy is not None for o in candidates.objects) == 2
+    resolver = OntologyResolver(snapshot)
+    assert (
+        sum(resolver.get_temporal_policy(c.uri) is not None for c in snapshot.catalog.concepts) == 2
+    )
+
+
+def test_automatic_policies_are_case_insensitive_and_ignore_manual_switches(tmp_path: Path) -> None:
+    draft = _workspace()
+    objects = tuple(
+        o.model_copy(
+            update={
+                "physical_name": o.physical_name.lower(),
+                "fields": tuple(
+                    f.model_copy(update={"physical_name": f.physical_name.lower()})
+                    for f in o.fields
+                ),
+            }
+        )
+        for o in draft.objects
+    )
+    draft = draft.model_copy(
+        update={
+            "objects": objects,
+            "temporal_policies": tuple(
+                p.model_copy(update={"status": "inactive", "allow_query_override": False})
+                for p in draft.temporal_policies
+            ),
+        }
+    )
+    snapshot = PackageBuilder().build(draft, tmp_path / "lower-case", "1.0.0")
+    assert len(snapshot.catalog.temporal_policies) == 2
+    assert all(
+        p.status == "active" and p.allow_query_override for p in snapshot.catalog.temporal_policies
+    )
+
+
+def test_overview_reports_derived_policies_without_mutating_draft() -> None:
+    from ontology_core.management.service import WorkspaceOverview
+
+    draft = _workspace().model_copy(update={"temporal_policies": ()})
+    data = WorkspaceOverview(draft, (), None, ()).public_data()
+    assert len(data["temporal_policies"]) == 2
+    assert data["counts"]["temporal_policies"] == 2
+    assert draft.temporal_policies == ()
+
+
+def test_legacy_package_missing_partition_blocks_strict_query(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from ontology_core.errors import TemporalIntentError
+    from ontology_core.resolver import OntologyResolver
+    from ontology_core.temporal_conventions import with_automatic_temporal_policies
+
+    snapshot = PackageBuilder().build(_workspace(), tmp_path / "missing-field", "1.0.0")
+    catalog = snapshot.catalog.model_copy(
+        update={
+            "mappings": tuple(m for m in snapshot.catalog.mappings if m.field_name != "P_DAY"),
+        }
+    )
+    catalog = with_automatic_temporal_policies(catalog)
+    daily = next(m.semantic_element_uri for m in catalog.mappings if m.object_name == "ORDER_D")
+    resolver = OntologyResolver(replace(snapshot, catalog=catalog))
+    with pytest.raises(TemporalIntentError, match="P_DAY"):
+        resolver.get_temporal_policy(daily)
+
+
+def test_reloading_old_package_derives_policies_without_changing_files(tmp_path: Path) -> None:
+    from ontology_core.repository import OntologyRepository
+
+    target = tmp_path / "old-package"
+    PackageBuilder().build(_workspace(), target, "1.0.0")
+    # Simulate an already published package without any time configuration.
+    (target / "rules.ttl").write_text("", encoding="utf-8")
+    before = {p.name: p.read_bytes() for p in target.iterdir() if p.is_file()}
+    repository = OntologyRepository()
+    repository.publish(target)
+    assert len(repository.current().catalog.temporal_policies) == 2
+    assert before == {p.name: p.read_bytes() for p in target.iterdir() if p.is_file()}
+
+
+def test_missing_conventional_partition_is_a_publish_error() -> None:
+    draft = _workspace().model_copy(update={"temporal_policies": ()})
+    objects = tuple(o.model_copy(update={"fields": o.fields[:1]}) for o in draft.objects)
+    diagnostics = DraftValidator().validate(draft.model_copy(update={"objects": objects}))
+    missing = [d for d in diagnostics if d.code == "automatic_partition_field_missing"]
+    assert len(missing) == 2
+    assert all(d.severity == "error" for d in missing)
+
+
 def test_builder_generates_deterministic_multi_object_six_file_package(
     tmp_path: Path,
 ) -> None:

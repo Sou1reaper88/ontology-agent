@@ -325,7 +325,8 @@ class MetadataInferenceValidator:
                 return _failure(
                     "missing_temporal_policy",
                     "候选对象缺少安全的时间分区策略",
-                    f"请为对象“{object_.label}”补充时间策略",
+                    f"请检查对象“{object_.label}”的表名后缀与分区字段："
+                    "_D 对应 P_DAY，_M 对应 P_MON",
                 )
             partition_field = next(
                 (item for item in object_.fields if item.ref == policy.partition_field_ref),
