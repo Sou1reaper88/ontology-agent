@@ -22,6 +22,11 @@ _CJK = re.compile(r"[\u3400-\u9fff]+")
 _BROAD_SCOPE_MARKERS = ("全省", "所有地市", "全部地市", "全量地市", "各地市")
 
 
+def _explicit_name(name: str, request: str) -> bool:
+    return bool(re.search(r"(?<![a-z0-9_])" + re.escape(name.casefold())
+                          + r"(?![a-z0-9_])", request.casefold()))
+
+
 def _terms(request: str) -> tuple[str, ...]:
     normalized = normalize_text(request)
     found: set[str] = set(_WORD.findall(normalized))
@@ -280,9 +285,14 @@ class MetadataCandidateCatalog:
         request: str,
         *,
         object_limit: int = 8,
-        field_limit_per_object: int = 40,
+        field_limit_per_object: int = 12,
     ) -> CandidateContext:
         terms = _terms(request)
+        key_uris = {
+            uri for relation in self._snapshot.catalog.relations
+            for uri in (relation.source_property_uri, relation.target_property_uri) if uri
+        }
+        key_refs = {p.short_name for p in self._snapshot.catalog.properties if p.uri in key_uris}
         ranked: list[CandidateObject] = []
         for object_ in self._objects:
             fields: list[CandidateField] = []
@@ -301,21 +311,21 @@ class MetadataCandidateCatalog:
                     )
                 )
             fields.sort(key=lambda item: (-item.retrieval_score, item.ref))
-            selected_fields = list(fields[:field_limit_per_object])
+            detailed_refs = {f.ref for f in fields[:max(0, field_limit_per_object)]}
+            detailed_refs.update(
+                f.ref for f in fields
+                if _explicit_name(f.physical_name, request)
+                or (len(f.label) > 1 and normalize_text(f.label) in normalize_text(request))
+                or f.ref in key_refs
+            )
             policy = object_.temporal_policy
-            if policy is not None and all(
-                item.ref != policy.partition_field_ref for item in selected_fields
-            ):
-                partition_field = next(
-                    (
-                        item
-                        for item in fields
-                        if item.ref == policy.partition_field_ref
-                    ),
-                    None,
-                )
-                if partition_field is not None:
-                    selected_fields.append(partition_field)
+            if policy is not None:
+                detailed_refs.add(policy.partition_field_ref)
+            selected_fields = tuple(
+                field if field.ref in detailed_refs else field.model_copy(
+                    update={"description": None, "details_loaded": False}
+                ) for field in fields
+            )
             object_score, object_terms = _rank(
                 terms,
                 (
@@ -335,7 +345,8 @@ class MetadataCandidateCatalog:
                 )
             )
         ranked.sort(key=lambda item: (-item.retrieval_score, item.ref))
-        selected = [item for item in ranked if item.retrieval_score > 0][:object_limit]
+        explicit = [item for item in ranked if _explicit_name(item.physical_name, request)]
+        selected = explicit or [item for item in ranked if item.retrieval_score > 0][:object_limit]
 
         is_broad = any(marker in normalize_text(request) for marker in _BROAD_SCOPE_MARKERS)
         if is_broad:

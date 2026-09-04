@@ -47,6 +47,7 @@ class CandidateField(FrozenModel):
     physical_name: str = Field(min_length=1)
     retrieval_score: int = Field(default=0, ge=0)
     matched_terms: tuple[str, ...] = ()
+    details_loaded: bool = True
 
 
 class CandidateObject(FrozenModel):

@@ -19,6 +19,7 @@ from ontology_core.inference_validation import (
     MetadataInferenceValidator,
 )
 from ontology_core.metadata_candidates import MetadataCandidateCatalog
+from ontology_core.metadata_lookup import FieldDetailLookup
 from ontology_core.program_models import CompiledProgram, ProgramDiagnostic
 from ontology_core.repository import OntologySnapshot
 from tools.llm_client import StructuredPlanningError
@@ -31,6 +32,7 @@ class InferenceClient(Protocol):
         request: str,
         candidates: CandidateContext,
         conversation_context: str | None = None,
+        lookup_fields: Callable[[list[str]], list[dict]] | None = None,
     ) -> InferredProgramDraft: ...
 
 
@@ -119,10 +121,12 @@ class MetadataInferenceService:
                 ),
                 missing_information=("请补充需求涉及的表名、表描述和字段描述",),
             )
+        lookup = FieldDetailLookup(catalog, candidates)
         try:
             kwargs = {
                 "request": request,
                 "candidates": candidates,
+                "lookup_fields": lookup,
             }
             if conversation_context:
                 kwargs["conversation_context"] = conversation_context
@@ -140,7 +144,7 @@ class MetadataInferenceService:
             )
         validation = self._validator.validate(
             draft,
-            candidates=candidates,
+            candidates=lookup.enriched(),
             catalog=catalog,
             system_time=system_time,
             request=request,
@@ -189,4 +193,3 @@ class MetadataInferenceService:
             ),
             missing_information=("请基于新的活动本体版本重新生成",),
         )
-

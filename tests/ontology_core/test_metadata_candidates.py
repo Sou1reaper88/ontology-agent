@@ -192,3 +192,27 @@ def test_irrelevant_request_returns_an_empty_candidate_context() -> None:
 
     assert context.objects == ()
     assert context.families == ()
+
+
+def test_field_detail_budget_never_hides_full_field_index() -> None:
+    catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
+    context = catalog.retrieve("湖州", object_limit=1, field_limit_per_object=0)
+    fields = {f.physical_name: f for f in context.objects[0].fields}
+    assert set(fields) == {"MOBILE_NO", "P_DAY"}
+    assert fields["MOBILE_NO"].description is None
+    assert fields["P_DAY"].description is not None
+
+
+def test_explicit_field_keeps_details_even_when_budget_is_zero() -> None:
+    catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
+    context = catalog.retrieve("D_BBZX_DR_GSM_HU_D 的 MOBILE_NO", field_limit_per_object=0)
+    assert [o.ref for o in context.objects] == ["GsmHu"]
+    field = next(f for f in context.objects[0].fields if f.physical_name == "MOBILE_NO")
+    assert field.description == "用户的移动电话号码"
+
+
+def test_explicit_chinese_field_label_keeps_details() -> None:
+    catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
+    context = catalog.retrieve("查询湖州手机号码", object_limit=1, field_limit_per_object=0)
+    assert next(f for f in context.objects[0].fields
+                if f.physical_name == "MOBILE_NO").description is not None
