@@ -172,18 +172,11 @@ def test_error_diagnostics_remain_publish_blocking_despite_a_disposition() -> No
     assert error.id in {item.id for item in exc_info.value.diagnostics}
 
 
-def test_diagnostic_ids_ignore_mutable_messages_and_report_description_warnings() -> None:
+def test_optional_metadata_does_not_emit_warnings() -> None:
     validator = DraftValidator()
     first = workspace(description="")
     second = workspace(description=" ")
 
-    first_diagnostic = next(
-        item for item in validator.validate(first) if item.code == "blank_description"
-    )
-    second_diagnostic = next(
-        item for item in validator.validate(second) if item.code == "blank_description"
-    )
-
-    assert first_diagnostic.id == second_diagnostic.id
-    assert first_diagnostic.related_ids == ("object/customer",)
-    assert first_diagnostic.severity == "warning"
+    assert validator.validate(first) == ()
+    assert validator.validate(second) == ()
+    assert validator.assert_publishable(first) == ()

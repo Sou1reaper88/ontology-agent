@@ -35,7 +35,7 @@ if (stageOrder !== "import,objects,relations,temporal,diagnostics,versions") {
 if (workbenchStageSummary("objects", overview, 5) !== "3 个对象 · 24 个字段") {
   throw new Error("objects summary must use asset counts");
 }
-if (workbenchStageSummary("diagnostics", overview, 5) !== "1 个错误 · 2 个警告 · 1 项待确认") {
+if (workbenchStageSummary("diagnostics", overview, 5) !== "1 个错误 · 1 项待确认") {
   throw new Error("diagnostics summary must group severity counts");
 }
 if (workbenchStageSummary("versions", overview, 5) !== "活动 1.4.0 · 共 5 个版本") {

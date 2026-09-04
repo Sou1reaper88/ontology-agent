@@ -77,6 +77,14 @@ def synthetic_xlsx(*sheets: tuple[str, list[list[object]]]) -> bytes:
     return content.getvalue()
 
 
+def test_optional_descriptions_do_not_emit_import_warnings() -> None:
+    payload = "\t".join(STANDARD_COLUMNS) + "\n" + metadata_row("DEMO_OBJECT", "OBJECT_ID")
+    result = parse_metadata_upload("metadata.tsv", payload.encode("utf-8"), LIMITS)
+
+    assert len(result.objects) == 1
+    assert not any(item.severity == "warning" for item in result.diagnostics)
+
+
 def synthetic_xlsx_with_member(name: str, data: bytes) -> bytes:
     archive_name = name.replace("\\", "/")
     payload = synthetic_xlsx(

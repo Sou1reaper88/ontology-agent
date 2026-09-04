@@ -223,10 +223,12 @@ def _to_parsed_upload(
         diagnostics.extend(
             _draft_diagnostic(item, object_id, draft.table.physical_name, draft.source_name)
             for item in metadata_diagnostics
+            if item.severity.value != "warning"
         )
         diagnostics.extend(
             _draft_diagnostic(item, None, None, draft.source_name)
             for item in draft.document_diagnostics
+            if item.severity.value != "warning"
         )
     return ParsedUpload(
         file_name=file_name,

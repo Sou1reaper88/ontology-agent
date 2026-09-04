@@ -155,10 +155,18 @@ const mappedPreview = mapImportPreview({
       message: "需要核对",
       related_ids: ["object/1"],
     },
+    {
+      id: "diagnostic/2",
+      code: "invalid_object_identifier",
+      severity: "error",
+      message: "标识符无效",
+      related_ids: ["object/1"],
+    },
   ],
 });
 equal(String(mappedPreview.objectCount), "2", "preview object count is mapped");
 equal(String(mappedPreview.fieldCount), "5", "preview field count is mapped");
+equal(String(mappedPreview.diagnostics.length), "1", "non-blocking warnings are hidden");
 equal(mappedPreview.diagnostics[0].relatedIds[0], "object/1", "diagnostic IDs are mapped");
 
 const importBody = importPreviewFormData([], 7);

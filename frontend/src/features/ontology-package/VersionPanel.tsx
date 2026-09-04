@@ -55,7 +55,6 @@ export default function VersionPanel({
   const [rollbackReason, setRollbackReason] = useState("");
   const [rollingBack, setRollingBack] = useState(false);
   const disposed = new Set(dispositions.map((item) => item.diagnosticId));
-  const warnings = diagnostics.filter((item) => item.severity === "warning");
   const blocking = diagnostics.filter(
     (item) => item.severity === "error" || (item.severity === "confirmation_required" && !disposed.has(item.id))
   );
@@ -75,8 +74,7 @@ export default function VersionPanel({
         <Space direction="vertical" size="small">
           <Typography.Text>版本：{values.version.trim()}</Typography.Text>
           <Typography.Text>草稿修订：{revision}</Typography.Text>
-          <Typography.Text strong>发布前警告汇总</Typography.Text>
-          {warnings.length ? warnings.map((item) => <Typography.Text key={item.id}>• {item.message}</Typography.Text>) : <Typography.Text type="secondary">当前没有警告</Typography.Text>}
+          <Typography.Text type="secondary">将固化当前草稿并切换活动版本。</Typography.Text>
         </Space>
       ),
       onOk: async () => {

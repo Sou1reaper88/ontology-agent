@@ -131,7 +131,7 @@ export default function DiagnosticsPanel({
         <Alert
           type="info"
           showIcon
-          message="错误需修正后才能发布；警告会在发布确认中完整列出"
+          message="仅展示错误及阻断发布的待确认项"
           description="需要确认的诊断可修正元数据，或记录明确且非空的处置说明。"
         />
         <Space wrap>
@@ -141,7 +141,7 @@ export default function DiagnosticsPanel({
             onChange={setSeverity}
             options={[
               { value: "all", label: "全部严重程度" },
-              ...Object.entries(severityLabels).map(([value, label]) => ({ value, label })),
+              ...Object.entries(severityLabels).filter(([value]) => value !== "warning").map(([value, label]) => ({ value, label })),
             ]}
           />
           <Select

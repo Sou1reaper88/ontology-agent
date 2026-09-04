@@ -55,7 +55,8 @@ export function workbenchStageSummary(
     case "diagnostics": {
       const severityCount = (severity: string) =>
         overview.diagnostics.filter((item) => item.severity === severity).length;
-      return `${severityCount("error")} 个错误 · ${severityCount("warning")} 个警告 · ${severityCount("confirmation_required")} 项待确认`;
+      const pending = severityCount("confirmation_required");
+      return `${severityCount("error")} 个错误${pending ? ` · ${pending} 项待确认` : ""}`;
     }
     case "versions":
       return `活动 ${overview.activeVersion?.version ?? "未发布"} · 共 ${versionCount} 个版本`;

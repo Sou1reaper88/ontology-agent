@@ -425,28 +425,27 @@ def test_resolving_diagnostic_requires_confirmation_and_complete_audit_dispositi
     assert resolved.dispositions[0].diagnostic_id == diagnostic.id
 
 
-def test_resolving_error_or_warning_diagnostics_is_rejected_without_mutation(
+def test_resolving_errors_or_removed_warnings_is_rejected_without_mutation(
     tmp_path: Path,
 ) -> None:
     editor, store = initialized_editor(tmp_path)
     customer = store.read("evaluation").objects[0]
-    updated = editor.update_object("evaluation", customer.id, expected_revision=0, description="")
-    warning = next(
-        item for item in editor.validator.validate(updated) if item.code == "blank_description"
-    )
+    editor.update_object("evaluation", customer.id, expected_revision=0, description="")
+    from ontology_core.management.validation import stable_diagnostic_id
+
+    removed_warning_id = stable_diagnostic_id("blank_description", (customer.id,))
     before = draft_bytes(tmp_path)
 
-    with pytest.raises(OntologyError) as exc_info:
+    with pytest.raises(ValueError, match="未找到当前诊断"):
         editor.resolve_diagnostic(
             "evaluation",
-            warning.id,
+            removed_warning_id,
             expected_revision=1,
             actor="maintainer",
             explanation="cannot dismiss warnings",
             resolved_at=datetime(2026, 8, 25, tzinfo=UTC),
         )
 
-    assert exc_info.value.code == "draft_diagnostic_disposition_invalid"
     assert draft_bytes(tmp_path) == before
     assert store.read("evaluation").revision == 1
 

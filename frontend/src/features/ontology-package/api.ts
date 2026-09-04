@@ -324,7 +324,7 @@ export async function fetchWorkspaceOverview(workspaceId: string): Promise<Works
     relations: data.relations.map(relation),
     temporalPolicies: data.temporal_policies.map(temporalPolicy),
     dispositions: data.dispositions.map(disposition),
-    diagnostics: data.diagnostics.map(diagnostic),
+    diagnostics: data.diagnostics.filter((item) => item.severity !== "warning").map(diagnostic),
   };
 }
 
@@ -353,7 +353,7 @@ export function mapImportPreview(preview: ImportPreviewResponse): ImportPreview 
     token: preview.token,
     objectCount: preview.object_count,
     fieldCount: preview.field_count,
-    diagnostics: preview.diagnostics.map(diagnostic),
+    diagnostics: preview.diagnostics.filter((item) => item.severity !== "warning").map(diagnostic),
   };
 }
 
@@ -514,7 +514,7 @@ export async function validateWorkspace(
   const response = await client.post<ApiEnvelope<{ diagnostics: ApiDiagnostic[] }>>(
     `${workspacePath(workspaceId)}/validate`
   );
-  return { diagnostics: response.data.data.diagnostics.map(diagnostic), revision: response.data.revision };
+  return { diagnostics: response.data.data.diagnostics.filter((item) => item.severity !== "warning").map(diagnostic), revision: response.data.revision };
 }
 
 export async function fetchVersions(workspaceId: string): Promise<VersionSummary[]> {

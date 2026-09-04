@@ -35,7 +35,6 @@ class DraftValidator:
         diagnostics: list[DraftDiagnostic] = []
         diagnostics.extend(self._identity_diagnostics(draft))
         diagnostics.extend(self._managed_short_name_diagnostics(draft))
-        diagnostics.extend(self._metadata_diagnostics(draft))
         fields_by_id = self._fields_by_id(draft)
         diagnostics.extend(self._relation_diagnostics(draft, fields_by_id))
         diagnostics.extend(self._temporal_diagnostics(draft, fields_by_id))
@@ -103,41 +102,6 @@ class DraftValidator:
                             (field.id,),
                         )
                     )
-        return diagnostics
-
-    def _metadata_diagnostics(self, draft: WorkspaceDraft) -> list[DraftDiagnostic]:
-        diagnostics: list[DraftDiagnostic] = []
-        for object_ in draft.objects:
-            if not _has_text(object_.description):
-                diagnostics.append(
-                    _diagnostic("blank_description", "对象描述为空", "warning", (object_.id,))
-                )
-            if not _has_text(object_.label):
-                diagnostics.append(
-                    _diagnostic(
-                        "unconfigured_object_label", "对象显示名称未配置", "warning", (object_.id,)
-                    )
-                )
-            for field in object_.fields:
-                if not _has_text(field.description):
-                    diagnostics.append(
-                        _diagnostic("blank_description", "属性描述为空", "warning", (field.id,))
-                    )
-                if not _has_text(field.label):
-                    diagnostics.append(
-                        _diagnostic(
-                            "unconfigured_field_label", "属性显示名称未配置", "warning", (field.id,)
-                        )
-                    )
-        if draft.data_source.dialect is None:
-            diagnostics.append(
-                _diagnostic(
-                    "unconfigured_data_source_dialect",
-                    "数据源方言未配置",
-                    "warning",
-                    (draft.data_source.id,),
-                )
-            )
         return diagnostics
 
     @staticmethod
