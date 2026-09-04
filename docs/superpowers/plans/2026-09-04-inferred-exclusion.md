@@ -16,6 +16,6 @@ No production SQL execution. No failed-plan retries. No real metadata in Git. Pr
 - [x] Extend inference models with join_type, anti_strategy, filter scope and blocking_issues; validate references, directed topology and unsafe anti output/dependencies.
 - [x] Compile directed joins with scoped predicates; emit IS NULL or NOT EXISTS; reject unsupported graph shapes rather than silently dropping edges.
 - [x] Explain semantics and blocking_issues in planner prompt; run targeted compiler/validation/LLM tests.
-- [ ] Record results, commit only this change, restart backend and check readiness. Real model retest limited to one case if needed.
+- [x] Record results, commit only this change, restart backend and check readiness. Real model retest limited to one case if needed.
 
-Verification: 47 targeted tests passed. One real model rerun generated two anti/not_exists operations. Backend restart not executed: permission review timed out twice.
+Verification: 47 targeted tests passed. One real model rerun generated two anti/not_exists operations. After earlier permission review timeouts, follow-up completed commit e880da5 and backend restart; readiness reports database/ontology ok and frontend returns HTTP 200. Pre-existing date edits remain uncommitted.
