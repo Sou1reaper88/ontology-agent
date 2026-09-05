@@ -196,7 +196,7 @@ def test_conversation_helper_persists_only_new_summary_state(monkeypatch) -> Non
     assert result is assembled
     assert captured == {
         "ids": (5, 6),
-        "persistent_prompt": "口径约束",
+        "persistent_prompt": None,
         "current_input": None,
         "previous_summary": "旧摘要",
         "previous_summary_through_message_id": 4,

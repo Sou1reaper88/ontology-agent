@@ -33,7 +33,7 @@ from agent.trace_store import (
 )
 from auth.jwt import get_current_user
 from auth.permission import require_table_permissions
-from models import Conversation, ConversationMessage, QueryHistory, User
+from models import Conversation, ConversationMessage, QueryHistory, SavedPrompt, User
 from models.base import SessionLocal, get_db
 
 router = APIRouter(prefix="/conversations", tags=["conversation"])
@@ -53,6 +53,9 @@ class MessageSend(BaseModel):
     content: str
     system_time: str | None = None
     ontology_id: str | None = None
+    prompt_id: int | None = None
+
+
 
 
 class BatchDeleteRequest(BaseModel):
@@ -154,6 +157,7 @@ def _prepare_conversation_context(
     conversation: Conversation,
     history: list[ConversationMessage],
     current_input: str | None = None,
+    turn_prompt: str | None = None,
 ) -> AssembledContext:
     """Assemble one bounded context and persist only a newly produced summary."""
 
@@ -167,7 +171,7 @@ def _prepare_conversation_context(
             )
             for item in history
         ),
-        persistent_prompt=conversation.context,
+        persistent_prompt=turn_prompt,
         current_input=current_input,
         previous_summary=conversation.context_summary,
         previous_summary_through_message_id=(
@@ -397,6 +401,7 @@ def _generate_async(
     ontology_id: str | None,
     system_time: str | None,
     conversation_context: str | None,
+    turn_prompt: str | None,
 ) -> None:
     """后台线程：执行编排 → trace 逐步写入 store → 完成后落库消息/审计/取数记录。"""
     db = SessionLocal()
@@ -414,6 +419,7 @@ def _generate_async(
             conv,
             history_messages,
             current_input=content,
+            turn_prompt=turn_prompt,
         )
         if assembled.compressed:
             db.commit()
@@ -426,7 +432,7 @@ def _generate_async(
             ontology_id=ontology_id,
             system_time=system_time,
             history=history,
-            conversation_context=conversation_context,
+            conversation_context=turn_prompt,
             assembled_context=assembled.render(),
             on_step=lambda s: append_step(msg_id, s),
             request_id=f"conversation:{conv_id}:message:{msg_id}",
@@ -499,6 +505,12 @@ def send_message(
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="消息内容不能为空")
+    turn_prompt = None
+    if payload.prompt_id is not None:
+        saved_prompt = db.get(SavedPrompt, payload.prompt_id)
+        if saved_prompt is None:
+            raise HTTPException(status_code=404, detail="提示词不存在或已被删除")
+        turn_prompt = saved_prompt.content
 
     # 用户消息落库
     user_msg = ConversationMessage(conversation_id=conv.id, role="user", content=content)
@@ -526,7 +538,8 @@ def send_message(
             content,
             payload.ontology_id,
             payload.system_time,
-            conv.context,
+            None,
+            turn_prompt,
         ),
         daemon=True,
     )

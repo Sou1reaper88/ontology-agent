@@ -23,6 +23,7 @@ from api.routes import (
     ontology,
     ontology_packages,
     permissions,
+    prompts,
     roles,
     sql,
     users,
@@ -88,6 +89,7 @@ app.include_router(permissions.router)
 app.include_router(execute.router)
 app.include_router(evaluations.router)
 app.include_router(conversation.router)
+app.include_router(prompts.router)
 app.include_router(sql.router)
 app.include_router(ontology.router)
 app.include_router(ontology_packages.router)

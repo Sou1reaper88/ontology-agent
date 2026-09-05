@@ -6,6 +6,8 @@ import {
   Grid,
   Input,
   Modal,
+  Select,
+  Space,
   Typography,
   message,
 } from "antd";
@@ -14,6 +16,8 @@ import {
   MenuOutlined,
   SendOutlined,
   SettingOutlined,
+  PlusOutlined,
+  DeleteOutlined,
 } from "@ant-design/icons";
 import client from "../api/client";
 import { ConversationSidebar } from "../features/chat/ConversationSidebar";
@@ -28,6 +32,7 @@ import type {
 import "./Chat.css";
 
 const { Paragraph } = Typography;
+type SavedPrompt = { id: number; name: string; content: string };
 
 export default function Chat() {
   const navigate = useNavigate();
@@ -39,13 +44,16 @@ export default function Chat() {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [isNewDraft, setIsNewDraft] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [context, setContext] = useState("");
+  const [prompts, setPrompts] = useState<SavedPrompt[]>([]);
+  const [selectedPromptId, setSelectedPromptId] = useState<number | null>(null);
   const [input, setInput] = useState("");
   const [loadingList, setLoadingList] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
-  const [contextDraft, setContextDraft] = useState("");
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [editingPromptId, setEditingPromptId] = useState<number | null>(null);
+  const [promptName, setPromptName] = useState("");
+  const [promptContent, setPromptContent] = useState("");
   const [editing, setEditing] = useState<EditingSql | null>(null);
   const [executingId, setExecutingId] = useState<number | null>(null);
   const [selectMode, setSelectMode] = useState(false);
@@ -88,7 +96,6 @@ export default function Chat() {
           error: null,
         }))
       );
-      setContext(data.context || "");
     } catch (error: any) {
       message.error(error.response?.data?.detail || "对话加载失败");
     } finally {
@@ -117,7 +124,6 @@ export default function Chat() {
     setIsNewDraft(true);
     setActiveId(null);
     setMessages([]);
-    setContext("");
     setSelectedEvidenceId(null);
     setEditing(null);
     setConversationDrawerOpen(false);
@@ -210,8 +216,10 @@ export default function Chat() {
         {
           content,
           system_time: new Date().toISOString().slice(0, 10),
+          prompt_id: selectedPromptId,
         }
       );
+      setSelectedPromptId(null);
       setActiveId(conversationId);
       setMessages((previous) => [
         ...previous,
@@ -239,18 +247,54 @@ export default function Chat() {
     }
   };
 
-  const saveContext = async () => {
-    if (!activeId) return;
+  const loadPrompts = async () => {
     try {
-      await client.patch(`/conversations/${activeId}`, { context: contextDraft });
-      setContext(contextDraft);
-      setContextOpen(false);
-      message.success("上下文已保存");
-      loadConversations();
+      const { data } = await client.get("/prompts");
+      setPrompts(data || []);
     } catch (error: any) {
-      message.error(error.response?.data?.detail || "保存失败");
+      message.error(error.response?.data?.detail || "提示词加载失败");
     }
   };
+
+  const openPrompts = async () => {
+    await loadPrompts();
+    setPromptOpen(true);
+  };
+
+  const newPrompt = () => {
+    setEditingPromptId(null); setPromptName(""); setPromptContent("");
+  };
+
+  const editPrompt = (id: number | null) => {
+    const item = prompts.find((prompt) => prompt.id === id);
+    setEditingPromptId(item?.id ?? null);
+    setPromptName(item?.name ?? ""); setPromptContent(item?.content ?? "");
+  };
+
+  const savePrompt = async () => {
+    if (!promptName.trim() || !promptContent.trim()) return message.warning("请填写名称和提示词内容");
+    try {
+      if (editingPromptId) await client.patch(`/prompts/${editingPromptId}`, { name: promptName, content: promptContent });
+      else await client.post("/prompts", { name: promptName, content: promptContent });
+      message.success("提示词已保存"); newPrompt(); await loadPrompts();
+    } catch (error: any) { message.error(error.response?.data?.detail || "保存失败"); }
+  };
+
+  const deletePromptNow = async () => {
+    if (!editingPromptId) return;
+    try {
+      await client.delete(`/prompts/${editingPromptId}`);
+      if (selectedPromptId === editingPromptId) setSelectedPromptId(null);
+      message.success("提示词已删除"); newPrompt(); await loadPrompts();
+    } catch (error: any) { message.error(error.response?.data?.detail || "删除失败"); }
+  };
+
+  const deletePrompt = () => Modal.confirm({
+    title: "删除这个共享提示词？",
+    content: "所有用户都将无法再选择它；已经发送的轮次不受影响。",
+    okText: "删除", okButtonProps: { danger: true }, cancelText: "取消",
+    onOk: deletePromptNow,
+  });
 
   const removeConversation = async (id: number) => {
     try {
@@ -258,7 +302,6 @@ export default function Chat() {
       if (activeId === id) {
         setActiveId(null);
         setMessages([]);
-        setContext("");
         setSelectedEvidenceId(null);
       }
       loadConversations();
@@ -297,7 +340,6 @@ export default function Chat() {
     if (activeId != null && ids.includes(activeId)) {
       setActiveId(null);
       setMessages([]);
-      setContext("");
       setSelectedEvidenceId(null);
     }
   };
@@ -329,7 +371,6 @@ export default function Chat() {
       message.success(`已清空 ${data.deleted} 个对话`);
       setActiveId(null);
       setMessages([]);
-      setContext("");
       setSelectedEvidenceId(null);
       setSelectedIds([]);
       setSelectMode(false);
@@ -436,7 +477,7 @@ export default function Chat() {
               <div>
                 <span>智能取数工作台</span>
                 <h1>{activeTitle}</h1>
-                {context ? <small>已应用会话上下文</small> : null}
+                {selectedPromptId ? <small>下一轮将应用所选提示词，发送后自动取消</small> : null}
               </div>
             </div>
 
@@ -452,12 +493,9 @@ export default function Chat() {
               {activeId ? (
                 <Button
                   icon={<SettingOutlined />}
-                  onClick={() => {
-                    setContextDraft(context);
-                    setContextOpen(true);
-                  }}
+                  onClick={openPrompts}
                 >
-                  上下文
+                  提示词
                 </Button>
               ) : null}
             </div>
@@ -554,22 +592,34 @@ export default function Chat() {
       ) : null}
 
       <Modal
-        title="上下文设置"
-        open={contextOpen}
-        onOk={saveContext}
-        onCancel={() => setContextOpen(false)}
-        okText="保存"
-        cancelText="取消"
+        title="提示词"
+        open={promptOpen}
+        footer={null}
+        onCancel={() => setPromptOpen(false)}
       >
         <Paragraph type="secondary" className="context-help">
-          上下文作为常驻约束或补充信息，随每一轮提问一起发送给智能体，例如用户范围或统一账期。
+          所有用户共享提示词。每次只能选择一条，仅应用到下一轮全部模型调用，发送后自动取消。
         </Paragraph>
+        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+          <Space.Compact style={{ width: "100%" }}>
+            <Select allowClear style={{ flex: 1 }} placeholder="选择下一轮使用的提示词"
+              value={selectedPromptId} options={prompts.map((item) => ({ value: item.id, label: item.name }))}
+              onChange={(value) => { setSelectedPromptId(value ?? null); editPrompt(value ?? null); }} />
+            <Button icon={<PlusOutlined />} onClick={newPrompt}>新建</Button>
+          </Space.Compact>
+          <Input value={promptName} onChange={(event) => setPromptName(event.target.value)} placeholder="提示词名称" />
         <Input.TextArea
-          value={contextDraft}
-          onChange={(event) => setContextDraft(event.target.value)}
-          placeholder="填写常驻约束或补充信息"
-          rows={5}
+          value={promptContent}
+          onChange={(event) => setPromptContent(event.target.value)}
+          placeholder="填写提示词内容"
+          rows={7}
         />
+          <Space>
+            <Button type="primary" onClick={savePrompt}>{editingPromptId ? "保存修改" : "创建提示词"}</Button>
+            {editingPromptId ? <Button danger icon={<DeleteOutlined />} onClick={deletePrompt}>删除</Button> : null}
+            <Button onClick={() => setPromptOpen(false)}>完成</Button>
+          </Space>
+        </Space>
       </Modal>
     </>
   );

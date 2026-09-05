@@ -259,10 +259,10 @@ def test_history_and_context_passed_to_agent(
     # 第二轮（此时 fake_run_agent 的 captured 已被后台线程写入）
     _, second_msg_id = send_and_wait(client, admin_token, conv["id"], "改成3个月")
     assert captured["query"] == "改成3个月"
-    assert captured["conversation_context"] == "浙江省正常在网用户"
+    assert captured["conversation_context"] is None
     assert len(captured["history"]) == 2  # user + assistant
     assert captured["history"][0]["role"] == "user"
-    assert "浙江省正常在网用户" in captured["assembled_context"]
+    assert "浙江省正常在网用户" not in captured["assembled_context"]
     assert "查询6月沉默用户" in captured["assembled_context"]
     assert "改成3个月" not in captured["assembled_context"]
     assert captured["request_id"] == f"conversation:{conv['id']}:message:{second_msg_id}"
