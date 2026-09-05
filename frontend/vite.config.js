@@ -11,6 +11,7 @@ export default defineConfig({
             "/roles": "http://127.0.0.1:8001",
             "/permissions": "http://127.0.0.1:8001",
             "/conversations": "http://127.0.0.1:8001",
+            "/prompts": "http://127.0.0.1:8001",
             "/sql": "http://127.0.0.1:8001",
             "/ontology/": "http://127.0.0.1:8001",
             "/ontology-packages": "http://127.0.0.1:8001",
