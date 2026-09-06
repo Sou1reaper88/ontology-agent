@@ -490,7 +490,7 @@ export default function Chat() {
                   本体依据
                 </Button>
               ) : null}
-              {activeId ? (
+              {activeId || isNewDraft ? (
                 <Button
                   icon={<SettingOutlined />}
                   onClick={openPrompts}
