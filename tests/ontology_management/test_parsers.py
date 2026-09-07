@@ -167,6 +167,37 @@ def test_xlsx_finds_the_standard_header_after_instruction_rows() -> None:
     assert [item.physical_name for item in parsed.objects[0].fields] == ["FIELD_ID"]
 
 
+def test_xlsx_ignores_fully_blank_rows_after_metadata() -> None:
+    payload = synthetic_xlsx(
+        (
+            "对象",
+            [
+                list(STANDARD_COLUMNS),
+                [
+                    "SAMPLE_OBJECT_A",
+                    "虚拟对象A",
+                    None,
+                    "启用",
+                    "FIELD_ID",
+                    "虚拟标识",
+                    "string",
+                    None,
+                    "是",
+                    "是",
+                ],
+                [None] * len(STANDARD_COLUMNS),
+                [None] * len(STANDARD_COLUMNS),
+            ],
+        )
+    )
+
+    parsed = parse_metadata_upload("objects.xlsx", payload, LIMITS)
+
+    assert [item.physical_name for item in parsed.objects] == ["SAMPLE_OBJECT_A"]
+    assert [field.physical_name for field in parsed.objects[0].fields] == ["FIELD_ID"]
+    assert not any(item.code == "missing_table_name" for item in parsed.diagnostics)
+
+
 def test_xlsx_diagnostic_preserves_the_physical_row_after_header_discovery() -> None:
     payload = synthetic_xlsx(
         (

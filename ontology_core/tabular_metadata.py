@@ -219,6 +219,8 @@ def parse_tabular_objects(
     object_names: dict[str, list[str]] = {}
     document_diagnostics: list[ImportDiagnostic] = []
     for line, row in enumerate(reader, start=2 + line_offset):
+        if not any(value is not None and value.strip() for value in row.values()):
+            continue
         table_name = _clean(row, "对象英文名称")
         if table_name is None:
             document_diagnostics.append(
