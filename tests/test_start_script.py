@@ -10,3 +10,6 @@ def test_windows_start_script_uses_its_own_project_directory() -> None:
     assert 'set "PROJECT_ROOT=%~dp0"' in script
     assert "D:\\projects\\ontology-agent" not in script.lower()
     assert "npm.cmd run dev -- --host 127.0.0.1 --port 5199 --strictPort" in script
+    assert 'start "ontology-backend" /d "%PROJECT_ROOT%"' in script
+    assert 'start "ontology-frontend" /d "%PROJECT_ROOT%frontend"' in script
+    assert 'cmd /k "cd /d' not in script

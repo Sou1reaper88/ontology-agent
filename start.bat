@@ -34,10 +34,10 @@ if %NODE_MAJOR% LSS 18 (
 )
 
 echo [1/2] Starting backend (8001)...
-start "ontology-backend" cmd /k "cd /d ""%PROJECT_ROOT%"" ^&^& .venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8001"
+start "ontology-backend" /d "%PROJECT_ROOT%" cmd /k ".venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8001"
 
 echo [2/2] Starting frontend (5199)...
-start "ontology-frontend" cmd /k "cd /d ""%PROJECT_ROOT%frontend"" ^&^& npm.cmd run dev -- --host 127.0.0.1 --port 5199 --strictPort"
+start "ontology-frontend" /d "%PROJECT_ROOT%frontend" cmd /k "npm.cmd run dev -- --host 127.0.0.1 --port 5199 --strictPort"
 
 echo.
 echo Started. Open:
