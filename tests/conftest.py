@@ -8,6 +8,9 @@
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -30,6 +33,15 @@ class _NoKeyClient:
         raise AssertionError("测试不应调用真实 LLM")
 
 
+class _ConversationClient:
+    """Conversation harness client whose provider response is mocked below."""
+
+    api_key = "synthetic"
+    base_url = "https://example.invalid"
+    model = "test"
+    timeout = 1
+
+
 @pytest.fixture(autouse=True)
 def _force_mock_sql(monkeypatch):
     """强制 Agent 走确定性模板 + 固定 mock 本体（不读真实 MySQL、不调真实 LLM）。
@@ -37,11 +49,39 @@ def _force_mock_sql(monkeypatch):
     保证编排/接口测试快速稳定、不依赖用户手工维护的表结构。
     """
     monkeypatch.setattr(orch, "get_llm_client", lambda: _NoKeyClient())
-    monkeypatch.setattr(conversation_agent, "get_llm_client", lambda: _NoKeyClient())
+    monkeypatch.setattr(conversation_agent, "get_llm_client", lambda: _ConversationClient())
     monkeypatch.setattr(ont_client, "get_llm_client", lambda: _NoKeyClient())
     # 编排流程使用固定 mock 本体（5 字段示例表），与真实 MySQL 表结构解耦
     monkeypatch.setattr(orch, "get_ontology_client", lambda: MockOntologyClient())
     monkeypatch.setattr(ont_client, "get_ontology_client", lambda: MockOntologyClient())
+
+    def conversation_post(url, **kwargs):
+        payload = kwargs["json"]
+        if payload["tool_choice"] == "none":
+            message = {"role": "assistant", "content": "本轮工具结果已返回，请查看脚本与诊断。"}
+        else:
+            query = json.loads(payload["messages"][1]["content"])["input"]
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "conftest-tool-call",
+                        "type": "function",
+                        "function": {
+                            "name": "generate_sql_program",
+                            "arguments": json.dumps({"requirement": query}),
+                        },
+                    }
+                ],
+            }
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"choices": [{"finish_reason": "stop", "message": message}]},
+        )
+
+    monkeypatch.setattr(conversation_agent.httpx, "post", conversation_post)
 
 
 @pytest.fixture(autouse=True)

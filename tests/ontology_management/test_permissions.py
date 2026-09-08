@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+import api.main as main_module
+from agent.ontology_shadow import RuntimeHealth
 from api.main import app
 from api.routes import ontology
 from api.routes.ontology_packages import get_management_service
@@ -148,6 +151,13 @@ def test_missing_management_root_disables_writes_without_breaking_health(
             return None
 
     monkeypatch.setattr(settings.ontology, "management_root", "")
+    monkeypatch.setattr(
+        main_module,
+        "get_ontology_runtime",
+        lambda: SimpleNamespace(
+            health=lambda: RuntimeHealth(status="degraded", reason="not_loaded")
+        ),
+    )
     monkeypatch.setattr(ontology, "_conn", lambda database: LegacyConnection())
     app.dependency_overrides[get_current_user] = lambda: _user("本体维护者")
     try:

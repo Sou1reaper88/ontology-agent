@@ -90,7 +90,9 @@ def test_generate_metadata_package_publishes_confirmed_temporal_policy(
     tmp_path: Path,
 ) -> None:
     draft = parse_tabular_metadata(
-        SYNTHETIC_TSV.replace("TOTAL_VALUE\t累计值\tdecimal", "ACCOUNTING_MONTH\t账期\tstring")
+        SYNTHETIC_TSV.replace("DEMO_ENTITY_M", "DEMO_ENTITY").replace(
+            "TOTAL_VALUE\t累计值\tdecimal", "ACCOUNTING_MONTH\t账期\tstring"
+        )
     )
     draft = apply_metadata_overrides(
         draft,
@@ -110,7 +112,7 @@ def test_generate_metadata_package_publishes_confirmed_temporal_policy(
     repository = OntologyRepository()
     repository.publish(target)
     resolver = OntologyResolver(repository.current())
-    concept = resolver.get_concept("DEMO_ENTITY_M")
+    concept = resolver.get_concept("DEMO_ENTITY")
     policy = resolver.get_temporal_policy(concept.uri)
     assert policy is not None
     assert policy.partition_property_uri.endswith("/property/ACCOUNTING_MONTH")
