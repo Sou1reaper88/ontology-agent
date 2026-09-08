@@ -35,3 +35,6 @@ frontend/dist/
 
 # Codex 隔离开发 worktree
 .worktrees/
+
+# 本机运行时数据（外部本体包等，不进入版本库）
+.local/

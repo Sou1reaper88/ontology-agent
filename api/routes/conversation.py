@@ -17,7 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from agent.orchestrator import run_agent
+from agent.context_engineering import (
+    AssembledContext,
+    ContextMessage,
+    get_context_assembler,
+)
+from agent.conversation_agent import run_conversation_agent as run_agent, history_content
 from agent.trace_store import (
     append_step,
     clear_trace,
@@ -28,7 +33,7 @@ from agent.trace_store import (
 )
 from auth.jwt import get_current_user
 from auth.permission import require_table_permissions
-from models import Conversation, ConversationMessage, QueryHistory, User
+from models import Conversation, ConversationMessage, QueryHistory, SavedPrompt, User
 from models.base import SessionLocal, get_db
 
 router = APIRouter(prefix="/conversations", tags=["conversation"])
@@ -48,10 +53,40 @@ class MessageSend(BaseModel):
     content: str
     system_time: str | None = None
     ontology_id: str | None = None
+    prompt_id: int | None = None
+
+
 
 
 class BatchDeleteRequest(BaseModel):
     ids: list[int]
+
+
+class ProgramStepSummary(BaseModel):
+    step_id: str
+    target_table: str
+    drop_sql: str
+    create_sql: str
+
+
+class ProgramDiagnosticSummary(BaseModel):
+    code: str
+    message: str
+    step_id: str | None = None
+    location: str | None = None
+    candidates: list[str] = []
+
+
+class ProgramSummary(BaseModel):
+    program_id: str
+    platform: str
+    mode: str
+    steps: list[ProgramStepSummary]
+    diagnostics: list[ProgramDiagnosticSummary] = []
+    package: dict | None = None
+    temporal_evidence: list[dict] = []
+    inference_evidence: dict | None = None
+    missing_information: list[str] = []
 
 
 class MessageOut(BaseModel):
@@ -61,6 +96,8 @@ class MessageOut(BaseModel):
     sql: str | None = None
     query_id: int | None = None
     trace: list[dict] | None = None
+    ontology_shadow: dict | None = None
+    program: ProgramSummary | None = None
     created_at: str
 
 
@@ -73,11 +110,80 @@ class ConversationOut(BaseModel):
     messages: list[MessageOut] = []
 
 
+def _extract_ontology_shadow(trace: list[dict] | None) -> dict | None:
+    return next(
+        (
+            item.get("payload")
+            for item in reversed(trace or [])
+            if item.get("node") == "ontology_shadow"
+        ),
+        None,
+    )
+
+
+def _extract_program(trace: list[dict] | None) -> ProgramSummary | None:
+    payload = next(
+        (
+            item.get("payload")
+            for item in reversed(trace or [])
+            if item.get("node") == "program_generation"
+            and item.get("status") == "success"
+        ),
+        None,
+    )
+    if not isinstance(payload, dict) or not payload.get("program_id"):
+        return None
+    return ProgramSummary(
+        program_id=payload["program_id"],
+        platform=payload.get("platform") or "hive",
+        mode=payload.get("generation_mode") or "program",
+        steps=payload.get("program_steps") or [],
+        diagnostics=payload.get("diagnostics") or [],
+        package=payload.get("package"),
+        temporal_evidence=payload.get("temporal_evidence") or [],
+        inference_evidence=payload.get("inference_evidence"),
+        missing_information=payload.get("missing_information") or [],
+    )
+
+
 def _own_conversation(conv_id: int, user: User, db: Session) -> Conversation:
     conv = db.get(Conversation, conv_id)
     if not conv or conv.user_id != user.id:
         raise HTTPException(status_code=404, detail="对话不存在")
     return conv
+
+
+def _prepare_conversation_context(
+    conversation: Conversation,
+    history: list[ConversationMessage],
+    current_input: str | None = None,
+    turn_prompt: str | None = None,
+) -> AssembledContext:
+    """Assemble one bounded context and persist only a newly produced summary."""
+
+    assembled = get_context_assembler().assemble(
+        tuple(
+            ContextMessage(
+                message_id=item.id,
+                role=item.role,
+                content=history_content(item.content, getattr(item, "trace", None)),
+                sql=item.sql,
+            )
+            for item in history
+        ),
+        persistent_prompt=turn_prompt,
+        current_input=current_input,
+        previous_summary=conversation.context_summary,
+        previous_summary_through_message_id=(
+            conversation.context_summary_through_message_id
+        ),
+    )
+    if assembled.compressed:
+        conversation.context_summary = assembled.summary
+        conversation.context_summary_through_message_id = (
+            assembled.compacted_through_message_id
+        )
+    return assembled
 
 
 @router.post("", status_code=201)
@@ -143,6 +249,8 @@ def get_conversation(
             sql=m.sql,
             query_id=m.query_id,
             trace=m.trace,
+            ontology_shadow=_extract_ontology_shadow(m.trace),
+            program=_extract_program(m.trace),
             created_at=m.created_at.isoformat(),
         )
         for m in conv.messages
@@ -212,11 +320,7 @@ def clear_all_conversations(
     db: Session = Depends(get_db),
 ) -> dict:
     """清空当前用户全部对话（级联删除消息）。"""
-    convs = (
-        db.query(Conversation)
-        .filter(Conversation.user_id == user.id)
-        .all()
-    )
+    convs = db.query(Conversation).filter(Conversation.user_id == user.id).all()
     count = len(convs)
     for c in convs:
         db.delete(c)  # cascade 删除消息
@@ -231,6 +335,9 @@ def message_status(
     db: Session = Depends(get_db),
 ) -> dict:
     """生成进度轮询：返回状态 + 已完成的链路步骤（实时可视化）。"""
+    # Read memory first: a missing trace means completion was already committed.
+    # Loading the row first can retain the placeholder across that commit.
+    tr = get_trace(msg_id)
     msg = db.get(ConversationMessage, msg_id)
     if not msg:
         raise HTTPException(status_code=404, detail="消息不存在")
@@ -238,15 +345,24 @@ def message_status(
     if not conv or conv.user_id != user.id:
         raise HTTPException(status_code=404, detail="消息不存在")
 
-    tr = get_trace(msg_id)
     if tr is not None:
         return {
             "message_id": msg_id,
             "status": tr["status"],
             "steps": tr["steps"],
             "error": tr["error"],
+            "ontology_shadow": _extract_ontology_shadow(tr["steps"]),
+            "program": _extract_program(tr["steps"]),
         }
     # 进程重启后内存 trace 丢失：从 DB 读最终态
+    completion = next((step for step in reversed(msg.trace or [])
+                       if step.get("node") == "conversation_response"), None)
+    if completion is not None:
+        succeeded = (completion.get("payload") or {}).get("success", False)
+        return {"message_id": msg_id, "status": "success" if succeeded else "failed",
+                "steps": msg.trace, "error": None if succeeded else msg.content,
+                "ontology_shadow": _extract_ontology_shadow(msg.trace),
+                "program": _extract_program(msg.trace)}
     if msg.sql or msg.trace:
         # 有 SQL 或完整链路 trace → 生成流程已完成（含无关问题提示等无 SQL 场景）
         return {
@@ -254,10 +370,26 @@ def message_status(
             "status": "success",
             "steps": msg.trace or [],
             "error": None,
+            "ontology_shadow": _extract_ontology_shadow(msg.trace),
+            "program": _extract_program(msg.trace),
         }
     if msg.content and msg.content != "生成中…":
-        return {"message_id": msg_id, "status": "failed", "steps": msg.trace or [], "error": msg.content}
-    return {"message_id": msg_id, "status": "failed", "steps": [], "error": "服务重启，生成中断"}
+        return {
+            "message_id": msg_id,
+            "status": "failed",
+            "steps": msg.trace or [],
+            "error": msg.content,
+            "ontology_shadow": _extract_ontology_shadow(msg.trace),
+            "program": _extract_program(msg.trace),
+        }
+    return {
+        "message_id": msg_id,
+        "status": "failed",
+        "steps": [],
+        "error": "服务重启，生成中断",
+        "ontology_shadow": None,
+        "program": None,
+    }
 
 
 def _generate_async(
@@ -269,6 +401,7 @@ def _generate_async(
     ontology_id: str | None,
     system_time: str | None,
     conversation_context: str | None,
+    turn_prompt: str | None,
 ) -> None:
     """后台线程：执行编排 → trace 逐步写入 store → 完成后落库消息/审计/取数记录。"""
     db = SessionLocal()
@@ -277,23 +410,38 @@ def _generate_async(
         if conv is None:
             set_failed(msg_id, "对话不存在")
             return
-        history = [
-            {"role": m.role, "content": m.content, "sql": m.sql}
+        history_messages = [
+            m
             for m in conv.messages
             if m.role in ("user", "assistant") and m.id not in (msg_id, user_msg_id)
+        ]
+        assembled = _prepare_conversation_context(
+            conv,
+            history_messages,
+            current_input=content,
+            turn_prompt=turn_prompt,
+        )
+        if assembled.compressed:
+            db.commit()
+        history = [
+            {"role": m.role, "content": m.content, "sql": m.sql}
+            for m in assembled.messages
         ]
         output = run_agent(
             content,
             ontology_id=ontology_id,
             system_time=system_time,
             history=history,
-            conversation_context=conversation_context,
+            conversation_context=turn_prompt,
+            assembled_context=assembled.render(),
             on_step=lambda s: append_step(msg_id, s),
+            request_id=f"conversation:{conv_id}:message:{msg_id}",
         )
 
         sql = output.get("sql") if output.get("success") else None
+        program = _extract_program(output.get("trace"))
         query_id: int | None = None
-        if sql:
+        if sql and program is None:
             user = db.get(User, user_id)
             if user is not None:
                 require_table_permissions(user, sql, db)
@@ -317,7 +465,7 @@ def _generate_async(
                 "request_text": content,
                 "conversation_id": conv_id,
                 "success": bool(output.get("success")),
-                "sql": sql if output.get("success") else None,
+                "sql": sql if output.get("success") and program is None else None,
             },
             status="success" if output.get("success") else "failed",
         )
@@ -357,11 +505,15 @@ def send_message(
     content = payload.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="消息内容不能为空")
+    turn_prompt = None
+    if payload.prompt_id is not None:
+        saved_prompt = db.get(SavedPrompt, payload.prompt_id)
+        if saved_prompt is None:
+            raise HTTPException(status_code=404, detail="提示词不存在或已被删除")
+        turn_prompt = saved_prompt.content
 
     # 用户消息落库
-    user_msg = ConversationMessage(
-        conversation_id=conv.id, role="user", content=content
-    )
+    user_msg = ConversationMessage(conversation_id=conv.id, role="user", content=content)
     db.add(user_msg)
 
     # 预创建 assistant 消息（生成中占位）
@@ -386,7 +538,8 @@ def send_message(
             content,
             payload.ontology_id,
             payload.system_time,
-            conv.context,
+            None,
+            turn_prompt,
         ),
         daemon=True,
     )

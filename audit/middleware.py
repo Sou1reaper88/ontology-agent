@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -23,9 +24,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         elapsed = time.time() - start
         duration_ms = int(elapsed * 1000)
         # Prometheus 指标
-        REQUEST_COUNT.labels(
-            request.method, request.url.path, response.status_code
-        ).inc()
+        REQUEST_COUNT.labels(request.method, request.url.path, response.status_code).inc()
         REQUEST_DURATION.labels(request.method, request.url.path).observe(elapsed)
         db = SessionLocal()
         try:
@@ -35,8 +34,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
                     action="http_request",
                     detail={
                         "method": request.method,
-                        "path": request.url.path,
-                        "query": str(request.url.query) or None,
+                        "path": _safe_audit_path(request.url.path),
+                        "query": _safe_audit_query(request.url.path, str(request.url.query)),
                         "status": response.status_code,
                     },
                     ip=request.client.host if request.client else None,
@@ -51,3 +50,19 @@ class AuditMiddleware(BaseHTTPMiddleware):
         finally:
             db.close()
         return response
+
+
+def _safe_audit_path(path: str) -> str:
+    """Keep import confirmation bearer tokens out of generic HTTP audit records."""
+    return re.sub(
+        r"(/ontology-packages/workspaces/[^/]+/imports/)[^/]+(/confirm)$",
+        r"\1<redacted>\2",
+        path,
+    )
+
+
+def _safe_audit_query(path: str, query: str) -> str | None:
+    """Do not retain arbitrary query values for management requests."""
+    if path.startswith("/ontology-packages"):
+        return None
+    return query or None

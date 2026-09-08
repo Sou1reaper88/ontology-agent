@@ -9,6 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlglot import exp, parse
+from sqlglot.errors import ParseError
 
 from auth.jwt import get_current_user
 from auth.permission import require_table_permissions
@@ -23,12 +25,28 @@ router = APIRouter(prefix="/execute", tags=["execute"])
 class ExecuteRequest(BaseModel):
     query_id: int | None = None
     sql: str | None = None  # 直传 SQL（对话内编辑后执行）：自动建 query_history 再执行
+    program_id: str | None = None
 
 
 class ExecuteResponse(BaseModel):
     task_id: str
     query_id: int
     status: str
+
+
+def _require_single_read_only_query(sql: str) -> None:
+    try:
+        statements = parse(sql, read="hive")
+    except ParseError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="执行接口仅支持单条只读查询；取数程序仅生成、不执行",
+        ) from exc
+    if len(statements) != 1 or not isinstance(statements[0], exp.Query):
+        raise HTTPException(
+            status_code=400,
+            detail="执行接口仅支持单条只读查询；取数程序仅生成、不执行",
+        )
 
 
 @router.post("", response_model=ExecuteResponse)
@@ -42,11 +60,15 @@ def create_execute(
     - query_id：执行已有取数记录（校验归属 + 表权限）
     - sql：直传编辑后的 SQL，先建 query_history 记录再执行
     """
+    if payload.program_id is not None:
+        raise HTTPException(status_code=400, detail="取数程序仅生成，不支持执行")
+
     if payload.query_id is not None:
         record = db.get(QueryHistory, payload.query_id)
         if not record or record.user_id != user.id:
             raise HTTPException(status_code=404, detail="取数记录不存在")
         sql = record.generated_sql or ""
+        _require_single_read_only_query(sql)
         require_table_permissions(user, sql, db)
         record.execution_status = "pending"
         db.commit()
@@ -54,6 +76,7 @@ def create_execute(
         sql = payload.sql.strip()
         if not sql:
             raise HTTPException(status_code=400, detail="SQL 不能为空")
+        _require_single_read_only_query(sql)
         require_table_permissions(user, sql, db)
         record = QueryHistory(
             user_id=user.id,

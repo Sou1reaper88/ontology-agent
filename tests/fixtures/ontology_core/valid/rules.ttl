@@ -1,0 +1,24 @@
+@prefix ex: <https://example.invalid/ontology/> .
+@prefix oa: <urn:ontology-agent:core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:RecordRule a oa:BusinessRule ;
+    oa:shortName "RecordRule" ;
+    rdfs:label "Record rule"@en ;
+    oa:appliesTo ex:Record ;
+    oa:usesProperty ex:Metric ;
+    oa:usesRelation ex:relatesTo ;
+    oa:condition [
+        a oa:AllOf ;
+        oa:argument [
+            a oa:Eq ;
+            oa:leftProperty ex:Metric ;
+            oa:value "42"^^xsd:integer
+        ] ;
+        oa:argument [
+            a oa:IsNull ;
+            oa:leftProperty ex:Metric
+        ]
+    ] ;
+    oa:status "active" .

@@ -61,6 +61,13 @@ npm.cmd install
 Set-Location ..
 ```
 
+`.env` 至少需要保留本体管理存储配置；不要将 API Key 提交到 Git：
+
+```dotenv
+ONTOLOGY__MANAGEMENT_ROOT=D:/Projects/ontology-agent-data/ontology-management
+ONTOLOGY__MANAGEMENT_WORKSPACE=evaluation
+```
+
 启动前可检查环境：
 
 ```powershell
@@ -70,13 +77,13 @@ node --version       # 应为 v18+，推荐 v20+
 
 ### 一键启动
 
-在实际项目根目录 `D:\Projects\ontology-agent` 执行：
+在实际项目根目录 `D:\Projects\ontology-agent` 双击 `start.bat`，或在 PowerShell 执行：
 
 ```powershell
 .\start.bat
 ```
 
-脚本会打开两个窗口：后端 `http://127.0.0.1:8001` 与前端 `http://127.0.0.1:5199`。访问 `http://127.0.0.1:5199/chat` 使用智能取数，访问 `http://127.0.0.1:5199/ontology` 管理本体。
+该脚本会打开两个窗口：后端 `http://127.0.0.1:8001` 与前端 `http://127.0.0.1:5199`。访问 `http://127.0.0.1:5199/chat` 使用智能取数，访问 `http://127.0.0.1:5199/ontology` 管理本体。
 
 > 不要运行 `.worktrees\...` 下的 `start.bat`；那里是开发工作树，默认不会包含你的 `.env` 与 `.venv`。
 
@@ -98,19 +105,29 @@ Set-Location D:\Projects\ontology-agent\frontend
 npm.cmd run dev -- --host 127.0.0.1 --port 5199 --strictPort
 ```
 
-服务启动后，执行下列检查：
+服务启动后，执行下列检查。本体字段必须为 `ok`，否则智能体不会加载已发布本体包：
 
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8001/ready | Select-Object -ExpandProperty Content
 ```
 
+预期结果包含：
+
+```json
+{"status":"ok","database":"ok","ontology":"ok"}
+```
+
 ### 停止与排障
+
+停止服务：
 
 ```powershell
 .\stop.bat
 ```
 
 - 出现 `Vite 5 needs Node.js 18+` 或 `crypto.getRandomValues is not a function`：安装 Node.js 20 LTS，并重新打开 PowerShell。
+- `/ready` 返回 `ontology_management_configuration_error`：检查 `.env` 中 `ONTOLOGY__MANAGEMENT_ROOT` 是否存在且可访问。
+- `/ready` 返回 `ontology_parse_error`：已发布本体包无法读取，进入本体管理页面检查活动版本。
 - 端口已被占用：先运行 `stop.bat`，确认后再运行 `start.bat`。
 
 ## 项目结构
@@ -138,6 +155,16 @@ ontology-agent/
 ruff check .
 black .
 pytest
+```
+
+## 本体包开发
+
+本体包编辑流程见 [Protégé 本体编辑指南](docs/ontology-authoring.md)。本里程碑中的 `OntologyResolver` 是只读的 Python 边界；现有 Agent 仍走 legacy path，尚未切换到该 Resolver。
+
+```powershell
+python -m ontology_core init D:\path\to\private-package --package-id private.package --base-uri https://example.invalid/private/
+python -m ontology_core validate D:\path\to\private-package
+python -m ontology_core inspect D:\path\to\private-package
 ```
 
 ## 实施计划

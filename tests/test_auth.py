@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+import api.routes.conversation as conversation_route
+
+
+def _enable_legacy_compatibility(monkeypatch) -> None:
+    original = conversation_route.run_agent
+
+    def run_with_legacy(*args, **kwargs):
+        return original(*args, **kwargs, allow_legacy_compatibility=True)
+
+    monkeypatch.setattr(conversation_route, "run_agent", run_with_legacy)
+
 
 def test_login_success(client: TestClient) -> None:
     """正确凭据登录成功，返回 JWT。"""
@@ -36,10 +47,11 @@ def test_query_requires_auth(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
-def test_query_with_token(client: TestClient, admin_token: str) -> None:
+def test_query_with_token(client: TestClient, admin_token: str, monkeypatch) -> None:
     """带管理员 token 通过对话发消息生成 SQL（权限校验通过）。"""
     from tests.conftest import last_assistant_message, send_and_wait
 
+    _enable_legacy_compatibility(monkeypatch)
     resp = client.post(
         "/conversations",
         json={},

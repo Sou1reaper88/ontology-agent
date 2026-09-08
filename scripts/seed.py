@@ -27,6 +27,10 @@ def seed() -> None:
         if not prod_role:
             prod_role = Role(name="地市生产岗", description="可访问本业务线常用表")
             db.add(prod_role)
+
+        maintainer_role = db.query(Role).filter(Role.name == "本体维护者").first()
+        if not maintainer_role:
+            db.add(Role(name="本体维护者", description="可维护本体草稿并执行校验"))
         db.flush()
 
         # 管理员账号（含密码哈希，开发默认 admin/admin123）
@@ -57,9 +61,11 @@ def seed() -> None:
             },
         ]
         for p in sample_perms:
-            exists = db.query(TablePermission).filter(
-                TablePermission.table_name == p["table_name"]
-            ).first()
+            exists = (
+                db.query(TablePermission)
+                .filter(TablePermission.table_name == p["table_name"])
+                .first()
+            )
             if not exists:
                 db.add(
                     TablePermission(
@@ -72,7 +78,7 @@ def seed() -> None:
                 )
 
         db.commit()
-        print("种子数据写入完成：角色×2、管理员×1、示例表权限×2")
+        print("种子数据写入完成：角色×3、管理员×1、示例表权限×2")
     finally:
         db.close()
 

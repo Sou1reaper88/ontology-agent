@@ -1,0 +1,93 @@
+@prefix oa: <urn:ontology-agent:core#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+oa:SemanticElementShape a sh:NodeShape ;
+    sh:targetClass oa:Concept, oa:Property, oa:Relation, oa:BusinessRule, oa:DataSource, oa:PhysicalMapping, oa:TemporalPartitionPolicy ;
+    sh:nodeKind sh:IRI ;
+    sh:property [
+        sh:path oa:shortName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:Literal
+    ] ;
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:nodeKind sh:Literal
+    ] .
+
+oa:ConceptShape a sh:NodeShape ;
+    sh:targetClass oa:Concept ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:Class ] .
+
+oa:PropertyShape a sh:NodeShape ;
+    sh:targetClass oa:Property ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:DatatypeProperty ] ;
+    sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [
+        sh:path rdfs:range ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:in (
+            xsd:string xsd:boolean xsd:decimal xsd:float xsd:double xsd:duration
+            xsd:dateTime xsd:time xsd:date xsd:gYearMonth xsd:gYear xsd:gMonthDay
+            xsd:gDay xsd:gMonth xsd:hexBinary xsd:base64Binary xsd:anyURI xsd:QName
+            xsd:NOTATION xsd:normalizedString xsd:token xsd:language xsd:NMTOKEN
+            xsd:NMTOKENS xsd:Name xsd:NCName xsd:ID xsd:IDREF xsd:IDREFS
+            xsd:ENTITY xsd:ENTITIES xsd:integer xsd:nonPositiveInteger
+            xsd:negativeInteger xsd:long xsd:int xsd:short xsd:byte
+            xsd:nonNegativeInteger xsd:unsignedLong xsd:unsignedInt
+            xsd:unsignedShort xsd:unsignedByte xsd:positiveInteger
+            xsd:dateTimeStamp xsd:dayTimeDuration xsd:yearMonthDuration
+        )
+    ] .
+
+oa:RelationShape a sh:NodeShape ;
+    sh:targetClass oa:Relation ;
+    sh:property [ sh:path rdf:type ; sh:hasValue owl:ObjectProperty ] ;
+    sh:property [ sh:path rdfs:domain ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path rdfs:range ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:sourceProperty ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:targetProperty ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [
+        sh:path oa:cardinality ; sh:maxCount 1 ; sh:nodeKind sh:Literal ;
+        sh:in ("one_to_one" "one_to_many" "many_to_one" "many_to_many")
+    ] ;
+    sh:property [ sh:path oa:status ; sh:maxCount 1 ; sh:nodeKind sh:Literal ] ;
+    sh:property [ sh:path oa:priority ; sh:maxCount 1 ; sh:datatype xsd:integer ] ;
+    sh:property [ sh:path oa:confirmed ; sh:maxCount 1 ; sh:datatype xsd:boolean ] .
+
+oa:BusinessRuleShape a sh:NodeShape ;
+    sh:targetClass oa:BusinessRule ;
+    sh:property [ sh:path oa:appliesTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+oa:DataSourceShape a sh:NodeShape ;
+    sh:targetClass oa:DataSource ;
+    sh:property [ sh:path oa:platformType ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:Literal ] .
+
+oa:PhysicalMappingShape a sh:NodeShape ;
+    sh:targetClass oa:PhysicalMapping ;
+    sh:property [ sh:path oa:semanticElement ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:dataSource ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+
+oa:TemporalPartitionPolicyShape a sh:NodeShape ;
+    sh:targetClass oa:TemporalPartitionPolicy ;
+    sh:property [ sh:path oa:appliesTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path oa:partitionProperty ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [
+        sh:path oa:partitionGrain ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:nodeKind sh:Literal ; sh:in ("day" "month")
+    ] ;
+    sh:property [
+        sh:path oa:defaultStrategy ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:nodeKind sh:Literal ; sh:in ("t_minus_2" "previous_complete_month")
+    ] ;
+    sh:property [
+        sh:path oa:allowQueryOverride ; sh:minCount 1 ; sh:maxCount 1 ;
+        sh:datatype xsd:boolean
+    ] .

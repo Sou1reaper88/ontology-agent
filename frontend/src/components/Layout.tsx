@@ -1,11 +1,23 @@
-import { Layout, Menu } from "antd";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Button, Dropdown, Menu } from "antd";
+import type { MenuProps } from "antd";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { activeNavigationKey, NAV_ITEMS } from "./navigation";
+import "./Layout.css";
 
-const { Header, Content } = Layout;
+const menuItems: MenuProps["items"] = NAV_ITEMS.map((item) => ({
+  key: item.key,
+  label: item.label,
+}));
 
 export default function MainLayout() {
+  const location = useLocation();
   const navigate = useNavigate();
   const username = localStorage.getItem("username") || "admin";
+
+  const onNavigate: MenuProps["onClick"] = ({ key }) => {
+    const target = NAV_ITEMS.find((item) => item.key === key);
+    if (target) navigate(target.path);
+  };
 
   const onLogout = () => {
     localStorage.removeItem("token");
@@ -14,31 +26,55 @@ export default function MainLayout() {
   };
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Header style={{ display: "flex", alignItems: "center" }}>
-        <div style={{ color: "#fff", fontSize: 16, marginRight: 32, whiteSpace: "nowrap" }}>
-          本体取数智能体
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        跳转到主要内容
+      </a>
+
+      <header className="app-header">
+        <div className="app-header-inner">
+          <Link className="app-brand" to="/chat" aria-label="本体取数智能体首页">
+            <span className="app-brand-mark" aria-hidden="true" />
+            <span className="app-brand-copy">
+              <span className="app-brand-name">本体取数智能体</span>
+              <span className="app-brand-subtitle">Ontology analyst</span>
+            </span>
+          </Link>
+
+          <nav aria-label="主要导航">
+            <Menu
+              className="desktop-navigation"
+              mode="horizontal"
+              selectedKeys={[activeNavigationKey(location.pathname)]}
+              onClick={onNavigate}
+              items={menuItems}
+            />
+          </nav>
+
+          <Dropdown
+            menu={{ items: menuItems, onClick: onNavigate }}
+            placement="bottomRight"
+            trigger={["click"]}
+          >
+            <Button className="mobile-navigation" type="text" aria-label="打开主要导航">
+              菜单
+            </Button>
+          </Dropdown>
+
+          <div className="app-user-actions">
+            <span className="app-user-name" title={username}>
+              {username}
+            </span>
+            <Button className="app-logout" type="text" onClick={onLogout}>
+              退出
+            </Button>
+          </div>
         </div>
-        <Menu
-          theme="dark"
-          mode="horizontal"
-          defaultSelectedKeys={["chat"]}
-          onClick={(e) => navigate(`/${e.key}`)}
-          items={[
-            { key: "chat", label: "对话" },
-            { key: "ontology", label: "本体定义" },
-            { key: "query", label: "数据查询" },
-            { key: "admin", label: "管理后台" },
-          ]}
-          style={{ flex: 1 }}
-        />
-        <span style={{ color: "#fff", marginRight: 16, cursor: "pointer" }} onClick={onLogout}>
-          {username} · 退出
-        </span>
-      </Header>
-      <Content style={{ padding: 24 }}>
+      </header>
+
+      <main id="main-content" className="app-main">
         <Outlet />
-      </Content>
-    </Layout>
+      </main>
+    </div>
   );
 }

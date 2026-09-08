@@ -206,6 +206,32 @@ def test_llm_select_parses_json(test_table, monkeypatch) -> None:
     assert c._llm_select_tables("查询沉默用户", tables) == [TEST_TABLE]
 
 
+def test_table_selection_receives_assembled_conversation_context(monkeypatch) -> None:
+    c = DbOntologyClient()
+    table = {
+        "table_name": TEST_TABLE,
+        "table_comment": "客户表",
+        "table_desc": "客户基础信息",
+        "columns": [],
+    }
+    captured = {}
+
+    def fake_select(query, tables, conversation_context=None):
+        captured["context"] = conversation_context
+        return [TEST_TABLE]
+
+    monkeypatch.setattr(c, "_load_tables", lambda: [table])
+    monkeypatch.setattr(c, "_llm_select_tables", fake_select)
+
+    result = c.get_ontology_definition(
+        "查询客户",
+        additional_context="用户已确认仅查询浙江客户",
+    )
+
+    assert captured["context"] == "用户已确认仅查询浙江客户"
+    assert TEST_TABLE in result["object_classes"]
+
+
 def test_semantics_allows_hive_functions_and_date_literals(test_table) -> None:
     """语义校验：Hive 日期函数（TO_DATE 等）与日期格式串不应误判为未知字段。"""
     c = DbOntologyClient()

@@ -9,6 +9,9 @@ from models.query_result import QueryResult
 from models.audit_log import AuditLog
 from models.conversation import Conversation
 from models.conversation_message import ConversationMessage
+from models.evaluation_run import EvaluationRun
+from models.evaluation_case import EvaluationCase
+from models.saved_prompt import SavedPrompt
 
 __all__ = [
     "Base",
@@ -23,4 +26,7 @@ __all__ = [
     "AuditLog",
     "Conversation",
     "ConversationMessage",
+    "EvaluationRun",
+    "EvaluationCase",
+    "SavedPrompt",
 ]

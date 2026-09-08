@@ -7,15 +7,19 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from agent.ontology_shadow import get_ontology_shadow_service, unavailable_shadow_result
+from agent.program_generation import ProgramGenerationResult, generate_program
 from tools.llm_client import PLACEHOLDER_KEY, get_llm_client
 from tools.ontology_client import IRRELEVANT_MESSAGE, get_ontology_client
 
@@ -31,6 +35,7 @@ class AgentState(TypedDict, total=False):
     system_time: str | None
     history: list[dict[str, str]]
     conversation_context: str | None
+    assembled_context: str | None
     ttl_def: dict[str, Any]
     attr_map: dict[str, Any]
     field_map: dict[str, str]
@@ -72,10 +77,41 @@ def _db_prefix(table: str) -> str:
 
 # 裁剪触发业务词：问题命中任一 → 启动裁剪
 _FIELD_KEYWORDS = (
-    "号码", "用户", "地市", "城市", "账期", "日期", "时间", "通话", "流量", "沉默",
-    "投诉", "家庭", "决策者", "全球通", "集团", "订购", "套餐", "免打扰", "状态",
-    "类型", "名称", "金额", "费用", "生效", "失效", "到期", "宽带", "账单", "年龄",
-    "性别", "身份证", "5G", "发展", "办理", "安全管家",
+    "号码",
+    "用户",
+    "地市",
+    "城市",
+    "账期",
+    "日期",
+    "时间",
+    "通话",
+    "流量",
+    "沉默",
+    "投诉",
+    "家庭",
+    "决策者",
+    "全球通",
+    "集团",
+    "订购",
+    "套餐",
+    "免打扰",
+    "状态",
+    "类型",
+    "名称",
+    "金额",
+    "费用",
+    "生效",
+    "失效",
+    "到期",
+    "宽带",
+    "账单",
+    "年龄",
+    "性别",
+    "身份证",
+    "5G",
+    "发展",
+    "办理",
+    "安全管家",
 )
 # 触发词命中时额外保留的字段子集（业务口径依赖的字段，如"沉默"需通话/流量字段）
 _TRIGGER_EXTRA: dict[str, tuple[str, ...]] = {
@@ -217,9 +253,33 @@ def _build_rules_prompt(state: AgentState) -> str:
     objs = ttl.get("object_classes", {})
     field_meta = ttl.get("field_meta", {})
     biz_words = (
-        "通话", "流量", "费用", "金额", "次数", "时长", "状态", "标识", "类型",
-        "订购", "套餐", "生效", "失效", "日期", "账期", "号码", "编码", "名称",
-        "GPRS", "5G", "4G", "免费", "漫游", "投诉", "家庭", "集团", "宽带",
+        "通话",
+        "流量",
+        "费用",
+        "金额",
+        "次数",
+        "时长",
+        "状态",
+        "标识",
+        "类型",
+        "订购",
+        "套餐",
+        "生效",
+        "失效",
+        "日期",
+        "账期",
+        "号码",
+        "编码",
+        "名称",
+        "GPRS",
+        "5G",
+        "4G",
+        "免费",
+        "漫游",
+        "投诉",
+        "家庭",
+        "集团",
+        "宽带",
     )
     items: list[tuple[str, str, str, str]] = []
     for tname, obj in objs.items():
@@ -238,14 +298,11 @@ def _build_rules_prompt(state: AgentState) -> str:
     items.sort(key=_score, reverse=True)
     items = items[:80]
     items.sort(key=lambda x: (x[0], x[1]))  # 裁剪后按表恢复稳定顺序
-    lines = [
-        f"{t}.{f}（{comment}{'；描述：' + d if d else ''}）"
-        for t, f, comment, d in items
-    ]
+    lines = [f"{t}.{f}（{comment}{'；描述：' + d if d else ''}）" for t, f, comment, d in items]
     if not lines:
         lines.append("（无候选字段）")
     logdefs = _render_logical_defs(ttl, state)
-    return (
+    prompt = (
         "你是电信业务取数口径分析助手。根据用户取数需求与候选表字段信息，推导业务口径"
         "（过滤条件/统计口径），明确到物理字段与取值条件。\n"
         "候选表为电信用户业务宽表，包含通话/流量/费用/订购等业务字段；"
@@ -264,6 +321,32 @@ def _build_rules_prompt(state: AgentState) -> str:
         '- 只输出 JSON，格式 {"business_rules": "自然语言口径说明", "rule_fields": ["物理字段(大写)"], "rule_condition": "可直接拼入 WHERE 的 SQL 条件片段，字段大写，不含分区/账期条件"}\n'
         '- 若需求与候选表字段完全无关或无法推导，返回 {"business_rules": "", "rule_fields": [], "rule_condition": ""}'
     )
+    context = _conversation_context_text(state)
+    if context:
+        prompt += f"\n\n本轮共享会话上下文：\n{context}"
+    return prompt
+
+
+def _conversation_context_text(state: AgentState) -> str:
+    """Return preassembled context, with a raw-history compatibility path."""
+
+    assembled = (state.get("assembled_context") or "").strip()
+    if assembled:
+        return assembled
+    parts: list[str] = []
+    conversation_context = (state.get("conversation_context") or "").strip()
+    if conversation_context:
+        parts.append(f"会话约束：\n{conversation_context}")
+    history = state.get("history") or []
+    if history:
+        lines = ["历史对话："]
+        for item in history:
+            role = "用户" if item.get("role") == "user" else "助手"
+            lines.append(f"{role}：{item.get('content', '')}")
+            if item.get("sql"):
+                lines.append(f"助手已生成 SQL：{item['sql']}")
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
 
 
 def _parse_rules(raw: str) -> dict[str, Any] | None:
@@ -279,11 +362,7 @@ def _parse_rules(raw: str) -> dict[str, Any] | None:
         return None
     br = (data.get("business_rules") or "").strip()
     cond = (data.get("rule_condition") or "").strip()
-    fields = [
-        str(f).strip().upper()
-        for f in (data.get("rule_fields") or [])
-        if str(f).strip()
-    ]
+    fields = [str(f).strip().upper() for f in (data.get("rule_fields") or []) if str(f).strip()]
     if not br and not cond:
         return None
     return {"business_rules": br, "rule_fields": fields, "rule_condition": cond}
@@ -418,17 +497,9 @@ def _build_system_prompt(state: AgentState) -> str:
         "- 涉及多表时，必须按上方关系定义给出的关联键 JOIN，禁止自行猜测关联键。\n"
         "- 只输出一条完整 HiveSQL，以分号结束，不要任何解释文字。\n"
     )
-    ctx = state.get("conversation_context")
-    if ctx:
-        prompt += f"对话上下文（常驻约束，必须遵守）：{ctx}\n"
-    history = state.get("history") or []
-    if history:
-        prompt += "历史对话（用户之前的提问与已生成的 SQL，供继续完善参考，仅作上下文不要重复回答）：\n"
-        for h in history[-6:]:
-            role = "用户" if h.get("role") == "user" else "助手"
-            prompt += f"{role}：{h.get('content', '')}\n"
-            if h.get("sql"):
-                prompt += f"助手已生成SQL：{h['sql']}\n"
+    context = _conversation_context_text(state)
+    if context:
+        prompt += f"本轮共享会话上下文（必须遵守，不要重复回答）：\n{context}\n"
     return prompt
 
 
@@ -842,8 +913,13 @@ def _step_summary(node: str, out: dict[str, Any], state: AgentState) -> str:
     return ""
 
 
-def _traced(node: str, fn: Callable[[AgentState], dict[str, Any]], on_step: Callable[[dict[str, Any]], None] | None):
+def _traced(
+    node: str,
+    fn: Callable[[AgentState], dict[str, Any]],
+    on_step: Callable[[dict[str, Any]], None] | None,
+):
     """节点包装器：自动记录步骤（名称/状态/耗时/摘要）并累计进 state.trace。"""
+
     def wrapped(state: AgentState) -> dict[str, Any]:
         start = time.time()
         try:
@@ -866,20 +942,28 @@ def _traced(node: str, fn: Callable[[AgentState], dict[str, Any]], on_step: Call
             except Exception:
                 logger.warning("trace 回调异常", exc_info=True)
         return out
+
     return wrapped
 
 
 def build_graph(on_step: Callable[[dict[str, Any]], None] | None = None):
     g = StateGraph(AgentState)
-    g.add_node("get_ttl_definition", _traced("get_ttl_definition", node_get_ttl_definition, on_step))
-    g.add_node("parse_external_tables", _traced("parse_external_tables", node_parse_external_tables, on_step))
+    g.add_node(
+        "get_ttl_definition", _traced("get_ttl_definition", node_get_ttl_definition, on_step)
+    )
+    g.add_node(
+        "parse_external_tables",
+        _traced("parse_external_tables", node_parse_external_tables, on_step),
+    )
     g.add_node("get_attr_mapping", _traced("get_attr_mapping", node_get_attr_mapping, on_step))
     g.add_node("transform_fields", _traced("transform_fields", node_transform_fields, on_step))
     g.add_node("calc_dates", _traced("calc_dates", node_calc_dates, on_step))
     g.add_node("derive_rules", _traced("derive_rules", node_derive_rules, on_step))
     g.add_node("build_sql", _traced("build_sql", node_build_sql, on_step))
     g.add_node("validate_syntax", _traced("validate_syntax", node_validate_syntax, on_step))
-    g.add_node("validate_semantics", _traced("validate_semantics", node_validate_semantics, on_step))
+    g.add_node(
+        "validate_semantics", _traced("validate_semantics", node_validate_semantics, on_step)
+    )
     g.add_node("fix_sql", _traced("fix_sql", node_fix_sql, on_step))
     g.add_node("format_output", _traced("format_output", node_format_output, on_step))
     g.add_node("format_failure", _traced("format_failure", node_format_failure, on_step))
@@ -924,22 +1008,16 @@ def build_graph(on_step: Callable[[dict[str, Any]], None] | None = None):
 graph = build_graph()
 
 
-def run_agent(
+def _run_legacy_agent(
     user_query: str,
     additional_context: str | None = None,
     ontology_id: str | None = None,
     system_time: str | None = None,
     history: list[dict[str, str]] | None = None,
     conversation_context: str | None = None,
+    assembled_context: str | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """执行 8 步编排，返回格式化输出（output 内附 trace 生成链路步骤）。
-
-    history：历史消息列表 [{"role": "user|assistant", "content": str, "sql": str|None}]，
-    作为上下文注入 system prompt，供多轮继续完善 SQL。
-    conversation_context：对话级常驻约束/补充信息。
-    on_step：每个节点完成时的回调（实时链路可视化用，收到 {node,label,status,duration_ms,summary}）。
-    """
     g = build_graph(on_step) if on_step else graph
     result = g.invoke(
         {
@@ -949,11 +1027,263 @@ def run_agent(
             "system_time": system_time,
             "history": history or [],
             "conversation_context": conversation_context,
+            "assembled_context": assembled_context,
             "retry_count": 0,
             "errors": [],
         }
     )
     output = result.get("output", {})
     if isinstance(output, dict):
-        output["trace"] = result.get("trace", [])
+        output["trace"] = list(result.get("trace", []))
+    return output
+
+
+def _program_system_time(value: str | None) -> datetime:
+    raw = value or datetime.now().strftime("%Y-%m-%d")
+    try:
+        return datetime.strptime(str(raw)[:10], "%Y-%m-%d")
+    except ValueError:
+        return datetime.now()
+
+
+def _default_request_id(
+    user_query: str,
+    system_time: str | None,
+    ontology_id: str | None,
+) -> str:
+    seed = "\0".join((user_query, system_time or "", ontology_id or ""))
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
+    program = result.program
+    plan = result.plan
+    inferred_plan = result.inferred_plan
+    steps: list[dict[str, Any]] = []
+    temporal: list[dict[str, Any]] = []
+    if program is not None:
+        steps = [item.model_dump(mode="json") for item in program.statements]
+        temporal = [
+            item.model_dump(mode="json")
+            for item in program.evidence.temporal_decisions
+        ]
+    package = None
+    if plan is not None:
+        package = {
+            "package_id": plan.package_id,
+            "version": plan.package_version,
+            "sha256": plan.package_sha256,
+        }
+    elif inferred_plan is not None:
+        package = {
+            "package_id": inferred_plan.package_id,
+            "version": inferred_plan.package_version,
+            "sha256": inferred_plan.package_sha256,
+        }
+    return {
+        "program_id": program.program_id if program is not None else None,
+        "platform": program.dialect if program is not None else None,
+        "generation_mode": result.mode.value,
+        "intent": (
+            result.intent.model_dump(mode="json") if result.intent is not None else None
+        ),
+        "program_plan": plan.model_dump(mode="json") if plan is not None else None,
+        "inferred_plan": (
+            inferred_plan.model_dump(mode="json")
+            if inferred_plan is not None
+            else None
+        ),
+        "program_steps": steps,
+        "diagnostics": [item.model_dump(mode="json") for item in result.diagnostics],
+        "package": package,
+        "temporal_evidence": temporal,
+        "inference_evidence": (
+            program.evidence.inference.model_dump(mode="json")
+            if program is not None and program.evidence.inference is not None
+            else None
+        ),
+        "missing_information": list(result.missing_information),
+    }
+
+
+def _program_step(
+    result: ProgramGenerationResult,
+    *,
+    duration_ms: int,
+) -> dict[str, Any]:
+    payload = _program_payload(result)
+    if result.sql is not None:
+        status = "success"
+        prefix = "已生成候选" if result.mode.value == "inferred_program" else "已生成"
+        summary = f"{prefix} {len(payload['program_steps'])} 个物化步骤"
+    elif result.clarification is not None:
+        status = "skipped"
+        summary = result.clarification
+    else:
+        status = "error"
+        summary = (
+            result.diagnostics[0].message
+            if result.diagnostics
+            else "未生成取数程序"
+        )
+    return {
+        "node": "program_generation",
+        "label": "本体程序规划与编译",
+        "status": status,
+        "duration_ms": duration_ms,
+        "summary": summary,
+        "payload": payload,
+    }
+
+
+def _append_shadow(
+    output: dict[str, Any],
+    *,
+    user_query: str,
+    system_time: str | None,
+    on_step: Callable[[dict[str, Any]], None] | None,
+) -> None:
+    sql = output.get("sql")
+    if not sql:
+        return
+    started_at = time.time()
+    try:
+        shadow = get_ontology_shadow_service().preview(
+            user_query,
+            sql,
+            system_time=system_time,
+        )
+    except Exception as exc:
+        logger.warning("本体影子接入异常: %s", type(exc).__name__)
+        shadow = unavailable_shadow_result(sql)
+    payload = shadow.model_dump(mode="json")
+    step_status = {
+        "generated": "success",
+        "unavailable": "error",
+    }.get(shadow.status, "skipped")
+    step = {
+        "node": "ontology_shadow",
+        "label": "本体对照证据",
+        "status": step_status,
+        "duration_ms": int((time.time() - started_at) * 1000),
+        "summary": shadow.summary,
+        "payload": payload,
+    }
+    output.setdefault("trace", []).append(step)
+    output["ontology_shadow"] = payload
+    if on_step is not None:
+        try:
+            on_step(step)
+        except Exception:
+            logger.warning("本体影子 trace 回调异常", exc_info=True)
+
+
+def run_agent(
+    user_query: str,
+    additional_context: str | None = None,
+    ontology_id: str | None = None,
+    system_time: str | None = None,
+    history: list[dict[str, str]] | None = None,
+    conversation_context: str | None = None,
+    assembled_context: str | None = None,
+    on_step: Callable[[dict[str, Any]], None] | None = None,
+    request_id: str | None = None,
+    allow_legacy_compatibility: bool = False,
+) -> dict[str, Any]:
+    """默认生成本体绑定的多步取数程序，旧图仅用于受控回退。"""
+    legacy_output: dict[str, Any] | None = None
+
+    def legacy_sql_factory() -> str:
+        nonlocal legacy_output
+        legacy_output = _run_legacy_agent(
+            user_query,
+            additional_context=assembled_context or additional_context,
+            ontology_id=ontology_id,
+            system_time=system_time,
+            history=history,
+            conversation_context=conversation_context,
+            assembled_context=assembled_context,
+            on_step=on_step,
+        )
+        sql = legacy_output.get("sql") if legacy_output.get("success") else None
+        if not isinstance(sql, str) or not sql.strip():
+            raise ValueError("legacy generation did not return a query")
+        return sql
+
+    started_at = time.time()
+    generation_kwargs = {
+        "request_id": request_id
+        or _default_request_id(user_query, system_time, ontology_id),
+        "system_time": _program_system_time(system_time),
+        "legacy_sql_factory": legacy_sql_factory,
+        "allow_legacy_compatibility": allow_legacy_compatibility,
+    }
+    if assembled_context:
+        generation_kwargs["conversation_context"] = assembled_context
+    result = generate_program(user_query, **generation_kwargs)
+    step = _program_step(
+        result,
+        duration_ms=int((time.time() - started_at) * 1000),
+    )
+    if on_step is not None:
+        try:
+            on_step(step)
+        except Exception:
+            logger.warning("程序生成 trace 回调异常", exc_info=True)
+
+    if result.sql is None:
+        if legacy_output is not None and legacy_output.get("irrelevant"):
+            output = dict(legacy_output)
+            output["generation_mode"] = result.mode.value
+            output["diagnostics"] = [
+                item.model_dump(mode="json") for item in result.diagnostics
+            ]
+            output["trace"] = [step, *output.get("trace", [])]
+            return output
+        diagnostics = [item.model_dump(mode="json") for item in result.diagnostics]
+        message = result.clarification or (
+            result.diagnostics[0].message
+            if result.diagnostics
+            else "未生成安全取数程序"
+        )
+        return {
+            "success": False,
+            "sql": None,
+            "markdown": message,
+            "errors": [message],
+            "generation_mode": result.mode.value,
+            "clarification": result.clarification,
+            "diagnostics": diagnostics,
+            "missing_information": list(result.missing_information),
+            "trace": [step],
+        }
+
+    payload = _program_payload(result)
+    output = dict(legacy_output or {})
+    output.update(payload)
+    output.update(
+        {
+            "success": True,
+            "sql": result.sql,
+            "markdown": (
+                (
+                    "## 候选取数程序\n"
+                    "- 状态：LLM 推断、未经本体确认、不可自动执行\n"
+                    if result.mode.value == "inferred_program"
+                    else "## 取数程序\n"
+                )
+                + f"- 生成模式：{result.mode.value}\n"
+                f"- 物化步骤：{len(payload['program_steps'])}\n\n"
+                "脚本已生成，请在下方取数程序区域查看和复制。"
+            ),
+            "trace": [step, *(legacy_output or {}).get("trace", [])],
+        }
+    )
+    if result.mode.value == "wrapped_legacy":
+        _append_shadow(
+            output,
+            user_query=user_query,
+            system_time=system_time,
+            on_step=on_step,
+        )
     return output

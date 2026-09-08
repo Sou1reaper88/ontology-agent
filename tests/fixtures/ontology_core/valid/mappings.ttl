@@ -1,0 +1,15 @@
+@prefix ex: <https://example.invalid/ontology/> .
+@prefix oa: <urn:ontology-agent:core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:NeutralSource a oa:DataSource ;
+    oa:shortName "NeutralSource" ;
+    rdfs:label "Neutral source"@en ;
+    oa:platformType "generic" .
+
+ex:MetricMapping a oa:PhysicalMapping ;
+    oa:shortName "MetricMapping" ;
+    rdfs:label "Metric mapping"@en ;
+    oa:semanticElement ex:Metric ;
+    oa:dataSource ex:NeutralSource ;
+    oa:enabled true .

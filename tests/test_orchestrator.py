@@ -16,6 +16,244 @@ from agent.orchestrator import (
 from tools.ontology_client import MockOntologyClient
 
 
+class _GeneratedShadowService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None, str | None]] = []
+
+    def preview(
+        self,
+        query: str,
+        legacy_sql: str | None,
+        *,
+        system_time: str | None = None,
+    ):
+        from agent.ontology_shadow import (
+            OntologyEvidence,
+            OntologyShadowResult,
+            ShadowPackage,
+            SqlDiff,
+        )
+
+        self.calls.append((query, legacy_sql, system_time))
+        return OntologyShadowResult(
+            status="generated",
+            ontology_sql='SELECT "metric" FROM "semantic"."records";',
+            summary="本体 SQL 与现有 SQL 存在差异",
+            diff=SqlDiff(
+                changed=True,
+                legacy_tables=("legacy.table",),
+                ontology_tables=("semantic.records",),
+            ),
+            evidence=OntologyEvidence(
+                concepts=("Record",),
+                properties=("Metric",),
+            ),
+            package=ShadowPackage(package_id="example.shadow", version="1.0.0", sha256="a" * 12),
+        )
+
+
+def test_run_agent_appends_shadow_without_changing_legacy_sql(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+
+    service = _GeneratedShadowService()
+    steps: list[dict] = []
+    monkeypatch.setattr(orchestrator, "get_ontology_shadow_service", lambda: service)
+
+    output = orchestrator.run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        on_step=steps.append,
+        allow_legacy_compatibility=True,
+    )
+
+    assert output["success"] is True
+    assert "D_BBZX_DW_PRODUCT_M" in output["sql"]
+    assert service.calls == [("查询6月沉默用户", output["sql"], "2026-08-14")]
+    assert output["ontology_shadow"]["status"] == "generated"
+    assert output["trace"][-1]["node"] == "ontology_shadow"
+    assert output["trace"][-1]["payload"] == output["ontology_shadow"]
+    assert steps[-1]["node"] == "ontology_shadow"
+
+
+def test_shadow_exception_does_not_fail_legacy_agent(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+
+    class _RaisingService:
+        def preview(self, query: str, legacy_sql: str | None, *, system_time: str | None = None):
+            raise RuntimeError("fictional-shadow-secret")
+
+    monkeypatch.setattr(orchestrator, "get_ontology_shadow_service", lambda: _RaisingService())
+
+    output = orchestrator.run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )
+
+    assert output["success"] is True
+    assert "D_BBZX_DW_PRODUCT_M" in output["sql"]
+    assert output["ontology_shadow"]["status"] == "unavailable"
+    assert "fictional-shadow-secret" not in str(output["ontology_shadow"])
+
+
+def test_assembled_context_is_shared_by_rules_and_sql_prompts() -> None:
+    from agent.orchestrator import _build_rules_prompt, _build_system_prompt
+
+    state = {
+        "user_query": "查询客户",
+        "ttl_def": {"object_classes": {}, "logical_definitions": {}},
+        "field_map": {},
+        "assembled_context": "已确认业务口径：仅查询正常在网客户",
+        "p_day": "20260822",
+        "p_mon": "202607",
+    }
+
+    assert "已确认业务口径：仅查询正常在网客户" in _build_rules_prompt(state)
+    assert "已确认业务口径：仅查询正常在网客户" in _build_system_prompt(state)
+
+
+def test_run_agent_uses_native_program_as_default_without_legacy_graph(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+    from agent.program_generation import (
+        ProgramGenerationMode,
+        ProgramGenerationResult,
+    )
+    from ontology_core.program_compiler import HiveProgramCompiler
+    from tests.test_program_planner import _bound_plan
+
+    plan = _bound_plan()
+    program = HiveProgramCompiler().compile(plan)
+    calls: list[tuple[str, str]] = []
+
+    def fake_generate(
+        query,
+        *,
+        request_id,
+        system_time,
+        legacy_sql_factory,
+        allow_legacy_compatibility,
+    ):
+        calls.append((query, request_id))
+        return ProgramGenerationResult(
+            sql=program.sql,
+            program=program,
+            plan=plan,
+            intent=plan.intent,
+            mode=ProgramGenerationMode.PROGRAM,
+            diagnostics=(),
+        )
+
+    monkeypatch.setattr(orchestrator, "generate_program", fake_generate)
+    monkeypatch.setattr(
+        orchestrator,
+        "build_graph",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy graph called")),
+    )
+
+    output = orchestrator.run_agent(
+        "生成客户结果",
+        request_id="message-001",
+        system_time="2026-08-24",
+    )
+
+    assert output["success"] is True
+    assert output["sql"] == program.sql
+    assert output["generation_mode"] == "program"
+    assert output["program_id"] == plan.program_id
+    assert output["intent"] == plan.intent.model_dump(mode="json")
+    assert output["program_plan"]["package_sha256"] == "a" * 64
+    assert output["program_steps"][0]["target_table"] == program.result_table
+    assert output["temporal_evidence"] == []
+    assert output["trace"][0]["node"] == "program_generation"
+    assert calls == [("生成客户结果", "message-001")]
+
+
+def test_run_agent_exposes_inferred_evidence_without_running_shadow(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+    from agent.program_generation import ProgramGenerationMode, ProgramGenerationResult
+    from ontology_core.inference_compiler import HiveInferenceCompiler
+    from tests.ontology_core.test_inference_compiler import _object, _plan
+
+    plan = _plan(_object("Customer"))
+    program = HiveInferenceCompiler().compile(plan, program_id="a1b2c3d4e5f6")
+
+    def fake_generate(query, **kwargs):
+        return ProgramGenerationResult(
+            sql=program.sql,
+            program=program,
+            plan=None,
+            intent=None,
+            mode=ProgramGenerationMode.INFERRED_PROGRAM,
+            diagnostics=(),
+            inferred_plan=plan,
+        )
+
+    monkeypatch.setattr(orchestrator, "generate_program", fake_generate)
+    monkeypatch.setattr(
+        orchestrator,
+        "get_ontology_shadow_service",
+        lambda: (_ for _ in ()).throw(AssertionError("shadow must not run")),
+    )
+
+    output = orchestrator.run_agent(
+        "查询客户手机号码",
+        request_id="message-003",
+        system_time="2026-08-24",
+    )
+
+    assert output["success"] is True
+    assert output["generation_mode"] == "inferred_program"
+    assert output["inference_evidence"]["overall_confidence"] == "medium"
+    assert output["package"]["sha256"] == "a" * 64
+    assert "未经本体确认" in output["markdown"]
+    assert "ontology_shadow" not in output
+
+
+def test_run_agent_does_not_fallback_when_clarification_is_required(monkeypatch) -> None:
+    import agent.orchestrator as orchestrator
+    from agent.program_generation import (
+        ProgramGenerationMode,
+        ProgramGenerationResult,
+    )
+    from ontology_core.program_models import ProgramDiagnostic
+
+    diagnostic = ProgramDiagnostic(
+        code="ambiguous_business_term",
+        message="请确认客户口径",
+    )
+
+    def fake_generate(
+        query,
+        *,
+        request_id,
+        system_time,
+        legacy_sql_factory,
+        allow_legacy_compatibility,
+    ):
+        return ProgramGenerationResult(
+            sql=None,
+            program=None,
+            plan=None,
+            intent=None,
+            mode=ProgramGenerationMode.CLARIFICATION_REQUIRED,
+            diagnostics=(diagnostic,),
+            clarification="请确认客户口径",
+        )
+
+    monkeypatch.setattr(orchestrator, "generate_program", fake_generate)
+
+    output = orchestrator.run_agent(
+        "生成客户结果",
+        request_id="message-002",
+        system_time="2026-08-24",
+    )
+
+    assert output["success"] is False
+    assert output.get("sql") is None
+    assert output["generation_mode"] == "clarification_required"
+    assert output["clarification"] == "请确认客户口径"
+
+
 def test_irrelevant_question_short_circuits(monkeypatch) -> None:
     """无关问题：检索器返回 irrelevant → 编排短路输出友好提示，不生成 SQL。"""
 
@@ -28,7 +266,7 @@ def test_irrelevant_question_short_circuits(monkeypatch) -> None:
             }
 
     monkeypatch.setattr("agent.orchestrator.get_ontology_client", lambda: _FakeClient())
-    out = run_agent("今天天气怎么样")
+    out = run_agent("今天天气怎么样", allow_legacy_compatibility=True)
     assert out["success"] is False
     assert out.get("sql") is None
     assert "与取数业务无关" in out["markdown"]
@@ -68,7 +306,11 @@ def test_derive_rules_parses_json(monkeypatch) -> None:
     assert out2["derived_rules"] is None
 
     # 无 API Key → 跳过
-    monkeypatch.setattr(orch, "get_llm_client", lambda: type("X", (), {"api_key": "", "generate_sql": lambda *a: "{}"})())
+    monkeypatch.setattr(
+        orch,
+        "get_llm_client",
+        lambda: type("X", (), {"api_key": "", "generate_sql": lambda *a: "{}"})(),
+    )
     out3 = orch.node_derive_rules({"user_query": "查询5G用户", "ttl_def": ttl})
     assert out3["derived_rules"] is None
 
@@ -79,7 +321,12 @@ def test_derive_rules_injected_into_prompt() -> None:
 
     state = {
         "user_query": "查询5G用户",
-        "ttl_def": {"object_classes": {"D_X": {"table_name": "D_X", "db_prefix": "bddwd_hive_db", "attributes": {}}}, "logical_definitions": {}},
+        "ttl_def": {
+            "object_classes": {
+                "D_X": {"table_name": "D_X", "db_prefix": "bddwd_hive_db", "attributes": {}}
+            },
+            "logical_definitions": {},
+        },
         "derived_rules": {
             "business_rules": "5G用户=有GPRS流量",
             "rule_fields": ["GPRS_VOLUME"],
@@ -124,7 +371,11 @@ def test_mock_template_uses_rule_condition() -> None:
 
 def test_normal_flow_success() -> None:
     """正常流程：生成 SQL 且通过语法+语义审计。"""
-    out = run_agent("查询6月沉默用户", system_time="2026-08-14")
+    out = run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )
     assert out["success"] is True
     sql = out["sql"]
     # 零幻觉：仅物理字段名
@@ -142,10 +393,26 @@ def test_normal_flow_success() -> None:
 
 def test_mock_template_varies_by_query() -> None:
     """不同问题应生成不同 SQL（模板按业务/账期/月数动态变化）。"""
-    a = run_agent("查询6月沉默用户", system_time="2026-08-14")["sql"]
-    b = run_agent("查询5月沉默用户", system_time="2026-08-14")["sql"]
-    c = run_agent("查询沉默6个月的用户", system_time="2026-08-14")["sql"]
-    d = run_agent("查询4月用户清单", system_time="2026-08-14")["sql"]
+    a = run_agent(
+        "查询6月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
+    b = run_agent(
+        "查询5月沉默用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
+    c = run_agent(
+        "查询沉默6个月的用户",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
+    d = run_agent(
+        "查询4月用户清单",
+        system_time="2026-08-14",
+        allow_legacy_compatibility=True,
+    )["sql"]
     assert a != b, "不同账期应生成不同 SQL"
     assert "P_MON IN ('202606')" in a
     assert "P_MON IN ('202605')" in b
@@ -156,7 +423,11 @@ def test_mock_template_varies_by_query() -> None:
 
 def test_date_calculation_month_boundary() -> None:
     """日期推算：8 月初 → p_mon 回退 7 月，p_day 跨月。"""
-    out = run_agent("查询沉默用户", system_time="2026-08-01")
+    out = run_agent(
+        "查询沉默用户",
+        system_time="2026-08-01",
+        allow_legacy_compatibility=True,
+    )
     assert out["p_day"] == "20260730"
     assert out["p_mon"] == "202607"
 
@@ -164,10 +435,7 @@ def test_date_calculation_month_boundary() -> None:
 def test_syntax_validation_and_fix() -> None:
     """语法校验失败 → fix 受限修复（补分号）→ 重跑通过。"""
     client = MockOntologyClient()
-    bad_sql = (
-        "SELECT SUBS_NUMBER FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M "
-        "WHERE P_MON='202607'"
-    )
+    bad_sql = "SELECT SUBS_NUMBER FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M " "WHERE P_MON='202607'"
     result = client.validate_sql(bad_sql)
     assert result["valid"] is False
 
@@ -187,8 +455,7 @@ def test_semantics_validation() -> None:
     assert client.validate_sql_semantics(ok_sql)["valid"] is True
 
     bad_sql = (
-        "SELECT NOT_EXIST_FIELD "
-        "FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M WHERE P_MON='202607';"
+        "SELECT NOT_EXIST_FIELD " "FROM bddwd_hive_db.D_BBZX_DW_PRODUCT_M WHERE P_MON='202607';"
     )
     assert client.validate_sql_semantics(bad_sql)["valid"] is False
 
@@ -255,7 +522,11 @@ def test_build_system_prompt_renders_logical_defs() -> None:
         "p_mon": "202607",
         "ttl_def": {
             "object_classes": {
-                "D_CRM_INS_OFFER_D": {"table_name": "D_CRM_INS_OFFER_D", "db_prefix": "bddwd_hive_db", "attributes": {}}
+                "D_CRM_INS_OFFER_D": {
+                    "table_name": "D_CRM_INS_OFFER_D",
+                    "db_prefix": "bddwd_hive_db",
+                    "attributes": {},
+                }
             },
             "logical_definitions": {
                 "来信免打扰订购用户": "已订购来信免打扰的用户（条件：{OFFER_ID='610000149732' AND P_DAY='{月末分区}'}{B: AND EFFECTIVE_DATE<='{结束}' AND EXPIRE_DATE>'{开始}'}{C: AND CREATE_DATE>='{开始}' AND CREATE_DATE<='{结束}'}）"

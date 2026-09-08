@@ -75,8 +75,16 @@ class LLMSettings(BaseSettings):
     api_key: str = ""
     model: str = "qwen2.5-coder-32b-instruct"
     temperature: float = 0.0
-    max_tokens: int = 4096
+    max_input_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(default=None, gt=0)
+    # Deprecated compatibility fields. New deployments should use the limits above.
+    max_tokens: int | None = Field(default=None, gt=0)
     timeout_seconds: int = 60
+    context_window_tokens: int | None = Field(default=None, gt=0)
+    context_static_prompt_reserve_tokens: int = 8192
+    context_compression_trigger_ratio: float = 0.8
+    context_compression_target_ratio: float = 0.6
+    context_keep_recent_turns: int = 6
 
 
 class OntologySettings(BaseSettings):
@@ -86,8 +94,20 @@ class OntologySettings(BaseSettings):
     ontology_id: str = ""
     timeout_seconds: int = 30
     retry_times: int = 2
+    package_path: str = ""
+    shadow_enabled: bool = True
     management_root: str = ""
     management_workspace: str = "evaluation"
+    import_token_ttl_seconds: int = 900
+    max_upload_bytes: int = 20 * 1024 * 1024
+    max_xlsx_uncompressed_bytes: int = 100 * 1024 * 1024
+    maintainer_roles: tuple[str, ...] = ("本体维护者", "全省管理员")
+    administrator_roles: tuple[str, ...] = ("全省管理员",)
+
+    @property
+    def management_configured(self) -> bool:
+        """Return whether durable ontology-management storage was configured."""
+        return bool(self.management_root.strip())
 
 
 class Settings(BaseSettings):
@@ -114,7 +134,7 @@ class Settings(BaseSettings):
     ontology: OntologySettings = Field(default_factory=OntologySettings)
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "Settings":
+    def from_yaml(cls, path: str | Path) -> Settings:
         """从 YAML 文件加载配置（与 .env 合并，.env 优先）。"""
         path = Path(path)
         if not path.exists():

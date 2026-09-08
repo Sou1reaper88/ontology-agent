@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tools.ontology_client import DbOntologyClient
@@ -32,7 +33,10 @@ def test_relations_crud(client: TestClient, admin_token: str) -> None:
     assert resp.status_code == 200
     assert any(r["id"] == rid for r in resp.json())
 
-    assert client.delete(f"/ontology/relations/{rid}", headers=_headers(admin_token)).status_code == 204
+    assert (
+        client.delete(f"/ontology/relations/{rid}", headers=_headers(admin_token)).status_code
+        == 204
+    )
 
 
 def test_logical_defs_crud(client: TestClient, admin_token: str) -> None:
@@ -54,16 +58,39 @@ def test_logical_defs_crud(client: TestClient, admin_token: str) -> None:
     assert resp.status_code == 200
     assert any(r["id"] == did for r in resp.json())
 
-    assert client.delete(f"/ontology/logical-defs/{did}", headers=_headers(admin_token)).status_code == 204
+    assert (
+        client.delete(f"/ontology/logical-defs/{did}", headers=_headers(admin_token)).status_code
+        == 204
+    )
 
 
-def test_retrieval_returns_relations_and_defs() -> None:
-    """检索器组装 ttl_def 含关系定义与逻辑定义字段。"""
-    c = DbOntologyClient()
-    ttl = c.get_ontology_definition("查询沉默用户")
-    assert "relations" in ttl and isinstance(ttl["relations"], list)
-    assert isinstance(ttl["logical_definitions"], dict)
-    assert "沉默用户" in ttl["logical_definitions"]  # 迁移的示例口径
+def test_retrieval_returns_relations_and_defs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """检索器组装结果包含关系与逻辑定义，不依赖数据库历史种子。"""
+    client = DbOntologyClient()
+    monkeypatch.setattr(
+        client,
+        "_load_tables",
+        lambda: [
+            {
+                "table_name": "EXAMPLE_ENTITY",
+                "table_comment": "",
+                "table_desc": "",
+                "columns": [],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        client,
+        "_load_logical_defs",
+        lambda: {"example_rule": "neutral contract description"},
+    )
+    monkeypatch.setattr(client, "_load_relations", lambda: [])
+    monkeypatch.setattr(client, "_load_field_meta", lambda: {})
+
+    definition = client.get_ontology_definition("查询数据")
+
+    assert definition["relations"] == []
+    assert definition["logical_definitions"] == {"example_rule": "neutral contract description"}
 
 
 def test_meta_tables_excluded_from_objects() -> None:

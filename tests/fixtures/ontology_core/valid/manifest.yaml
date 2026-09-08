@@ -1,0 +1,8 @@
+package_id: example.neutral
+version: 1.0.0
+files:
+  core: core.ttl
+  domain: domain.ttl
+  mappings: mappings.ttl
+  rules: rules.ttl
+  shapes: shapes.ttl

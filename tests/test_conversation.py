@@ -5,10 +5,37 @@
 
 from __future__ import annotations
 
-import api.routes.conversation as conv_route
 from fastapi.testclient import TestClient
+import json
+from types import SimpleNamespace
+import httpx
+import pytest
+import agent.conversation_agent as conversation_agent
 
+import api.routes.conversation as conv_route
 from tests.conftest import last_assistant_message, send_and_wait
+
+
+@pytest.fixture(autouse=True)
+def _conversation_provider(monkeypatch):
+    """Simulate provider tool responses; never contact a real model in API tests."""
+    monkeypatch.setattr(conversation_agent, "get_llm_client", lambda: SimpleNamespace(
+        api_key="synthetic", base_url="https://example.invalid", model="test", timeout=1))
+    def post(url, **kwargs):
+        payload = kwargs["json"]
+        if payload["tool_choice"] == "none":
+            message = {"role": "assistant", "content": "本轮工具结果已返回，请查看脚本与诊断。"}
+        else:
+            query = json.loads(payload["messages"][1]["content"])["input"]
+            if "天气" in query:
+                message = {"role": "assistant", "content": "我无法获取实时天气。"}
+            else:
+                message = {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "test1", "type": "function", "function": {
+                        "name": "generate_sql_program", "arguments": json.dumps({"requirement": query})}}]}
+        return httpx.Response(200, request=httpx.Request("POST", url),
+            json={"choices": [{"finish_reason": "stop", "message": message}]})
+    monkeypatch.setattr(conversation_agent.httpx, "post", post)
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -21,28 +48,121 @@ def _create_conv(client: TestClient, token: str, **kw) -> dict:
     return resp.json()
 
 
+def _enable_legacy_compatibility(monkeypatch) -> None:
+    original = conv_route.run_agent
+
+    def run_with_legacy(*args, **kwargs):
+        return original(*args, **kwargs, allow_legacy_compatibility=True)
+
+    monkeypatch.setattr(conv_route, "run_agent", run_with_legacy)
+
+
 def test_create_conversation(client: TestClient, admin_token: str) -> None:
     data = _create_conv(client, admin_token, context="用户范围为浙江省")
     assert data["id"] > 0
     assert data["context"] == "用户范围为浙江省"
 
 
-def test_send_message_generates_sql(client: TestClient, admin_token: str) -> None:
+def test_send_message_generates_sql(
+    client: TestClient,
+    admin_token: str,
+    monkeypatch,
+) -> None:
+    _enable_legacy_compatibility(monkeypatch)
     conv = _create_conv(client, admin_token)
     _, msg_id = send_and_wait(
-        client, admin_token, conv["id"],
-        "查询6月沉默用户", system_time="2026-08-14",
+        client,
+        admin_token,
+        conv["id"],
+        "查询6月沉默用户",
+        system_time="2026-08-14",
     )
-    # 生成的 SQL 落库到 assistant 消息，并关联 query_history 供执行
+    # 建表程序落库到 assistant 消息，但不创建可执行 query_history。
     asst = last_assistant_message(client, admin_token, conv["id"])
     assert asst["id"] == msg_id
     assert asst["sql"] and "D_BBZX_DW_PRODUCT_M" in asst["sql"]
-    assert asst["query_id"] is not None
+    assert asst["query_id"] is None
+    assert asst["program"]["mode"] == "wrapped_legacy"
+    assert asst["program"]["platform"] == "hive"
+    assert asst["program"]["steps"][0]["target_table"].startswith("temp_oa_")
+    assert "DROP TABLE" not in asst["content"]
     # 链路 trace 已采集（含检索/映射/生成/校验步骤）
-    assert asst["trace"] and any(s["node"] == "build_sql" for s in asst["trace"])
+    assert asst["trace"] and any(s["node"] == "program_generation" for s in asst["trace"])
 
 
-def test_send_message_status_steps_progress(client: TestClient, admin_token: str) -> None:
+def test_conversation_persists_and_returns_shadow_payload(
+    client: TestClient,
+    admin_token: str,
+    monkeypatch,
+) -> None:
+    shadow = {
+        "status": "generated",
+        "ontology_sql": 'SELECT "metric" FROM "semantic"."records";',
+        "summary": "本体 SQL 与现有 SQL 存在差异",
+        "diff": {
+            "changed": True,
+            "legacy_tables": ["legacy.table"],
+            "ontology_tables": ["semantic.records"],
+        },
+        "evidence": {
+            "concepts": ["Record"],
+            "properties": ["Metric"],
+            "rules": [],
+            "data_sources": ["Warehouse"],
+            "mappings": ["RecordTable", "MetricField"],
+        },
+        "package": {"package_id": "example.shadow", "version": "1.0.0", "sha256": "a" * 12},
+        "temporal_decision": {
+            "partition_field": "p_mon",
+            "grain": "month",
+            "policy_source": "ontology",
+            "system_time": "2026-08-24",
+            "user_time": None,
+            "source": "ontology_default",
+            "default_strategy": "previous_complete_month",
+            "resolved_start": "202607",
+            "resolved_end": "202607",
+            "safety_status": "bounded",
+            "explanation": "用户未指定账期，按本体策略取上一个完整自然月",
+        },
+    }
+
+    def fake_run_agent(query, **kwargs):
+        step = {
+            "node": "ontology_shadow",
+            "label": "本体规划与编译",
+            "status": "success",
+            "duration_ms": 1,
+            "summary": shadow["summary"],
+            "payload": shadow,
+        }
+        kwargs["on_step"](step)
+        return {
+            "success": True,
+            "sql": "SELECT 1;",
+            "markdown": "ok",
+            "trace": [step],
+            "ontology_shadow": shadow,
+        }
+
+    monkeypatch.setattr(conv_route, "run_agent", fake_run_agent)
+    conv = _create_conv(client, admin_token)
+
+    status, _ = send_and_wait(client, admin_token, conv["id"], "查询记录指标")
+    message = last_assistant_message(client, admin_token, conv["id"])
+
+    assert status["ontology_shadow"] == shadow
+    assert message["ontology_shadow"] == shadow
+    assert message["sql"] == "SELECT 1;"
+    assert message["query_id"] is not None
+
+
+def test_send_message_status_steps_progress(
+    client: TestClient,
+    admin_token: str,
+    monkeypatch,
+) -> None:
+    _enable_legacy_compatibility(monkeypatch)
     """异步发消息返回 202 generating；轮询状态逐步返回步骤。"""
     conv = _create_conv(client, admin_token)
     resp = client.post(
@@ -55,6 +175,7 @@ def test_send_message_status_steps_progress(client: TestClient, admin_token: str
     msg_id = resp.json()["message_id"]
     data = None
     import time
+
     deadline = time.time() + 15
     while time.time() < deadline:
         r = client.get(
@@ -74,7 +195,8 @@ def test_send_message_status_steps_progress(client: TestClient, admin_token: str
     assert nodes.index("get_ttl_definition") < nodes.index("build_sql")
 
 
-def test_multi_turn_accumulates(client: TestClient, admin_token: str) -> None:
+def test_multi_turn_accumulates(client: TestClient, admin_token: str, monkeypatch) -> None:
+    _enable_legacy_compatibility(monkeypatch)
     conv = _create_conv(client, admin_token)
     for content in ["查询6月沉默用户", "把沉默时间改成3个月"]:
         send_and_wait(client, admin_token, conv["id"], content, system_time="2026-08-14")
@@ -106,11 +228,14 @@ def test_irrelevant_question_returns_hint(
             return {}
 
     monkeypatch.setattr(orch, "get_ontology_client", lambda: _FakeClient())
+    _enable_legacy_compatibility(monkeypatch)
     conv = _create_conv(client, admin_token)
     _, msg_id = send_and_wait(client, admin_token, conv["id"], "今天天气怎么样")
     asst = last_assistant_message(client, admin_token, conv["id"])
     assert asst["id"] == msg_id
-    assert "与取数业务无关" in asst["content"]
+    assert "无法获取实时天气" in asst["content"]
+    assert asst["trace"][-1]["node"] == "conversation_response"
+    assert not any(step["node"] == "program_generation" for step in asst["trace"])
     assert asst["sql"] is None
     assert asst["query_id"] is None
 
@@ -132,11 +257,82 @@ def test_history_and_context_passed_to_agent(
     # 第一轮
     send_and_wait(client, admin_token, conv["id"], "查询6月沉默用户")
     # 第二轮（此时 fake_run_agent 的 captured 已被后台线程写入）
-    send_and_wait(client, admin_token, conv["id"], "改成3个月")
+    _, second_msg_id = send_and_wait(client, admin_token, conv["id"], "改成3个月")
     assert captured["query"] == "改成3个月"
-    assert captured["conversation_context"] == "浙江省正常在网用户"
+    assert captured["conversation_context"] is None
     assert len(captured["history"]) == 2  # user + assistant
     assert captured["history"][0]["role"] == "user"
+    assert "浙江省正常在网用户" not in captured["assembled_context"]
+    assert "查询6月沉默用户" in captured["assembled_context"]
+    assert "改成3个月" not in captured["assembled_context"]
+    assert captured["request_id"] == f"conversation:{conv['id']}:message:{second_msg_id}"
+
+
+def test_program_metadata_survives_message_reload_without_query_action(
+    client: TestClient,
+    admin_token: str,
+    monkeypatch,
+) -> None:
+    payload = {
+        "program_id": "a1b2c3d4e5f6",
+        "platform": "hive",
+        "generation_mode": "program",
+        "program_steps": [
+            {
+                "step_id": "result",
+                "target_table": "temp_oa_a1b2c3d4e5f6_result_table",
+                "drop_sql": "DROP TABLE IF EXISTS temp_oa_a1b2c3d4e5f6_result_table;",
+                "create_sql": "CREATE TABLE temp_oa_a1b2c3d4e5f6_result_table AS SELECT 1;",
+            }
+        ],
+        "diagnostics": [],
+        "package": {"package_id": "example.program", "version": "1.0.0", "sha256": "a" * 64},
+        "temporal_evidence": [],
+        "inference_evidence": {
+            "overall_confidence": "medium",
+            "reasons": ["对象描述命中需求"],
+            "unresolved_items": ["业务口径尚未确认"],
+            "ontology_suggestions": ["补充业务口径规则"],
+        },
+        "missing_information": [],
+    }
+    step = {
+        "node": "program_generation",
+        "label": "本体程序规划与编译",
+        "status": "success",
+        "duration_ms": 1,
+        "summary": "已生成 1 个物化步骤",
+        "payload": payload,
+    }
+
+    def fake_run_agent(query, **kwargs):
+        kwargs["on_step"](step)
+        return {
+            "success": True,
+            "sql": (
+                "DROP TABLE IF EXISTS temp_oa_a1b2c3d4e5f6_result_table;\n"
+                "CREATE TABLE temp_oa_a1b2c3d4e5f6_result_table AS SELECT 1;"
+            ),
+            "markdown": "已生成 1 个物化步骤。",
+            "trace": [step],
+            **payload,
+        }
+
+    monkeypatch.setattr(conv_route, "run_agent", fake_run_agent)
+    conv = _create_conv(client, admin_token)
+    send_and_wait(client, admin_token, conv["id"], "生成结果表")
+
+    first = last_assistant_message(client, admin_token, conv["id"])
+    reloaded = client.get(
+        f"/conversations/{conv['id']}",
+        headers=_headers(admin_token),
+    ).json()["messages"][-1]
+
+    assert first["query_id"] is None
+    assert first["program"] == reloaded["program"]
+    assert reloaded["program"]["program_id"] == "a1b2c3d4e5f6"
+    assert reloaded["program"]["steps"][0]["step_id"] == "result"
+    assert reloaded["program"]["inference_evidence"]["overall_confidence"] == "medium"
 
 
 def test_context_update(client: TestClient, admin_token: str) -> None:
@@ -153,8 +349,13 @@ def test_context_update(client: TestClient, admin_token: str) -> None:
 
 def test_delete_conversation(client: TestClient, admin_token: str) -> None:
     conv = _create_conv(client, admin_token)
-    assert client.delete(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code == 204
-    assert client.get(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code == 404
+    assert (
+        client.delete(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code
+        == 204
+    )
+    assert (
+        client.get(f"/conversations/{conv['id']}", headers=_headers(admin_token)).status_code == 404
+    )
 
 
 def test_conversation_requires_auth(client: TestClient) -> None:
