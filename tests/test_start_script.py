@@ -13,3 +13,11 @@ def test_windows_start_script_uses_its_own_project_directory() -> None:
     assert 'start "ontology-backend" /d "%PROJECT_ROOT%"' in script
     assert 'start "ontology-frontend" /d "%PROJECT_ROOT%frontend"' in script
     assert 'cmd /k "cd /d' not in script
+
+
+def test_windows_stop_script_uses_ascii_batch_syntax() -> None:
+    script = (PROJECT_ROOT / "stop.bat").read_text(encoding="utf-8")
+
+    assert script.isascii()
+    assert 'netstat -ano' in script
+    assert 'taskkill /F /T /PID %%p' in script
