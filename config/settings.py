@@ -86,6 +86,8 @@ class OntologySettings(BaseSettings):
     ontology_id: str = ""
     timeout_seconds: int = 30
     retry_times: int = 2
+    management_root: str = ""
+    management_workspace: str = "evaluation"
 
 
 class Settings(BaseSettings):
