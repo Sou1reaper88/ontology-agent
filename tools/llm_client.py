@@ -119,6 +119,8 @@ class LLMClient:
             "filters.scope=match表示连接匹配条件：左/反连接右表的业务过滤进入ON或子查询，"
             "其时间分区也在匹配范围内；scope=where才表示连接后过滤，例如普通left右键is_null。"
             "同一用户需排除任一订购表中匹配记录时，对每张表分别规划anti。"
+            "时间范围只能写入time_expression，由编译器依据对象时间策略生成分区条件；"
+            "分区字段不得写入 filters，也不得自行推算 P_DAY 或 P_MON 的具体值。"
             "核心需求无法由本Schema完整表达时必须写入blocking_issues，禁止近似替代；"
             "unresolved_items仅存不影响核心运算的待确认假设，不得把核心缺失藏在此处。"
         )

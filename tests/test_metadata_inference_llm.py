@@ -82,6 +82,8 @@ def test_inference_request_contains_bounded_candidates_context_and_schema() -> N
     assert "禁止输出 SQL" in system_prompt
     assert "禁止输出目标表名" in system_prompt
     assert "只能引用候选目录" in system_prompt
+    assert "time_expression" in system_prompt
+    assert "分区字段不得写入 filters" in system_prompt
     payload = json.loads(user_query)
     assert payload["request"] == "查询客户手机号码"
     assert payload["conversation_context"] == "用户已确认客户指个人客户"
