@@ -357,7 +357,7 @@ class MetadataInferenceValidator:
             )
             try:
                 parsed = parse_temporal_intents(
-                    request,
+                    draft.time_expression or request,
                     system_date=system_time.date(),
                     grain=policy.grain,
                     default_strategy=policy.default_strategy,

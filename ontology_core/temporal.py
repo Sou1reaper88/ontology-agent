@@ -235,6 +235,28 @@ def _day_tokens(query: str, system_date: date) -> list[_Token]:
             value,
             TemporalIntentSource.EXPLICIT_ABSOLUTE,
         )
+    for month_token in _month_tokens(query, system_date):
+        start_year, start_month = _month_from_value(month_token.start)
+        end_year, end_month = _month_from_value(month_token.end)
+        start = date(start_year, start_month, 1).strftime("%Y%m%d")
+        end = date(
+            end_year,
+            end_month,
+            calendar.monthrange(end_year, end_month)[1],
+        ).strftime("%Y%m%d")
+        span = (month_token.start_index, month_token.end_index)
+        if not _overlaps(span, occupied):
+            occupied.append(span)
+            tokens.append(
+                _Token(
+                    month_token.start_index,
+                    month_token.end_index,
+                    start,
+                    end,
+                    month_token.source,
+                    month_token.matched_text,
+                )
+            )
     return sorted(tokens, key=lambda item: item.start_index)
 
 
