@@ -47,6 +47,8 @@ def generate_with_field_lookup(
             "messages": messages,
             "tools": [TOOL],
             "tool_choice": "auto" if turn == 0 else "none",
+            "temperature": client.temperature,
+            "max_tokens": client.max_tokens,
         }
         if json_output:
             payload["response_format"] = {"type": "json_object"}

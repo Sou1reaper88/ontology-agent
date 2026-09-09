@@ -170,18 +170,18 @@ class LLMClient:
                 raise StructuredPlanningError("元数据候选推断服务不可用") from error
         finally:
             LLM_CALL_DURATION.observe(time.time() - start)
-        text = self._unwrap_json_fence(raw)
+        text = self._normalize_json_object(raw)
         try:
             return InferredProgramDraft.model_validate_json(text)
-        except (ValueError, TypeError) as error:
-            raise StructuredPlanningError(
-                "元数据候选计划不是有效 JSON",
-                category="invalid_json",
-            ) from error
         except ValidationError as error:
             raise StructuredPlanningError(
                 "元数据候选计划字段约束不满足",
                 category="schema_validation",
+            ) from error
+        except (ValueError, TypeError) as error:
+            raise StructuredPlanningError(
+                "元数据候选计划不是有效 JSON",
+                category="invalid_json",
             ) from error
 
     def summarize_conversation(
@@ -236,18 +236,18 @@ class LLMClient:
                 raise StructuredPlanningError("结构化规划服务不可用") from error
         finally:
             LLM_CALL_DURATION.observe(time.time() - start)
-        text = self._unwrap_json_fence(raw)
+        text = self._normalize_json_object(raw)
         try:
             return DraftSqlProgramPlan.model_validate_json(text)
-        except (ValueError, TypeError) as error:
-            raise StructuredPlanningError(
-                "结构化计划不是有效 JSON",
-                category="invalid_json",
-            ) from error
         except ValidationError as error:
             raise StructuredPlanningError(
                 "结构化计划字段约束不满足",
                 category="schema_validation",
+            ) from error
+        except (ValueError, TypeError) as error:
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
             ) from error
 
     @staticmethod
@@ -259,6 +259,30 @@ class LLMClient:
         if len(lines) < 3 or lines[-1].strip() != "```":
             raise StructuredPlanningError("结构化计划格式无效")
         return "\n".join(lines[1:-1]).strip()
+
+    @staticmethod
+    def _normalize_json_object(raw: str) -> str:
+        """Extract one provider JSON object without relaxing schema validation."""
+        text = LLMClient._unwrap_json_fence(raw)
+        start = text.find("{")
+        if start < 0:
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
+            )
+        try:
+            value, _ = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError as error:
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
+            ) from error
+        if not isinstance(value, dict):
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
+            )
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
     def _generate(
         self,

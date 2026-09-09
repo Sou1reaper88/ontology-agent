@@ -74,6 +74,8 @@ def test_lookup_rounds_request_json_output_and_preserve_provider_context(monkeyp
     client = LLMClient()
     client.api_key = "synthetic-key"
     client.base_url = "https://example.invalid"
+    client.temperature = 0.25
+    client.max_tokens = 321
     seen = []
 
     def lookup(refs):
@@ -86,7 +88,8 @@ def test_lookup_rounds_request_json_output_and_preserve_provider_context(monkeyp
     assert plan.requested_field_refs == ("UserId",)
     assert seen == [["UserId"]]
     assert len(payloads) == 2
-    assert all("max_tokens" not in p for p in payloads)
+    assert all(payload["temperature"] == 0.25 for payload in payloads)
+    assert all(payload["max_tokens"] == 321 for payload in payloads)
     assert payloads[0]["response_format"] == {"type": "json_object"}
     assert payloads[1]["response_format"] == {"type": "json_object"}
     assert payloads[1]["messages"][2]["reasoning_content"] == "synthetic context"
@@ -172,7 +175,12 @@ def test_tool_exchange_is_bounded_and_does_not_retry_bad_output(monkeypatch, mod
 
     monkeypatch.setattr("httpx.post", post)
     client = SimpleNamespace(
-        api_key="test", base_url="https://example.invalid", model="test", timeout=1
+        api_key="test",
+        base_url="https://example.invalid",
+        model="test",
+        timeout=1,
+        temperature=0.0,
+        max_tokens=128,
     )
     if mode == "direct":
         assert generate_with_field_lookup(client, "system", "user", lambda refs: []) == "bad JSON"

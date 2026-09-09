@@ -346,6 +346,27 @@ def test_llm_client_does_not_expose_malformed_model_output() -> None:
     assert caught.value.category == "invalid_json"
 
 
+def test_llm_client_normalizes_json_label_before_schema_validation() -> None:
+    class _RawClient(LLMClient):
+        def __init__(self) -> None:
+            pass
+
+        def _generate(
+            self,
+            system_prompt: str,
+            user_query: str,
+            *,
+            json_output: bool = False,
+        ) -> str:
+            return 'JSON:\n{"secret_business_value":"do-not-expose"}'
+
+    with pytest.raises(StructuredPlanningError) as caught:
+        _RawClient().plan_sql_program(system_prompt="plan", user_query="request")
+
+    assert caught.value.category == "schema_validation"
+    assert "do-not-expose" not in str(caught.value)
+
+
 def test_llm_client_sanitizes_provider_failure() -> None:
     class _FailingClient(LLMClient):
         def __init__(self) -> None:
