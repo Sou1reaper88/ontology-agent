@@ -67,6 +67,60 @@ def test_unconfigured_output_limit_is_not_sent_to_provider(monkeypatch) -> None:
     assert "max_tokens" not in payloads[0]
 
 
+def test_metadata_inference_uses_low_reasoning_effort() -> None:
+    calls: list[tuple[bool, str | None]] = []
+
+    class CapturingClient(LLMClient):
+        def __init__(self) -> None:
+            self.model = "deepseek-v4-flash"
+
+        def _generate(
+            self,
+            system_prompt: str,
+            user_query: str,
+            *,
+            json_output: bool = False,
+            reasoning_effort: str | None = None,
+        ) -> str:
+            calls.append((json_output, reasoning_effort))
+            return '{"selected_object_refs": ["Customer"], "requested_field_refs": ["CustomerMobile"]}'
+
+    from tests.test_metadata_inference_llm import _candidates
+
+    CapturingClient().infer_metadata_program(
+        request="查询客户", candidates=_candidates()
+    )
+
+    assert calls == [(True, "low")]
+
+
+def test_metadata_inference_omits_deepseek_option_for_other_providers() -> None:
+    calls: list[str | None] = []
+
+    class CapturingClient(LLMClient):
+        def __init__(self) -> None:
+            self.model = "other-model"
+
+        def _generate(
+            self,
+            system_prompt: str,
+            user_query: str,
+            *,
+            json_output: bool = False,
+            reasoning_effort: str | None = None,
+        ) -> str:
+            calls.append(reasoning_effort)
+            return '{"selected_object_refs": ["Customer"], "requested_field_refs": ["CustomerMobile"]}'
+
+    from tests.test_metadata_inference_llm import _candidates
+
+    CapturingClient().infer_metadata_program(
+        request="查询客户", candidates=_candidates()
+    )
+
+    assert calls == [None]
+
+
 def test_program_planning_enables_json_output() -> None:
     calls: list[bool] = []
 

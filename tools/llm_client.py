@@ -157,7 +157,12 @@ class LLMClient:
         try:
             try:
                 if lookup_fields is None:
-                    raw = self._generate(system_prompt, user_query, json_output=True)
+                    raw = self._generate(
+                        system_prompt,
+                        user_query,
+                        json_output=True,
+                        reasoning_effort=self._metadata_reasoning_effort(),
+                    )
                 else:
                     from tools.metadata_lookup import generate_with_field_lookup
 
@@ -167,6 +172,7 @@ class LLMClient:
                         user_query,
                         lookup_fields,
                         json_output=True,
+                        reasoning_effort=self._metadata_reasoning_effort(),
                     )
             except StructuredPlanningError:
                 raise
@@ -274,6 +280,12 @@ class LLMClient:
             raise StructuredPlanningError("结构化计划格式无效")
         return "\n".join(lines[1:-1]).strip()
 
+    def _metadata_reasoning_effort(self) -> str | None:
+        """Keep structured planning concise without sending DeepSeek-only options elsewhere."""
+        if self.model.casefold().startswith("deepseek-v4-"):
+            return "low"
+        return None
+
     @staticmethod
     def _normalize_json_object(raw: str) -> str:
         """Extract one provider JSON object without relaxing schema validation."""
@@ -304,6 +316,7 @@ class LLMClient:
         user_query: str,
         *,
         json_output: bool = False,
+        reasoning_effort: str | None = None,
     ) -> str:
         if not self.api_key or self.api_key == PLACEHOLDER_KEY:
             raise RuntimeError(
@@ -320,6 +333,8 @@ class LLMClient:
         }
         if self.max_tokens is not None:
             payload["max_tokens"] = self.max_tokens
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         if json_output:
             payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.api_key}"}

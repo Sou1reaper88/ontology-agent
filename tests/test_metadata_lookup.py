@@ -74,6 +74,7 @@ def test_lookup_rounds_request_json_output_and_preserve_provider_context(monkeyp
     client = LLMClient()
     client.api_key = "synthetic-key"
     client.base_url = "https://example.invalid"
+    client.model = "deepseek-v4-flash"
     client.temperature = 0.25
     client.max_tokens = 321
     seen = []
@@ -90,6 +91,7 @@ def test_lookup_rounds_request_json_output_and_preserve_provider_context(monkeyp
     assert len(payloads) == 2
     assert all(payload["temperature"] == 0.25 for payload in payloads)
     assert all(payload["max_tokens"] == 321 for payload in payloads)
+    assert all(payload["reasoning_effort"] == "low" for payload in payloads)
     assert payloads[0]["response_format"] == {"type": "json_object"}
     assert payloads[1]["response_format"] == {"type": "json_object"}
     assert payloads[1]["messages"][2]["reasoning_content"] == "synthetic context"

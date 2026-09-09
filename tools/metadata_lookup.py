@@ -42,6 +42,7 @@ def generate_with_field_lookup(
     lookup,
     *,
     json_output: bool = False,
+    reasoning_effort: str | None = None,
 ) -> str:
     if not client.api_key or client.api_key == "your-api-key-here":
         raise ValueError("模型凭据未配置")
@@ -60,6 +61,8 @@ def generate_with_field_lookup(
         }
         if client.max_tokens is not None:
             payload["max_tokens"] = client.max_tokens
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         if json_output:
             payload["response_format"] = {"type": "json_object"}
         response = httpx.post(
