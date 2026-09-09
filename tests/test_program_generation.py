@@ -374,6 +374,46 @@ def test_metadata_failure_falls_back_to_semantic_plan_once() -> None:
     assert len(planner.calls) == 1
 
 
+def test_clarification_preserves_prior_metadata_diagnostics() -> None:
+    planner = _Planner(
+        ProgramPlanningOutcome(
+            status="clarification_required",
+            diagnostics=(
+                ProgramDiagnostic(
+                    code="ambiguous_business_term",
+                    message="用户范围需要确认",
+                ),
+            ),
+            llm_call_count=1,
+        )
+    )
+    inferred = _Inference(
+        MetadataInferenceOutcome(
+            status="failed",
+            diagnostics=(
+                ProgramDiagnostic(
+                    code="inferred_plan_tool_output_truncated",
+                    message="候选工具响应超过输出上限",
+                ),
+            ),
+            missing_information=("请缩小候选范围",),
+        )
+    )
+
+    result = _service(planner, _Runtime(SimpleNamespace()), inferred).generate(
+        "查询客户结果",
+        request_id="request-001",
+        system_time=SYSTEM_TIME,
+    )
+
+    assert result.mode == ProgramGenerationMode.CLARIFICATION_REQUIRED
+    assert tuple(item.code for item in result.diagnostics) == (
+        "inferred_plan_tool_output_truncated",
+        "ambiguous_business_term",
+    )
+    assert result.missing_information == ("请缩小候选范围",)
+
+
 def test_legacy_factory_is_not_called_without_explicit_compatibility_flag() -> None:
     planner = _Planner(PackageNotFoundError("当前没有有效本体快照"))
     calls: list[str] = []

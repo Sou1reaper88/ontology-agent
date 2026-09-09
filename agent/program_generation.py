@@ -188,8 +188,16 @@ class ProgramGenerationService:
                 plan=None,
                 intent=None,
                 mode=ProgramGenerationMode.CLARIFICATION_REQUIRED,
-                diagnostics=outcome.diagnostics,
+                diagnostics=(
+                    *(metadata_result.diagnostics if metadata_result is not None else ()),
+                    *outcome.diagnostics,
+                ),
                 clarification=clarification,
+                missing_information=(
+                    metadata_result.missing_information
+                    if metadata_result is not None
+                    else ()
+                ),
             )
         if outcome.plan is None:
             mode = self._failure_mode(outcome)
