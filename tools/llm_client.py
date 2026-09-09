@@ -149,11 +149,17 @@ class LLMClient:
         try:
             try:
                 if lookup_fields is None:
-                    raw = self._generate(system_prompt, user_query)
+                    raw = self._generate(system_prompt, user_query, json_output=True)
                 else:
                     from tools.metadata_lookup import generate_with_field_lookup
 
-                    raw = generate_with_field_lookup(self, system_prompt, user_query, lookup_fields)
+                    raw = generate_with_field_lookup(
+                        self,
+                        system_prompt,
+                        user_query,
+                        lookup_fields,
+                        json_output=True,
+                    )
             except Exception as error:
                 raise StructuredPlanningError("元数据候选推断服务不可用") from error
         finally:
@@ -209,7 +215,7 @@ class LLMClient:
         start = time.time()
         try:
             try:
-                raw = self._generate(system_prompt, user_query)
+                raw = self._generate(system_prompt, user_query, json_output=True)
             except Exception as error:
                 raise StructuredPlanningError("结构化规划服务不可用") from error
         finally:
@@ -230,7 +236,13 @@ class LLMClient:
             raise StructuredPlanningError("结构化计划格式无效")
         return "\n".join(lines[1:-1]).strip()
 
-    def _generate(self, system_prompt: str, user_query: str) -> str:
+    def _generate(
+        self,
+        system_prompt: str,
+        user_query: str,
+        *,
+        json_output: bool = False,
+    ) -> str:
         if not self.api_key or self.api_key == PLACEHOLDER_KEY:
             raise RuntimeError(
                 "LLM API Key 未配置，请在 .env 设置 LLM__API_KEY"
@@ -245,13 +257,21 @@ class LLMClient:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        if json_output:
+            payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.api_key}"}
         resp = httpx.post(
             url, json=payload, headers=headers, timeout=self.timeout
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        if json_output and choice.get("finish_reason") == "length":
+            raise StructuredPlanningError("结构化规划响应超出输出上限")
+        content = choice["message"].get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise StructuredPlanningError("结构化规划响应为空")
+        return content
 
 
 _llm_client: LLMClient | None = None
