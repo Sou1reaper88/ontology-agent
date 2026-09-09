@@ -166,6 +166,13 @@ class LLMClient:
                         lookup_fields,
                         json_output=True,
                     )
+            except StructuredPlanningError:
+                raise
+            except ValueError as error:
+                raise StructuredPlanningError(
+                    "元数据候选推断工具响应无效",
+                    category="tool_response_invalid",
+                ) from error
             except Exception as error:
                 raise StructuredPlanningError("元数据候选推断服务不可用") from error
         finally:

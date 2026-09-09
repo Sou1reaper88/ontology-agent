@@ -135,3 +135,25 @@ def test_inference_sanitizes_provider_failure() -> None:
 
     assert "provider-secret" not in str(caught.value)
 
+
+def test_inference_classifies_invalid_lookup_response_without_exposing_it(
+    monkeypatch,
+) -> None:
+    def invalid_lookup_response(*args, **kwargs):
+        raise ValueError("tool-response-secret")
+
+    monkeypatch.setattr(
+        "tools.metadata_lookup.generate_with_field_lookup",
+        invalid_lookup_response,
+    )
+
+    with pytest.raises(StructuredPlanningError) as caught:
+        _RawClient("").infer_metadata_program(
+            request="查询客户手机号码",
+            candidates=_candidates(),
+            lookup_fields=lambda refs: [],
+        )
+
+    assert caught.value.category == "tool_response_invalid"
+    assert "tool-response-secret" not in str(caught.value)
+

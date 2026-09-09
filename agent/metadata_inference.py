@@ -141,6 +141,10 @@ class MetadataInferenceService:
                     code="inferred_plan_schema_invalid",
                     message="大模型返回 JSON，但未满足元数据候选计划字段约束",
                 ),
+                "tool_response_invalid": ProgramDiagnostic(
+                    code="inferred_plan_tool_response_invalid",
+                    message="元数据候选推断工具返回不符合约束的响应",
+                ),
             }.get(
                 error.category,
                 ProgramDiagnostic(
