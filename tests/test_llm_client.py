@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+from typing import Any
+
+from tools.llm_client import LLMClient
+
+
+def _configured_client() -> LLMClient:
+    client = LLMClient()
+    client.api_key = "synthetic-key"
+    client.base_url = "https://example.invalid"
+    return client
+
+
+def _capturing_post(payloads: list[dict[str, Any]], content: str):
+    def post(_url: str, **kwargs: Any):
+        payloads.append(kwargs["json"])
+
+        class Response:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict[str, Any]:
+                return {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": content},
+                        }
+                    ]
+                }
+
+        return Response()
+
+    return post
+
+
+def test_structured_generation_requests_deepseek_json_output(monkeypatch) -> None:
+    payloads: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "httpx.post",
+        _capturing_post(payloads, '{"intent": {}, "steps": []}'),
+    )
+
+    _configured_client()._generate("return json", "request", json_output=True)
+
+    assert payloads[0]["response_format"] == {"type": "json_object"}
+
+
+def test_text_generation_does_not_force_json_output(monkeypatch) -> None:
+    payloads: list[dict[str, Any]] = []
+    monkeypatch.setattr("httpx.post", _capturing_post(payloads, "plain reply"))
+
+    _configured_client()._generate("answer naturally", "request")
+
+    assert "response_format" not in payloads[0]
+
+
+def test_program_planning_enables_json_output() -> None:
+    calls: list[bool] = []
+
+    class CapturingClient(LLMClient):
+        def __init__(self) -> None:
+            pass
+
+        def _generate(
+            self,
+            system_prompt: str,
+            user_query: str,
+            *,
+            json_output: bool = False,
+        ) -> str:
+            calls.append(json_output)
+            return '{"intent": {}, "steps": []}'
+
+    try:
+        CapturingClient().plan_sql_program(system_prompt="return json", user_query="request")
+    except Exception:
+        pass
+
+    assert calls == [True]

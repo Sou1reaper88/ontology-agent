@@ -48,10 +48,16 @@ def _candidates() -> CandidateContext:
 class _RawClient(LLMClient):
     def __init__(self, response: str) -> None:
         self.response = response
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, bool]] = []
 
-    def _generate(self, system_prompt: str, user_query: str) -> str:
-        self.calls.append((system_prompt, user_query))
+    def _generate(
+        self,
+        system_prompt: str,
+        user_query: str,
+        *,
+        json_output: bool = False,
+    ) -> str:
+        self.calls.append((system_prompt, user_query, json_output))
         return self.response
 
 
@@ -72,7 +78,7 @@ def test_inference_request_contains_bounded_candidates_context_and_schema() -> N
     )
 
     assert draft.selected_object_refs == ("Customer",)
-    system_prompt, user_query = client.calls[0]
+    system_prompt, user_query, json_output = client.calls[0]
     assert "禁止输出 SQL" in system_prompt
     assert "禁止输出目标表名" in system_prompt
     assert "只能引用候选目录" in system_prompt
@@ -81,6 +87,7 @@ def test_inference_request_contains_bounded_candidates_context_and_schema() -> N
     assert payload["conversation_context"] == "用户已确认客户指个人客户"
     assert payload["candidates"]["objects"][0]["physical_name"] == "CUSTOMER_D"
     assert "properties" in payload["schema"]
+    assert json_output is True
 
 
 def test_inference_request_omits_absent_conversation_context() -> None:
@@ -90,6 +97,7 @@ def test_inference_request_omits_absent_conversation_context() -> None:
 
     payload = json.loads(client.calls[0][1])
     assert "conversation_context" not in payload
+    assert client.calls[0][2] is True
 
 
 def test_inference_rejects_model_sql_field_without_exposing_output() -> None:
