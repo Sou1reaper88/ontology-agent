@@ -211,6 +211,35 @@ def test_invalid_lookup_response_returns_safe_diagnostic() -> None:
     assert "tool-secret" not in outcome.diagnostics[0].message
 
 
+def test_empty_lookup_response_returns_specific_safe_diagnostic() -> None:
+    snapshot = _snapshot()
+    context = _context().model_copy(
+        update={"objects": (SimpleNamespace(ref="Customer"),)}
+    )
+    client = _Client(
+        StructuredPlanningError(
+            "tool-secret",
+            category="tool_response_empty_response",
+        )
+    )
+    service = MetadataInferenceService(
+        client=client,
+        runtime=_Runtime(snapshot),
+        validator=_Validator(None),
+        compiler=_Compiler(_program()),
+        catalog_factory=lambda value: _Catalog(value, context),
+    )
+
+    outcome = service.infer(
+        "查询客户",
+        program_id="a1b2c3d4e5f6",
+        system_time=datetime(2026, 8, 24, tzinfo=UTC),
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.diagnostics[0].code == "inferred_plan_tool_empty_response"
+
+
 def test_snapshot_change_aborts_before_compile() -> None:
     first = _snapshot("a" * 64)
     second = _snapshot("b" * 64)

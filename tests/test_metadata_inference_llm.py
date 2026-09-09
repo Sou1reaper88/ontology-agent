@@ -11,6 +11,7 @@ from ontology_core.inference_models import (
     InferredProgramDraft,
 )
 from tools.llm_client import LLMClient, StructuredPlanningError
+from tools.metadata_lookup import MetadataLookupResponseError
 
 
 def _candidates() -> CandidateContext:
@@ -156,4 +157,23 @@ def test_inference_classifies_invalid_lookup_response_without_exposing_it(
 
     assert caught.value.category == "tool_response_invalid"
     assert "tool-response-secret" not in str(caught.value)
+
+
+def test_inference_preserves_safe_lookup_response_category(monkeypatch) -> None:
+    def empty_lookup_response(*args, **kwargs):
+        raise MetadataLookupResponseError("empty_response")
+
+    monkeypatch.setattr(
+        "tools.metadata_lookup.generate_with_field_lookup",
+        empty_lookup_response,
+    )
+
+    with pytest.raises(StructuredPlanningError) as caught:
+        _RawClient("").infer_metadata_program(
+            request="查询客户手机号码",
+            candidates=_candidates(),
+            lookup_fields=lambda refs: [],
+        )
+
+    assert caught.value.category == "tool_response_empty_response"
 

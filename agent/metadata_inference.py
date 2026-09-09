@@ -132,6 +132,32 @@ class MetadataInferenceService:
                 kwargs["conversation_context"] = conversation_context
             draft = self._client.infer_metadata_program(**kwargs)
         except StructuredPlanningError as error:
+            lookup_diagnostic = {
+                "tool_response_empty_response": ProgramDiagnostic(
+                    code="inferred_plan_tool_empty_response",
+                    message="元数据候选推断工具未返回最终计划内容",
+                ),
+                "tool_response_output_truncated": ProgramDiagnostic(
+                    code="inferred_plan_tool_output_truncated",
+                    message="元数据候选推断工具响应超过输出上限",
+                ),
+                "tool_response_call_limit": ProgramDiagnostic(
+                    code="inferred_plan_tool_call_limit",
+                    message="元数据候选推断工具调用次数超过限制",
+                ),
+                "tool_response_arguments_invalid": ProgramDiagnostic(
+                    code="inferred_plan_tool_arguments_invalid",
+                    message="元数据候选推断工具参数不符合约束",
+                ),
+                "tool_response_contract_invalid": ProgramDiagnostic(
+                    code="inferred_plan_tool_contract_invalid",
+                    message="元数据候选推断工具调用不符合契约",
+                ),
+                "tool_response_final_plan_missing": ProgramDiagnostic(
+                    code="inferred_plan_tool_final_plan_missing",
+                    message="元数据候选推断工具轮次结束时未返回计划",
+                ),
+            }.get(error.category)
             diagnostic = {
                 "invalid_json": ProgramDiagnostic(
                     code="inferred_plan_json_invalid",
@@ -145,12 +171,9 @@ class MetadataInferenceService:
                     code="inferred_plan_tool_response_invalid",
                     message="元数据候选推断工具返回不符合约束的响应",
                 ),
-            }.get(
-                error.category,
-                ProgramDiagnostic(
-                    code="inferred_plan_provider_unavailable",
-                    message="元数据候选推断服务暂不可用",
-                ),
+            }.get(error.category, lookup_diagnostic) or ProgramDiagnostic(
+                code="inferred_plan_provider_unavailable",
+                message="元数据候选推断服务暂不可用",
             )
             return MetadataInferenceOutcome(
                 status="failed",

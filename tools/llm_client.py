@@ -23,6 +23,7 @@ from ontology_core.program_models import (
     DraftSqlProgramPlan,
     ProgramDiagnostic,
 )
+from tools.metadata_lookup import MetadataLookupResponseError
 
 PLACEHOLDER_KEY = "your-api-key-here"
 
@@ -168,6 +169,11 @@ class LLMClient:
                     )
             except StructuredPlanningError:
                 raise
+            except MetadataLookupResponseError as error:
+                raise StructuredPlanningError(
+                    "元数据候选推断工具响应无效",
+                    category=f"tool_response_{error.reason}",
+                ) from error
             except ValueError as error:
                 raise StructuredPlanningError(
                     "元数据候选推断工具响应无效",

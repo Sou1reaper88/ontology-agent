@@ -4,6 +4,15 @@ import json
 
 import httpx
 
+
+class MetadataLookupResponseError(ValueError):
+    """A sanitized category for an invalid model tool-round response."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("元数据查询工具响应无效")
+        self.reason = reason
+
+
 TOOL = {
     "type": "function",
     "function": {
@@ -61,16 +70,16 @@ def generate_with_field_lookup(
         response.raise_for_status()
         choice = response.json()["choices"][0]
         if choice.get("finish_reason") == "length":
-            raise ValueError("模型达到服务端输出上限")
+            raise MetadataLookupResponseError("output_truncated")
         message = choice["message"]
         calls = message.get("tool_calls") or []
         if not calls:
             content = message.get("content")
             if not isinstance(content, str) or not content.strip():
-                raise ValueError("模型未返回正文")
+                raise MetadataLookupResponseError("empty_response")
             return content
         if turn or len(calls) > 4:
-            raise ValueError("超出本轮元数据查询次数")
+            raise MetadataLookupResponseError("call_limit")
         # DeepSeek requires the returned reasoning context for tool continuations.
         messages.append(
             {
@@ -81,12 +90,15 @@ def generate_with_field_lookup(
         )
         for call in calls:
             function = call["function"]
-            arguments = json.loads(function["arguments"])
+            try:
+                arguments = json.loads(function["arguments"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise MetadataLookupResponseError("arguments_invalid") from error
             if function["name"] != "lookup_field_details" or set(arguments) != {"field_refs"}:
-                raise ValueError("不支持的元数据查询")
+                raise MetadataLookupResponseError("contract_invalid")
             refs = arguments["field_refs"]
             if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
-                raise ValueError("字段引用必须是字符串数组")
+                raise MetadataLookupResponseError("arguments_invalid")
             result = lookup(refs)
             messages.append(
                 {
@@ -95,4 +107,4 @@ def generate_with_field_lookup(
                     "content": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
                 }
             )
-    raise ValueError("模型未返回最终计划")
+    raise MetadataLookupResponseError("final_plan_missing")
