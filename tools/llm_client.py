@@ -15,7 +15,6 @@ import httpx
 from pydantic import ValidationError
 
 from agent.context_engineering import ContextMessage
-from agent.model_capabilities import resolve_model_token_limits
 from config.settings import settings
 from monitoring.metrics import LLM_CALL_DURATION
 from ontology_core.inference_models import CandidateContext, InferredProgramDraft
@@ -23,6 +22,7 @@ from ontology_core.program_models import (
     DraftSqlProgramPlan,
     ProgramDiagnostic,
 )
+from tools.metadata_lookup import MetadataLookupResponseError
 
 PLACEHOLDER_KEY = "your-api-key-here"
 
@@ -43,7 +43,7 @@ class LLMClient:
         self.api_key = settings.llm.api_key
         self.model = settings.llm.model
         self.temperature = settings.llm.temperature
-        self.max_tokens = resolve_model_token_limits(settings.llm).max_output_tokens
+        self.max_tokens = settings.llm.max_output_tokens or settings.llm.max_tokens
         self.timeout = settings.llm.timeout_seconds
 
     def generate_sql(self, system_prompt: str, user_query: str) -> str:
@@ -121,6 +121,8 @@ class LLMClient:
             "同一用户需排除任一订购表中匹配记录时，对每张表分别规划anti。"
             "时间范围只能写入time_expression，由编译器依据对象时间策略生成分区条件；"
             "分区字段不得写入 filters，也不得自行推算 P_DAY 或 P_MON 的具体值。"
+            "time_expression必须使用需求中出现的自然时间表达，例如“2026年6月”或“2026-06-01至2026-06-30”；"
+            "不得填写202606、P_DAY或P_MON等物理分区值，也不得把生失效日期比较条件作为时间范围。"
             "核心需求无法由本Schema完整表达时必须写入blocking_issues，禁止近似替代；"
             "unresolved_items仅存不影响核心运算的待确认假设，不得把核心缺失藏在此处。"
         )
@@ -155,7 +157,12 @@ class LLMClient:
         try:
             try:
                 if lookup_fields is None:
-                    raw = self._generate(system_prompt, user_query, json_output=True)
+                    raw = self._generate(
+                        system_prompt,
+                        user_query,
+                        json_output=True,
+                        reasoning_effort=self._metadata_reasoning_effort(),
+                    )
                 else:
                     from tools.metadata_lookup import generate_with_field_lookup
 
@@ -165,23 +172,36 @@ class LLMClient:
                         user_query,
                         lookup_fields,
                         json_output=True,
+                        reasoning_effort=self._metadata_reasoning_effort(),
                     )
+            except StructuredPlanningError:
+                raise
+            except MetadataLookupResponseError as error:
+                raise StructuredPlanningError(
+                    "元数据候选推断工具响应无效",
+                    category=f"tool_response_{error.reason}",
+                ) from error
+            except ValueError as error:
+                raise StructuredPlanningError(
+                    "元数据候选推断工具响应无效",
+                    category="tool_response_invalid",
+                ) from error
             except Exception as error:
                 raise StructuredPlanningError("元数据候选推断服务不可用") from error
         finally:
             LLM_CALL_DURATION.observe(time.time() - start)
-        text = self._unwrap_json_fence(raw)
+        text = self._normalize_json_object(raw)
         try:
             return InferredProgramDraft.model_validate_json(text)
-        except (ValueError, TypeError) as error:
-            raise StructuredPlanningError(
-                "元数据候选计划不是有效 JSON",
-                category="invalid_json",
-            ) from error
         except ValidationError as error:
             raise StructuredPlanningError(
                 "元数据候选计划字段约束不满足",
                 category="schema_validation",
+            ) from error
+        except (ValueError, TypeError) as error:
+            raise StructuredPlanningError(
+                "元数据候选计划不是有效 JSON",
+                category="invalid_json",
             ) from error
 
     def summarize_conversation(
@@ -236,18 +256,18 @@ class LLMClient:
                 raise StructuredPlanningError("结构化规划服务不可用") from error
         finally:
             LLM_CALL_DURATION.observe(time.time() - start)
-        text = self._unwrap_json_fence(raw)
+        text = self._normalize_json_object(raw)
         try:
             return DraftSqlProgramPlan.model_validate_json(text)
-        except (ValueError, TypeError) as error:
-            raise StructuredPlanningError(
-                "结构化计划不是有效 JSON",
-                category="invalid_json",
-            ) from error
         except ValidationError as error:
             raise StructuredPlanningError(
                 "结构化计划字段约束不满足",
                 category="schema_validation",
+            ) from error
+        except (ValueError, TypeError) as error:
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
             ) from error
 
     @staticmethod
@@ -260,12 +280,43 @@ class LLMClient:
             raise StructuredPlanningError("结构化计划格式无效")
         return "\n".join(lines[1:-1]).strip()
 
+    def _metadata_reasoning_effort(self) -> str | None:
+        """Keep structured planning concise without sending DeepSeek-only options elsewhere."""
+        if self.model.casefold().startswith("deepseek-v4-"):
+            return "low"
+        return None
+
+    @staticmethod
+    def _normalize_json_object(raw: str) -> str:
+        """Extract one provider JSON object without relaxing schema validation."""
+        text = LLMClient._unwrap_json_fence(raw)
+        start = text.find("{")
+        if start < 0:
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
+            )
+        try:
+            value, _ = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError as error:
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
+            ) from error
+        if not isinstance(value, dict):
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
+            )
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
     def _generate(
         self,
         system_prompt: str,
         user_query: str,
         *,
         json_output: bool = False,
+        reasoning_effort: str | None = None,
     ) -> str:
         if not self.api_key or self.api_key == PLACEHOLDER_KEY:
             raise RuntimeError(
@@ -279,8 +330,11 @@ class LLMClient:
                 {"role": "user", "content": user_query},
             ],
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
         }
+        if self.max_tokens is not None:
+            payload["max_tokens"] = self.max_tokens
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         if json_output:
             payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.api_key}"}

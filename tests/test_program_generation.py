@@ -232,7 +232,7 @@ def test_clarification_never_calls_legacy_fallback() -> None:
     assert legacy_calls == []
 
 
-def test_failed_strict_plan_uses_inferred_program_before_legacy() -> None:
+def test_metadata_success_skips_semantic_planner() -> None:
     from tests.test_metadata_inference import _program
 
     strict_diagnostic = ProgramDiagnostic(
@@ -267,6 +267,7 @@ def test_failed_strict_plan_uses_inferred_program_before_legacy() -> None:
     assert result.program == inferred.outcome.program
     assert result.inferred_plan == inferred.outcome.plan
     assert inferred.calls[0][1]["conversation_context"] == "客户指个人客户"
+    assert planner.calls == []
     assert legacy_calls == []
 
 
@@ -335,8 +336,82 @@ def test_failed_inference_returns_missing_information_without_silent_legacy() ->
     assert result.sql is None
     assert result.mode == ProgramGenerationMode.UNSUPPORTED
     assert result.missing_information == ("请补充客户表与订购表的关联键",)
-    assert result.diagnostics[-1].code == "missing_candidate_join"
+    assert tuple(item.code for item in result.diagnostics) == (
+        "missing_candidate_join",
+        "unsupported_plan",
+    )
+    assert len(inferred.calls) == 1
+    assert len(planner.calls) == 1
     assert legacy_calls == []
+
+
+def test_metadata_failure_falls_back_to_semantic_plan_once() -> None:
+    plan = _bound_plan()
+    planner = _Planner(
+        ProgramPlanningOutcome(status="ready", plan=plan, llm_call_count=1)
+    )
+    inferred = _Inference(
+        MetadataInferenceOutcome(
+            status="failed",
+            diagnostics=(
+                ProgramDiagnostic(
+                    code="metadata_candidate_no_match",
+                    message="候选目录没有命中",
+                ),
+            ),
+        )
+    )
+
+    result = _service(planner, _Runtime(_snapshot(plan)), inferred).generate(
+        "查询客户结果",
+        request_id="request-001",
+        system_time=SYSTEM_TIME,
+    )
+
+    assert result.mode == ProgramGenerationMode.PROGRAM
+    assert result.sql is not None
+    assert len(inferred.calls) == 1
+    assert len(planner.calls) == 1
+
+
+def test_clarification_preserves_prior_metadata_diagnostics() -> None:
+    planner = _Planner(
+        ProgramPlanningOutcome(
+            status="clarification_required",
+            diagnostics=(
+                ProgramDiagnostic(
+                    code="ambiguous_business_term",
+                    message="用户范围需要确认",
+                ),
+            ),
+            llm_call_count=1,
+        )
+    )
+    inferred = _Inference(
+        MetadataInferenceOutcome(
+            status="failed",
+            diagnostics=(
+                ProgramDiagnostic(
+                    code="inferred_plan_tool_output_truncated",
+                    message="候选工具响应超过输出上限",
+                ),
+            ),
+            missing_information=("请缩小候选范围",),
+        )
+    )
+
+    result = _service(planner, _Runtime(SimpleNamespace()), inferred).generate(
+        "查询客户结果",
+        request_id="request-001",
+        system_time=SYSTEM_TIME,
+    )
+
+    assert result.mode == ProgramGenerationMode.CLARIFICATION_REQUIRED
+    assert tuple(item.code for item in result.diagnostics) == (
+        "inferred_plan_tool_output_truncated",
+        "ambiguous_business_term",
+    )
+    assert result.missing_information == ("请缩小候选范围",)
 
 
 def test_legacy_factory_is_not_called_without_explicit_compatibility_flag() -> None:

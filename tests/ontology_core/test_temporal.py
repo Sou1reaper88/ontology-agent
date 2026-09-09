@@ -151,6 +151,22 @@ def test_parse_day_intents(query: str, start: str, end: str) -> None:
     assert (result.partition.start, result.partition.end) == (start, end)
 
 
+def test_day_partition_expands_one_natural_month_to_full_day_range() -> None:
+    result = parse_temporal_intents(
+        "查询2026年6月数据",
+        system_date=SYSTEM_DATE,
+        grain=TemporalGrain.DAY,
+        default_strategy=TemporalDefaultStrategy.T_MINUS_2,
+        partition_target=TemporalTarget(
+            property_uri="https://example.invalid/ontology/PartitionDay",
+            aliases=("日期分区",),
+            datatype_uri=f"{XSD}string",
+        ),
+    )
+
+    assert (result.partition.start, result.partition.end) == ("20260601", "20260630")
+
+
 def test_conflicting_and_unbounded_partition_time_fail_closed() -> None:
     with pytest.raises(TemporalIntentError) as conflict:
         _parse_month("查询2026年5月用户，账期按202606")

@@ -142,6 +142,23 @@ def test_single_table_plan_uses_published_t_minus_2_policy() -> None:
     assert decision.source == "default"
 
 
+def test_candidate_time_expression_resolves_each_partition_grain() -> None:
+    customer = _object("Customer")
+    result = _validate(
+        InferredProgramDraft(
+            selected_object_refs=("Customer",),
+            requested_field_refs=("CustomerMobile",),
+            time_expression="2026年6月",
+        ),
+        customer,
+        request="查询2026年6月数据，账期202606，开始日2026-06-01，结束日2026-06-30",
+    )
+
+    assert result.plan is not None
+    decision = result.plan.temporal_decisions[0]
+    assert (decision.resolved_start, decision.resolved_end) == ("20260601", "20260630")
+
+
 def test_unknown_object_or_field_reference_is_rejected() -> None:
     result = _validate(
         InferredProgramDraft(

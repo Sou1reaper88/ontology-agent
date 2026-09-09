@@ -11,6 +11,7 @@ from ontology_core.inference_models import (
     InferredProgramDraft,
 )
 from tools.llm_client import LLMClient, StructuredPlanningError
+from tools.metadata_lookup import MetadataLookupResponseError
 
 
 def _candidates() -> CandidateContext:
@@ -48,7 +49,8 @@ def _candidates() -> CandidateContext:
 class _RawClient(LLMClient):
     def __init__(self, response: str) -> None:
         self.response = response
-        self.calls: list[tuple[str, str, bool]] = []
+        self.model = "deepseek-v4-flash"
+        self.calls: list[tuple[str, str, bool, str | None]] = []
 
     def _generate(
         self,
@@ -56,8 +58,9 @@ class _RawClient(LLMClient):
         user_query: str,
         *,
         json_output: bool = False,
+        reasoning_effort: str | None = None,
     ) -> str:
-        self.calls.append((system_prompt, user_query, json_output))
+        self.calls.append((system_prompt, user_query, json_output, reasoning_effort))
         return self.response
 
 
@@ -78,18 +81,20 @@ def test_inference_request_contains_bounded_candidates_context_and_schema() -> N
     )
 
     assert draft.selected_object_refs == ("Customer",)
-    system_prompt, user_query, json_output = client.calls[0]
+    system_prompt, user_query, json_output, reasoning_effort = client.calls[0]
     assert "禁止输出 SQL" in system_prompt
     assert "禁止输出目标表名" in system_prompt
     assert "只能引用候选目录" in system_prompt
     assert "time_expression" in system_prompt
     assert "分区字段不得写入 filters" in system_prompt
+    assert "自然时间表达" in system_prompt
     payload = json.loads(user_query)
     assert payload["request"] == "查询客户手机号码"
     assert payload["conversation_context"] == "用户已确认客户指个人客户"
     assert payload["candidates"]["objects"][0]["physical_name"] == "CUSTOMER_D"
     assert "properties" in payload["schema"]
     assert json_output is True
+    assert reasoning_effort == "low"
 
 
 def test_inference_request_omits_absent_conversation_context() -> None:
@@ -134,4 +139,45 @@ def test_inference_sanitizes_provider_failure() -> None:
         )
 
     assert "provider-secret" not in str(caught.value)
+
+
+def test_inference_classifies_invalid_lookup_response_without_exposing_it(
+    monkeypatch,
+) -> None:
+    def invalid_lookup_response(*args, **kwargs):
+        raise ValueError("tool-response-secret")
+
+    monkeypatch.setattr(
+        "tools.metadata_lookup.generate_with_field_lookup",
+        invalid_lookup_response,
+    )
+
+    with pytest.raises(StructuredPlanningError) as caught:
+        _RawClient("").infer_metadata_program(
+            request="查询客户手机号码",
+            candidates=_candidates(),
+            lookup_fields=lambda refs: [],
+        )
+
+    assert caught.value.category == "tool_response_invalid"
+    assert "tool-response-secret" not in str(caught.value)
+
+
+def test_inference_preserves_safe_lookup_response_category(monkeypatch) -> None:
+    def empty_lookup_response(*args, **kwargs):
+        raise MetadataLookupResponseError("empty_response")
+
+    monkeypatch.setattr(
+        "tools.metadata_lookup.generate_with_field_lookup",
+        empty_lookup_response,
+    )
+
+    with pytest.raises(StructuredPlanningError) as caught:
+        _RawClient("").infer_metadata_program(
+            request="查询客户手机号码",
+            candidates=_candidates(),
+            lookup_fields=lambda refs: [],
+        )
+
+    assert caught.value.category == "tool_response_empty_response"
 
