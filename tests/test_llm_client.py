@@ -56,6 +56,17 @@ def test_text_generation_does_not_force_json_output(monkeypatch) -> None:
     assert "response_format" not in payloads[0]
 
 
+def test_unconfigured_output_limit_is_not_sent_to_provider(monkeypatch) -> None:
+    payloads: list[dict[str, Any]] = []
+    client = _configured_client()
+    client.max_tokens = None
+    monkeypatch.setattr("httpx.post", _capturing_post(payloads, "plain reply"))
+
+    client._generate("answer naturally", "request")
+
+    assert "max_tokens" not in payloads[0]
+
+
 def test_program_planning_enables_json_output() -> None:
     calls: list[bool] = []
 
