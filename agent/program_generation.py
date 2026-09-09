@@ -122,9 +122,10 @@ class ProgramGenerationService:
         allow_legacy_compatibility: bool = False,
     ) -> ProgramGenerationResult:
         program_id = derive_program_id(request_id)
+        metadata_result: ProgramGenerationResult | None = None
         if self._inference is not None:
             try:
-                routing_snapshot = self._runtime.snapshot()
+                self._runtime.snapshot()
             except PackageNotFoundError:
                 return self._fallback(
                     program_id,
@@ -138,26 +139,16 @@ class ProgramGenerationService:
                     legacy_sql_factory,
                     allow_legacy_compatibility=allow_legacy_compatibility,
                 )
-            if self._is_metadata_only_snapshot(routing_snapshot):
-                inferred = self._infer(
-                    query,
-                    program_id=program_id,
-                    system_time=system_time,
-                    conversation_context=conversation_context,
-                    origin_diagnostics=(),
-                    failure_mode=ProgramGenerationMode.UNSUPPORTED,
-                )
-                if inferred is not None and (
-                    inferred.sql is not None or not allow_legacy_compatibility
-                ):
-                    return inferred
-                return self._fallback(
-                    program_id,
-                    ProgramGenerationMode.UNSUPPORTED,
-                    inferred.diagnostics if inferred is not None else (),
-                    legacy_sql_factory,
-                    allow_legacy_compatibility=allow_legacy_compatibility,
-                )
+            metadata_result = self._infer(
+                query,
+                program_id=program_id,
+                system_time=system_time,
+                conversation_context=conversation_context,
+                origin_diagnostics=(),
+                failure_mode=ProgramGenerationMode.UNSUPPORTED,
+            )
+            if metadata_result is not None and metadata_result.sql is not None:
+                return metadata_result
         try:
             if conversation_context:
                 outcome = self._planner.plan(
@@ -202,24 +193,20 @@ class ProgramGenerationService:
             )
         if outcome.plan is None:
             mode = self._failure_mode(outcome)
-            inferred = self._infer(
-                query,
-                program_id=program_id,
-                system_time=system_time,
-                conversation_context=conversation_context,
-                origin_diagnostics=outcome.diagnostics,
-                failure_mode=mode,
-            )
-            if inferred is not None and (
-                inferred.sql is not None or not allow_legacy_compatibility
-            ):
-                return inferred
             return self._fallback(
                 program_id,
                 mode,
-                inferred.diagnostics if inferred is not None else outcome.diagnostics,
+                (
+                    *(metadata_result.diagnostics if metadata_result is not None else ()),
+                    *outcome.diagnostics,
+                ),
                 legacy_sql_factory,
                 allow_legacy_compatibility=allow_legacy_compatibility,
+                missing_information=(
+                    metadata_result.missing_information
+                    if metadata_result is not None
+                    else ()
+                ),
             )
         plan = outcome.plan
         try:
@@ -255,29 +242,23 @@ class ProgramGenerationService:
             compiler = self._registry.get(plan.dialect)
             program = compiler.compile(plan)
         except OntologyCompileError:
-            inferred = self._infer(
-                query,
-                program_id=program_id,
-                system_time=system_time,
-                conversation_context=conversation_context,
-                origin_diagnostics=(
+            return self._fallback(
+                program_id,
+                ProgramGenerationMode.UNSUPPORTED,
+                (
+                    *(metadata_result.diagnostics if metadata_result is not None else ()),
                     ProgramDiagnostic(
                         code="unsupported_dialect",
                         message="当前方言无法安全编译确认本体取数程序",
                     ),
                 ),
-                failure_mode=ProgramGenerationMode.UNSUPPORTED,
-            )
-            if inferred is not None and (
-                inferred.sql is not None or not allow_legacy_compatibility
-            ):
-                return inferred
-            return self._fallback(
-                program_id,
-                ProgramGenerationMode.UNSUPPORTED,
-                inferred.diagnostics if inferred is not None else (),
                 legacy_sql_factory,
                 allow_legacy_compatibility=allow_legacy_compatibility,
+                missing_information=(
+                    metadata_result.missing_information
+                    if metadata_result is not None
+                    else ()
+                ),
             )
         mode = (
             ProgramGenerationMode.REPAIRED_PROGRAM
@@ -301,6 +282,7 @@ class ProgramGenerationService:
         legacy_sql_factory: Callable[[], str] | None,
         *,
         allow_legacy_compatibility: bool,
+        missing_information: tuple[str, ...] = (),
     ) -> ProgramGenerationResult:
         if legacy_sql_factory is None or not allow_legacy_compatibility:
             return ProgramGenerationResult(
@@ -310,6 +292,7 @@ class ProgramGenerationService:
                 intent=None,
                 mode=origin_mode,
                 diagnostics=diagnostics,
+                missing_information=missing_information,
             )
         try:
             legacy_sql = legacy_sql_factory()
@@ -328,6 +311,7 @@ class ProgramGenerationService:
                         message="旧链路输出不是可安全包装的单条只读查询",
                     ),
                 ),
+                missing_information=missing_information,
             )
         return ProgramGenerationResult(
             sql=program.sql,
@@ -336,6 +320,7 @@ class ProgramGenerationService:
             intent=None,
             mode=ProgramGenerationMode.WRAPPED_LEGACY,
             diagnostics=diagnostics,
+            missing_information=missing_information,
         )
 
     def _infer(
