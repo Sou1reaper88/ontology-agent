@@ -157,12 +157,14 @@ def test_empty_retrieval_stops_before_llm() -> None:
     assert client.calls == []
 
 
-def test_invalid_llm_output_returns_safe_diagnostic() -> None:
+def test_invalid_llm_schema_returns_safe_diagnostic() -> None:
     snapshot = _snapshot()
     context = _context().model_copy(
         update={"objects": (SimpleNamespace(ref="Customer"),)}
     )
-    client = _Client(StructuredPlanningError("provider-secret"))
+    client = _Client(
+        StructuredPlanningError("provider-secret", category="schema_validation")
+    )
     service = MetadataInferenceService(
         client=client,
         runtime=_Runtime(snapshot),
@@ -178,7 +180,7 @@ def test_invalid_llm_output_returns_safe_diagnostic() -> None:
     )
 
     assert outcome.status == "failed"
-    assert outcome.diagnostics[0].code == "invalid_inferred_plan"
+    assert outcome.diagnostics[0].code == "inferred_plan_schema_invalid"
     assert "provider-secret" not in outcome.diagnostics[0].message
 
 

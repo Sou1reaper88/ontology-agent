@@ -85,8 +85,8 @@ class AdaptiveProgramPlanner:
                 system_prompt=self._planning_prompt(snapshot, conversation_context),
                 user_query=query,
             )
-        except StructuredPlanningError:
-            return self._invalid_output(call_count=1)
+        except StructuredPlanningError as error:
+            return self._invalid_output(call_count=1, error=error)
         validation = self._bind(
             draft,
             program_id=program_id,
@@ -126,8 +126,8 @@ class AdaptiveProgramPlanner:
                     draft=draft,
                     diagnostics=validation.diagnostics,
                 )
-        except StructuredPlanningError:
-            return self._invalid_output(call_count=2)
+        except StructuredPlanningError as error:
+            return self._invalid_output(call_count=2, error=error)
         repaired_validation = self._bind(
             repaired,
             program_id=program_id,
@@ -171,15 +171,30 @@ class AdaptiveProgramPlanner:
         )
 
     @staticmethod
-    def _invalid_output(*, call_count: int) -> ProgramPlanningOutcome:
+    def _invalid_output(
+        *,
+        call_count: int,
+        error: StructuredPlanningError,
+    ) -> ProgramPlanningOutcome:
+        diagnostic = {
+            "invalid_json": ProgramDiagnostic(
+                code="structured_plan_json_invalid",
+                message="大模型返回的结构化计划不是有效 JSON",
+            ),
+            "schema_validation": ProgramDiagnostic(
+                code="structured_plan_schema_invalid",
+                message="大模型返回 JSON，但未满足取数计划字段约束",
+            ),
+        }.get(
+            error.category,
+            ProgramDiagnostic(
+                code="structured_plan_provider_unavailable",
+                message="结构化规划服务暂不可用",
+            ),
+        )
         return ProgramPlanningOutcome(
             status="failed",
-            diagnostics=(
-                ProgramDiagnostic(
-                    code="invalid_structured_output",
-                    message="大模型未返回可验证的结构化计划",
-                ),
-            ),
+            diagnostics=(diagnostic,),
             llm_call_count=call_count,
         )
 

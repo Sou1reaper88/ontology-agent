@@ -131,15 +131,26 @@ class MetadataInferenceService:
             if conversation_context:
                 kwargs["conversation_context"] = conversation_context
             draft = self._client.infer_metadata_program(**kwargs)
-        except StructuredPlanningError:
+        except StructuredPlanningError as error:
+            diagnostic = {
+                "invalid_json": ProgramDiagnostic(
+                    code="inferred_plan_json_invalid",
+                    message="大模型返回的元数据候选计划不是有效 JSON",
+                ),
+                "schema_validation": ProgramDiagnostic(
+                    code="inferred_plan_schema_invalid",
+                    message="大模型返回 JSON，但未满足元数据候选计划字段约束",
+                ),
+            }.get(
+                error.category,
+                ProgramDiagnostic(
+                    code="inferred_plan_provider_unavailable",
+                    message="元数据候选推断服务暂不可用",
+                ),
+            )
             return MetadataInferenceOutcome(
                 status="failed",
-                diagnostics=(
-                    ProgramDiagnostic(
-                        code="invalid_inferred_plan",
-                        message="大模型未返回可验证的元数据候选计划",
-                    ),
-                ),
+                diagnostics=(diagnostic,),
                 missing_information=("请重试或补充更明确的表字段与业务口径",),
             )
         validation = self._validator.validate(

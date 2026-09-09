@@ -30,6 +30,10 @@ PLACEHOLDER_KEY = "your-api-key-here"
 class StructuredPlanningError(RuntimeError):
     """Safe error raised when the provider does not return the required contract."""
 
+    def __init__(self, message: str, *, category: str = "provider") -> None:
+        super().__init__(message)
+        self.category = category
+
 
 class LLMClient:
     """调用商业 LLM 生成 SQL（支持通义/智谱/DeepSeek 等 OpenAI 兼容服务）。"""
@@ -167,8 +171,16 @@ class LLMClient:
         text = self._unwrap_json_fence(raw)
         try:
             return InferredProgramDraft.model_validate_json(text)
-        except (ValidationError, ValueError, TypeError) as error:
-            raise StructuredPlanningError("元数据候选计划格式无效") from error
+        except (ValueError, TypeError) as error:
+            raise StructuredPlanningError(
+                "元数据候选计划不是有效 JSON",
+                category="invalid_json",
+            ) from error
+        except ValidationError as error:
+            raise StructuredPlanningError(
+                "元数据候选计划字段约束不满足",
+                category="schema_validation",
+            ) from error
 
     def summarize_conversation(
         self,
@@ -216,6 +228,8 @@ class LLMClient:
         try:
             try:
                 raw = self._generate(system_prompt, user_query, json_output=True)
+            except StructuredPlanningError:
+                raise
             except Exception as error:
                 raise StructuredPlanningError("结构化规划服务不可用") from error
         finally:
@@ -223,8 +237,16 @@ class LLMClient:
         text = self._unwrap_json_fence(raw)
         try:
             return DraftSqlProgramPlan.model_validate_json(text)
-        except (ValidationError, ValueError, TypeError) as error:
-            raise StructuredPlanningError("结构化计划格式无效") from error
+        except (ValueError, TypeError) as error:
+            raise StructuredPlanningError(
+                "结构化计划不是有效 JSON",
+                category="invalid_json",
+            ) from error
+        except ValidationError as error:
+            raise StructuredPlanningError(
+                "结构化计划字段约束不满足",
+                category="schema_validation",
+            ) from error
 
     @staticmethod
     def _unwrap_json_fence(raw: str) -> str:

@@ -308,7 +308,12 @@ def test_business_ambiguity_requests_clarification_without_repair() -> None:
 
 
 def test_malformed_structured_output_is_sanitized_before_binding() -> None:
-    client = _Client(StructuredPlanningError("结构化计划格式无效"))
+    client = _Client(
+        StructuredPlanningError(
+            "结构化计划字段约束不满足",
+            category="schema_validation",
+        )
+    )
     binder = _Binder()
 
     outcome = _plan(_planner(client, binder))
@@ -316,7 +321,8 @@ def test_malformed_structured_output_is_sanitized_before_binding() -> None:
     assert outcome.status == "failed"
     assert outcome.llm_call_count == 1
     assert binder.calls == []
-    assert outcome.diagnostics[0].code == "invalid_structured_output"
+    assert outcome.diagnostics[0].code == "structured_plan_schema_invalid"
+    assert "字段约束" in outcome.diagnostics[0].message
 
 
 def test_llm_client_does_not_expose_malformed_model_output() -> None:
@@ -324,13 +330,20 @@ def test_llm_client_does_not_expose_malformed_model_output() -> None:
         def __init__(self) -> None:
             pass
 
-        def _generate(self, system_prompt: str, user_query: str) -> str:
+        def _generate(
+            self,
+            system_prompt: str,
+            user_query: str,
+            *,
+            json_output: bool = False,
+        ) -> str:
             return '{"secret_business_value": "do-not-expose"'
 
     with pytest.raises(StructuredPlanningError) as caught:
         _RawClient().plan_sql_program(system_prompt="plan", user_query="request")
 
     assert "do-not-expose" not in str(caught.value)
+    assert caught.value.category == "invalid_json"
 
 
 def test_llm_client_sanitizes_provider_failure() -> None:
