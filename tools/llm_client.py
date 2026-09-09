@@ -153,7 +153,13 @@ class LLMClient:
                 else:
                     from tools.metadata_lookup import generate_with_field_lookup
 
-                    raw = generate_with_field_lookup(self, system_prompt, user_query, lookup_fields)
+                    raw = generate_with_field_lookup(
+                        self,
+                        system_prompt,
+                        user_query,
+                        lookup_fields,
+                        json_output=True,
+                    )
             except Exception as error:
                 raise StructuredPlanningError("元数据候选推断服务不可用") from error
         finally:

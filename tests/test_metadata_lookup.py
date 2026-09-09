@@ -9,7 +9,7 @@ from tools.llm_client import LLMClient
 from tools.metadata_lookup import generate_with_field_lookup
 
 
-def test_lookup_round_preserves_provider_context_and_omits_output_cap(monkeypatch):
+def test_lookup_rounds_request_json_output_and_preserve_provider_context(monkeypatch):
     field = CandidateField(
         ref="UserId",
         object_ref="User",
@@ -87,6 +87,8 @@ def test_lookup_round_preserves_provider_context_and_omits_output_cap(monkeypatc
     assert seen == [["UserId"]]
     assert len(payloads) == 2
     assert all("max_tokens" not in p for p in payloads)
+    assert payloads[0]["response_format"] == {"type": "json_object"}
+    assert payloads[1]["response_format"] == {"type": "json_object"}
     assert payloads[1]["messages"][2]["reasoning_content"] == "synthetic context"
     assert payloads[1]["messages"][3]["role"] == "tool"
     assert payloads[1]["tool_choice"] == "none"

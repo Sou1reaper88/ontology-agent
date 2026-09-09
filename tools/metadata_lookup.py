@@ -26,7 +26,14 @@ TOOL = {
 }
 
 
-def generate_with_field_lookup(client, system_prompt: str, user_query: str, lookup) -> str:
+def generate_with_field_lookup(
+    client,
+    system_prompt: str,
+    user_query: str,
+    lookup,
+    *,
+    json_output: bool = False,
+) -> str:
     if not client.api_key or client.api_key == "your-api-key-here":
         raise ValueError("模型凭据未配置")
     messages = [
@@ -41,6 +48,8 @@ def generate_with_field_lookup(client, system_prompt: str, user_query: str, look
             "tools": [TOOL],
             "tool_choice": "auto" if turn == 0 else "none",
         }
+        if json_output:
+            payload["response_format"] = {"type": "json_object"}
         response = httpx.post(
             f"{client.base_url.rstrip('/')}/chat/completions",
             json=payload,
