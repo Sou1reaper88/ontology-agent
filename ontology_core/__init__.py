@@ -81,6 +81,29 @@ from ontology_core.query_plan import (
     QueryPlan,
     ResolvedJoin,
 )
+from ontology_core.relational_compiler import (
+    HiveRelationalCompiler,
+    RelationalCompiler,
+    RelationalCompilerRegistry,
+)
+from ontology_core.relational_plan import (
+    AggregateColumn,
+    AggregateNode,
+    CanonicalRelationalPlan,
+    DerivedColumn,
+    FilterNode,
+    FilterPredicate,
+    JoinCondition,
+    JoinNode,
+    LogicalColumnRef,
+    MaterializeNode,
+    ProjectNode,
+    RelationalNode,
+    ScanColumn,
+    ScanNode,
+    UnionAllNode,
+    UnionColumn,
+)
 from ontology_core.repository import OntologyRepository, OntologySnapshot
 from ontology_core.resolver import OntologyResolver
 from ontology_core.semantic_models import (
@@ -226,4 +249,23 @@ __all__ = [
     "generate_metadata_package",
     "raise_for_blocking_diagnostics",
     "resolve_package_files",
+    "AggregateColumn",
+    "AggregateNode",
+    "CanonicalRelationalPlan",
+    "DerivedColumn",
+    "FilterNode",
+    "FilterPredicate",
+    "HiveRelationalCompiler",
+    "JoinCondition",
+    "JoinNode",
+    "LogicalColumnRef",
+    "MaterializeNode",
+    "ProjectNode",
+    "RelationalCompiler",
+    "RelationalCompilerRegistry",
+    "RelationalNode",
+    "ScanColumn",
+    "ScanNode",
+    "UnionAllNode",
+    "UnionColumn",
 ]
