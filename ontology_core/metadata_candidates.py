@@ -346,7 +346,14 @@ class MetadataCandidateCatalog:
             )
         ranked.sort(key=lambda item: (-item.retrieval_score, item.ref))
         explicit = [item for item in ranked if _explicit_name(item.physical_name, request)]
-        selected = explicit or [item for item in ranked if item.retrieval_score > 0][:object_limit]
+        # Mentioned tables are anchors, not an exhaustive allowlist: output
+        # fields and join partners may live on other published objects.
+        explicit_refs = {item.ref for item in explicit}
+        related = [
+            item for item in ranked
+            if item.ref not in explicit_refs and item.retrieval_score > 0
+        ]
+        selected = explicit + related[:max(0, object_limit - len(explicit))]
 
         is_broad = any(marker in normalize_text(request) for marker in _BROAD_SCOPE_MARKERS)
         if is_broad:

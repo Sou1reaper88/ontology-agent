@@ -128,6 +128,22 @@ def _snapshot() -> OntologySnapshot:
     )
 
 
+def test_explicit_tables_prioritize_without_excluding_related_tables() -> None:
+    catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
+    context = catalog.retrieve("D_BBZX_DR_GSM_HU_D 手机号码", object_limit=2)
+    assert context.objects[0].ref == "GsmHu"
+    assert len(context.objects) == 2
+    assert len({obj.ref for obj in context.objects}) == 2
+
+
+def test_explicit_tables_are_preserved_when_over_budget() -> None:
+    catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
+    context = catalog.retrieve(
+        "D_BBZX_DR_GSM_HU_D D_BBZX_DR_GSM_HZ_D 手机号码", object_limit=1
+    )
+    assert {obj.ref for obj in context.objects} == {"GsmHu", "GsmHz"}
+
+
 def test_catalog_uses_only_published_mappings_and_metadata() -> None:
     catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
     context = catalog.retrieve("查询湖州用户的手机号码", object_limit=1)
@@ -205,7 +221,9 @@ def test_field_detail_budget_never_hides_full_field_index() -> None:
 
 def test_explicit_field_keeps_details_even_when_budget_is_zero() -> None:
     catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
-    context = catalog.retrieve("D_BBZX_DR_GSM_HU_D 的 MOBILE_NO", field_limit_per_object=0)
+    context = catalog.retrieve(
+        "D_BBZX_DR_GSM_HU_D 的 MOBILE_NO", object_limit=1, field_limit_per_object=0
+    )
     assert [o.ref for o in context.objects] == ["GsmHu"]
     field = next(f for f in context.objects[0].fields if f.physical_name == "MOBILE_NO")
     assert field.description == "用户的移动电话号码"
