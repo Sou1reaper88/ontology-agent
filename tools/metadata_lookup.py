@@ -35,6 +35,17 @@ TOOL = {
 }
 
 
+SEARCH_TOOL = {
+    "type": "function", "function": {
+        "name": "search_metadata",
+        "description": "搜索同一已发布本体中的表名、表描述、字段名和字段描述，补找输出字段来源或关联表；返回的引用可用于计划及字段详情查询。",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "minLength": 1, "maxLength": 500}},
+            "required": ["query"], "additionalProperties": False},
+    },
+}
+
+
 def generate_with_field_lookup(
     client,
     system_prompt: str,
@@ -50,13 +61,15 @@ def generate_with_field_lookup(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_query},
     ]
-    # At most one metadata lookup round, followed by one final plan response.
-    for turn in range(2):
+    search = getattr(lookup, "search", None)
+    tool_rounds = 3 if callable(search) else 1
+    # Sequential discovery is allowed; failed final plans are not retried.
+    for turn in range(tool_rounds + 1):
         payload = {
             "model": client.model,
             "messages": messages,
-            "tools": [TOOL],
-            "tool_choice": "auto" if turn == 0 else "none",
+            "tools": [TOOL, SEARCH_TOOL] if callable(search) else [TOOL],
+            "tool_choice": "auto" if turn < tool_rounds else "none",
             "temperature": client.temperature,
         }
         if client.max_tokens is not None:
@@ -82,7 +95,7 @@ def generate_with_field_lookup(
             if not isinstance(content, str) or not content.strip():
                 raise MetadataLookupResponseError("empty_response")
             return content
-        if turn or len(calls) > 4:
+        if turn >= tool_rounds or len(calls) > 4:
             raise MetadataLookupResponseError("call_limit")
         # DeepSeek requires the returned reasoning context for tool continuations.
         messages.append(
@@ -98,12 +111,22 @@ def generate_with_field_lookup(
                 arguments = json.loads(function["arguments"])
             except (KeyError, TypeError, ValueError) as error:
                 raise MetadataLookupResponseError("arguments_invalid") from error
-            if function["name"] != "lookup_field_details" or set(arguments) != {"field_refs"}:
-                raise MetadataLookupResponseError("contract_invalid")
-            refs = arguments["field_refs"]
-            if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+            if not isinstance(arguments, dict):
                 raise MetadataLookupResponseError("arguments_invalid")
-            result = lookup(refs)
+            if function["name"] == "search_metadata" and callable(search):
+                if set(arguments) != {"query"}:
+                    raise MetadataLookupResponseError("contract_invalid")
+                try:
+                    result = search(arguments["query"])
+                except ValueError as error:
+                    raise MetadataLookupResponseError("arguments_invalid") from error
+            elif function["name"] == "lookup_field_details" and set(arguments) == {"field_refs"}:
+                refs = arguments["field_refs"]
+                if not isinstance(refs, list) or not all(isinstance(r, str) for r in refs):
+                    raise MetadataLookupResponseError("arguments_invalid")
+                result = lookup(refs)
+            else:
+                raise MetadataLookupResponseError("contract_invalid")
             messages.append(
                 {
                     "role": "tool",

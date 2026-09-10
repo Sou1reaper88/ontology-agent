@@ -137,8 +137,17 @@ class LLMClient:
             system_prompt += (
                 "候选对象的field_index是完整字段索引，fields是已加载的详情，不能把详情未加载当成字段不存在。"
                 "先根据需求选表，再从索引选择输出字段和关联键；需要详细含义或取值时，"
-                "可批量调用lookup_field_details读取详情（最多一轮），然后给出最终计划。"
+                "可批量调用lookup_field_details读取详情，然后给出最终计划。"
             )
+            if callable(getattr(lookup_fields, "search", None)):
+                system_prompt += (
+                    "初始候选不是完整本体目录。缺少输出字段来源或关联表时，先调用search_metadata，"
+                    "用业务含义、字段名或关联键搜索，不要仅因初始候选缺失就要求用户提供表名。"
+                    "搜索返回的新对象和字段ref可用于最终计划，也可继续查询字段详情。"
+                    "最多三轮工具交互，每轮最多四次调用；足够时直接返回计划，无需走满。"
+                    "搜索未命中或truncated只说明本次搜索范围有限，不代表整个本体不存在该表。"
+                    "相同字段名只是关联线索，仍须结合类型、描述与业务粒度给出关联依据。"
+                )
             for obj in payload["candidates"]["objects"]:
                 obj.pop("retrieval_score", None)
                 obj.pop("matched_terms", None)
