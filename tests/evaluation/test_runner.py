@@ -177,41 +177,32 @@ def test_package_change_stops_remaining_cases() -> None:
     assert len(adapter.calls) == 2
 
 
-def test_agent_adapter_runs_ontology_even_when_legacy_fails() -> None:
+def test_agent_adapter_reads_single_canonical_result() -> None:
     calls: list[dict] = []
 
     def fake_run_agent(requirement: str, **kwargs):
         calls.append({"requirement": requirement, **kwargs})
-        return {"success": False, "errors": ["synthetic"]}
-
-    class ShadowService:
-        def preview(self, requirement, legacy_sql, *, system_time):
-            assert legacy_sql is None
-            return type(
-                "Shadow",
-                (),
-                {
-                    "model_dump": lambda self, mode: {
-                        "status": "no_match",
-                        "ontology_sql": None,
-                        "summary": "no match",
-                        "evidence": {},
-                        "temporal_decisions": [],
-                        "package": {
-                            "package_id": "pkg",
-                            "version": "1.0.0",
-                            "sha256": "abc",
-                        },
-                    }
-                },
-            )()
+        return {
+            "success": True,
+            "sql": "SELECT ID FROM T",
+            "package": {
+                "package_id": "pkg",
+                "version": "1.0.0",
+                "sha256": "abc",
+            },
+            "temporal_evidence": [{"source": "default"}],
+            "inference_evidence": {"overall_confidence": "medium"},
+        }
 
     result = AgentEvaluationAdapter(
         run_agent_fn=fake_run_agent,
-        shadow_service=ShadowService(),
     ).generate("requirement", system_time="2026-08-24")
 
     assert result.legacy_success is False
-    assert result.ontology_status == "no_match"
+    assert result.legacy_sql is None
+    assert result.ontology_sql == "SELECT ID FROM T"
+    assert result.ontology_status == "generated"
+    assert result.package_sha256 == "abc"
+    assert result.temporal_decisions == [{"source": "default"}]
     assert calls[0]["history"] == []
     assert calls[0]["conversation_context"] is None

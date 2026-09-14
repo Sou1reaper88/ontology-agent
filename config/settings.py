@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import Field
@@ -26,8 +26,7 @@ class DatabaseSettings(BaseSettings):
     @property
     def url(self) -> str:
         return (
-            f"postgresql+psycopg2://{self.user}:{self.password}"
-            f"@{self.host}:{self.port}/{self.name}"
+            f"postgresql+psycopg2://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
         )
 
 
@@ -121,6 +120,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "ontology-agent"
+    sql_pipeline: Literal["canonical", "legacy"] = "canonical"
     env: str = "dev"
     debug: bool = False
     secret_key: str = "change-me-in-production"

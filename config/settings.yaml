@@ -1,5 +1,6 @@
 # 配置默认值（敏感项通过 .env 覆盖，勿提交真实密钥）
 app_name: ontology-agent
+sql_pipeline: canonical
 env: dev
 debug: true
 

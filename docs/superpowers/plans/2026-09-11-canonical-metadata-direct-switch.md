@@ -330,7 +330,7 @@ pytest tests/ontology_core/test_inference_to_relational.py tests/ontology_core/t
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```powershell
 git add ontology_core/inference_to_relational.py ontology_core/__init__.py ontology_core/relational_plan.py ontology_core/relational_compiler.py tests/ontology_core/test_inference_to_relational.py
@@ -437,7 +437,7 @@ pytest tests/test_metadata_inference.py tests/test_metadata_inference_llm.py tes
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```powershell
 git add agent/metadata_inference.py agent/program_generation.py tools/llm_client.py tests/test_metadata_inference.py tests/test_metadata_inference_llm.py
@@ -463,7 +463,7 @@ git push origin HEAD
 - Consumes: canonical `MetadataInferenceService` from Task 4.
 - Produces: `settings.sql_pipeline: Literal["canonical", "legacy"]`, defaulting to `canonical`.
 
-- [ ] **Step 1: Write failing direct-switch tests**
+- [x] **Step 1: Write failing direct-switch tests**
 
 Add tests proving:
 
@@ -478,7 +478,7 @@ def test_evaluation_reads_the_single_canonical_result(): ...
 
 The canonical failure assertion must check the original diagnostic and missing information survive unchanged.
 
-- [ ] **Step 2: Run tests and verify automatic planner fallback is still observable**
+- [x] **Step 2: Run tests and verify automatic planner fallback is still observable**
 
 ```powershell
 pytest tests/test_program_generation.py tests/test_orchestrator.py tests/evaluation/test_runner.py -q
@@ -486,7 +486,7 @@ pytest tests/test_program_generation.py tests/test_orchestrator.py tests/evaluat
 
 Expected: direct-switch tests fail because `ProgramGenerationService` still calls `AdaptiveProgramPlanner` after inference failure and no `sql_pipeline` setting exists.
 
-- [ ] **Step 3: Remove automatic fallback from the canonical path**
+- [x] **Step 3: Remove automatic fallback from the canonical path**
 
 Add to `Settings` and YAML:
 
@@ -529,7 +529,7 @@ return _run_canonical_agent(...)
 
 Delete ontology-shadow appending from canonical output. Update the evaluation adapter to map `output["sql"]` to `ontology_sql`, leave `legacy_sql=None`, and never invoke `OntologyShadowService`; the existing comparison-column redesign is deferred with the evaluation-center upgrade.
 
-- [ ] **Step 4: Run affected generation tests**
+- [x] **Step 4: Run affected generation tests**
 
 ```powershell
 pytest tests/test_program_generation.py tests/test_orchestrator.py tests/evaluation/test_runner.py -q
@@ -537,7 +537,7 @@ pytest tests/test_program_generation.py tests/test_orchestrator.py tests/evaluat
 
 Expected: all selected tests pass and no assertion observes a second generation path.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```powershell
 git add config/settings.py config/settings.yaml agent/program_generation.py agent/orchestrator.py evaluation/generation.py tests/test_program_generation.py tests/test_orchestrator.py tests/evaluation/test_runner.py

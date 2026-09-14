@@ -18,7 +18,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from agent.ontology_shadow import get_ontology_shadow_service, unavailable_shadow_result
+from config.settings import settings
 from agent.program_generation import ProgramGenerationResult, generate_program
 from tools.llm_client import PLACEHOLDER_KEY, get_llm_client
 from tools.ontology_client import IRRELEVANT_MESSAGE, get_ontology_client
@@ -421,8 +421,7 @@ def _build_system_prompt(state: AgentState) -> str:
         relations_text = "关系定义（表间JOIN关联，生成多表SQL时按此关联）：\n"
         for r in relations:
             line = (
-                f"{r['source_table']}.{r['source_field']} = "
-                f"{r['target_table']}.{r['target_field']}"
+                f"{r['source_table']}.{r['source_field']} = {r['target_table']}.{r['target_field']}"
             )
             if r.get("relation_label"):
                 line += f"（{r['relation_label']}）"
@@ -1063,10 +1062,7 @@ def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
     temporal: list[dict[str, Any]] = []
     if program is not None:
         steps = [item.model_dump(mode="json") for item in program.statements]
-        temporal = [
-            item.model_dump(mode="json")
-            for item in program.evidence.temporal_decisions
-        ]
+        temporal = [item.model_dump(mode="json") for item in program.evidence.temporal_decisions]
     package = None
     if plan is not None:
         package = {
@@ -1084,14 +1080,10 @@ def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
         "program_id": program.program_id if program is not None else None,
         "platform": program.dialect if program is not None else None,
         "generation_mode": result.mode.value,
-        "intent": (
-            result.intent.model_dump(mode="json") if result.intent is not None else None
-        ),
+        "intent": (result.intent.model_dump(mode="json") if result.intent is not None else None),
         "program_plan": plan.model_dump(mode="json") if plan is not None else None,
         "inferred_plan": (
-            inferred_plan.model_dump(mode="json")
-            if inferred_plan is not None
-            else None
+            inferred_plan.model_dump(mode="json") if inferred_plan is not None else None
         ),
         "program_steps": steps,
         "diagnostics": [item.model_dump(mode="json") for item in result.diagnostics],
@@ -1103,6 +1095,9 @@ def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
             else None
         ),
         "missing_information": list(result.missing_information),
+        "relation_graph": result.relation_graph.model_dump(mode="json")
+        if result.relation_graph is not None
+        else None,
     }
 
 
@@ -1121,11 +1116,7 @@ def _program_step(
         summary = result.clarification
     else:
         status = "error"
-        summary = (
-            result.diagnostics[0].message
-            if result.diagnostics
-            else "未生成取数程序"
-        )
+        summary = result.diagnostics[0].message if result.diagnostics else "未生成取数程序"
     return {
         "node": "program_generation",
         "label": "本体程序规划与编译",
@@ -1134,48 +1125,6 @@ def _program_step(
         "summary": summary,
         "payload": payload,
     }
-
-
-def _append_shadow(
-    output: dict[str, Any],
-    *,
-    user_query: str,
-    system_time: str | None,
-    on_step: Callable[[dict[str, Any]], None] | None,
-) -> None:
-    sql = output.get("sql")
-    if not sql:
-        return
-    started_at = time.time()
-    try:
-        shadow = get_ontology_shadow_service().preview(
-            user_query,
-            sql,
-            system_time=system_time,
-        )
-    except Exception as exc:
-        logger.warning("本体影子接入异常: %s", type(exc).__name__)
-        shadow = unavailable_shadow_result(sql)
-    payload = shadow.model_dump(mode="json")
-    step_status = {
-        "generated": "success",
-        "unavailable": "error",
-    }.get(shadow.status, "skipped")
-    step = {
-        "node": "ontology_shadow",
-        "label": "本体对照证据",
-        "status": step_status,
-        "duration_ms": int((time.time() - started_at) * 1000),
-        "summary": shadow.summary,
-        "payload": payload,
-    }
-    output.setdefault("trace", []).append(step)
-    output["ontology_shadow"] = payload
-    if on_step is not None:
-        try:
-            on_step(step)
-        except Exception:
-            logger.warning("本体影子 trace 回调异常", exc_info=True)
 
 
 def run_agent(
@@ -1188,16 +1137,12 @@ def run_agent(
     assembled_context: str | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     request_id: str | None = None,
-    allow_legacy_compatibility: bool = False,
 ) -> dict[str, Any]:
-    """默认生成本体绑定的多步取数程序，旧图仅用于受控回退。"""
-    legacy_output: dict[str, Any] | None = None
-
-    def legacy_sql_factory() -> str:
-        nonlocal legacy_output
-        legacy_output = _run_legacy_agent(
+    """默认只走统一关系计划；旧图仅由服务器配置手动选择。"""
+    if settings.sql_pipeline == "legacy":
+        return _run_legacy_agent(
             user_query,
-            additional_context=assembled_context or additional_context,
+            additional_context=additional_context,
             ontology_id=ontology_id,
             system_time=system_time,
             history=history,
@@ -1205,21 +1150,22 @@ def run_agent(
             assembled_context=assembled_context,
             on_step=on_step,
         )
-        sql = legacy_output.get("sql") if legacy_output.get("success") else None
-        if not isinstance(sql, str) or not sql.strip():
-            raise ValueError("legacy generation did not return a query")
-        return sql
 
     started_at = time.time()
     generation_kwargs = {
-        "request_id": request_id
-        or _default_request_id(user_query, system_time, ontology_id),
+        "request_id": request_id or _default_request_id(user_query, system_time, ontology_id),
         "system_time": _program_system_time(system_time),
-        "legacy_sql_factory": legacy_sql_factory,
-        "allow_legacy_compatibility": allow_legacy_compatibility,
     }
-    if assembled_context:
-        generation_kwargs["conversation_context"] = assembled_context
+    context = assembled_context or _conversation_context_text(
+        {
+            "history": history or [],
+            "conversation_context": conversation_context,
+        }
+    )
+    if additional_context and not assembled_context:
+        context = "\n\n".join(part for part in (context, additional_context) if part)
+    if context:
+        generation_kwargs["conversation_context"] = context
     result = generate_program(user_query, **generation_kwargs)
     step = _program_step(
         result,
@@ -1232,19 +1178,9 @@ def run_agent(
             logger.warning("程序生成 trace 回调异常", exc_info=True)
 
     if result.sql is None:
-        if legacy_output is not None and legacy_output.get("irrelevant"):
-            output = dict(legacy_output)
-            output["generation_mode"] = result.mode.value
-            output["diagnostics"] = [
-                item.model_dump(mode="json") for item in result.diagnostics
-            ]
-            output["trace"] = [step, *output.get("trace", [])]
-            return output
         diagnostics = [item.model_dump(mode="json") for item in result.diagnostics]
         message = result.clarification or (
-            result.diagnostics[0].message
-            if result.diagnostics
-            else "未生成安全取数程序"
+            result.diagnostics[0].message if result.diagnostics else "未生成安全取数程序"
         )
         return {
             "success": False,
@@ -1259,7 +1195,7 @@ def run_agent(
         }
 
     payload = _program_payload(result)
-    output = dict(legacy_output or {})
+    output = {}
     output.update(payload)
     output.update(
         {
@@ -1267,8 +1203,7 @@ def run_agent(
             "sql": result.sql,
             "markdown": (
                 (
-                    "## 候选取数程序\n"
-                    "- 状态：LLM 推断、未经本体确认、不可自动执行\n"
+                    "## 候选取数程序\n- 状态：LLM 推断、未经本体确认、不可自动执行\n"
                     if result.mode.value == "inferred_program"
                     else "## 取数程序\n"
                 )
@@ -1276,14 +1211,7 @@ def run_agent(
                 f"- 物化步骤：{len(payload['program_steps'])}\n\n"
                 "脚本已生成，请在下方取数程序区域查看和复制。"
             ),
-            "trace": [step, *(legacy_output or {}).get("trace", [])],
+            "trace": [step],
         }
     )
-    if result.mode.value == "wrapped_legacy":
-        _append_shadow(
-            output,
-            user_query=user_query,
-            system_time=system_time,
-            on_step=on_step,
-        )
     return output
