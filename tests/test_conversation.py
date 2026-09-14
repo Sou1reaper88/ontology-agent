@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from tests.conftest import enable_canonical_program
 import json
 from types import SimpleNamespace
 import httpx
@@ -19,8 +20,14 @@ from tests.conftest import last_assistant_message, send_and_wait
 @pytest.fixture(autouse=True)
 def _conversation_provider(monkeypatch):
     """Simulate provider tool responses; never contact a real model in API tests."""
-    monkeypatch.setattr(conversation_agent, "get_llm_client", lambda: SimpleNamespace(
-        api_key="synthetic", base_url="https://example.invalid", model="test", timeout=1))
+    monkeypatch.setattr(
+        conversation_agent,
+        "get_llm_client",
+        lambda: SimpleNamespace(
+            api_key="synthetic", base_url="https://example.invalid", model="test", timeout=1
+        ),
+    )
+
     def post(url, **kwargs):
         payload = kwargs["json"]
         if payload["tool_choice"] == "none":
@@ -30,11 +37,26 @@ def _conversation_provider(monkeypatch):
             if "天气" in query:
                 message = {"role": "assistant", "content": "我无法获取实时天气。"}
             else:
-                message = {"role": "assistant", "content": None, "tool_calls": [{
-                    "id": "test1", "type": "function", "function": {
-                        "name": "generate_sql_program", "arguments": json.dumps({"requirement": query})}}]}
-        return httpx.Response(200, request=httpx.Request("POST", url),
-            json={"choices": [{"finish_reason": "stop", "message": message}]})
+                message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "test1",
+                            "type": "function",
+                            "function": {
+                                "name": "generate_sql_program",
+                                "arguments": json.dumps({"requirement": query}),
+                            },
+                        }
+                    ],
+                }
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"choices": [{"finish_reason": "stop", "message": message}]},
+        )
+
     monkeypatch.setattr(conversation_agent.httpx, "post", post)
 
 
@@ -48,15 +70,6 @@ def _create_conv(client: TestClient, token: str, **kw) -> dict:
     return resp.json()
 
 
-def _enable_legacy_compatibility(monkeypatch) -> None:
-    original = conv_route.run_agent
-
-    def run_with_legacy(*args, **kwargs):
-        return original(*args, **kwargs, allow_legacy_compatibility=True)
-
-    monkeypatch.setattr(conv_route, "run_agent", run_with_legacy)
-
-
 def test_create_conversation(client: TestClient, admin_token: str) -> None:
     data = _create_conv(client, admin_token, context="用户范围为浙江省")
     assert data["id"] > 0
@@ -68,7 +81,7 @@ def test_send_message_generates_sql(
     admin_token: str,
     monkeypatch,
 ) -> None:
-    _enable_legacy_compatibility(monkeypatch)
+    enable_canonical_program(monkeypatch)
     conv = _create_conv(client, admin_token)
     _, msg_id = send_and_wait(
         client,
@@ -80,9 +93,9 @@ def test_send_message_generates_sql(
     # 建表程序落库到 assistant 消息，但不创建可执行 query_history。
     asst = last_assistant_message(client, admin_token, conv["id"])
     assert asst["id"] == msg_id
-    assert asst["sql"] and "D_BBZX_DW_PRODUCT_M" in asst["sql"]
+    assert asst["sql"] and "SYNTHETIC_API_D" in asst["sql"]
     assert asst["query_id"] is None
-    assert asst["program"]["mode"] == "wrapped_legacy"
+    assert asst["program"]["mode"] == "inferred_program"
     assert asst["program"]["platform"] == "hive"
     assert asst["program"]["steps"][0]["target_table"].startswith("temp_oa_")
     assert "DROP TABLE" not in asst["content"]
@@ -162,7 +175,7 @@ def test_send_message_status_steps_progress(
     admin_token: str,
     monkeypatch,
 ) -> None:
-    _enable_legacy_compatibility(monkeypatch)
+    enable_canonical_program(monkeypatch)
     """异步发消息返回 202 generating；轮询状态逐步返回步骤。"""
     conv = _create_conv(client, admin_token)
     resp = client.post(
@@ -189,14 +202,19 @@ def test_send_message_status_steps_progress(
         time.sleep(0.05)
     assert data is not None and data["status"] == "success"
     nodes = [s["node"] for s in data["steps"]]
-    # 关键链路步骤齐全且有序
-    for key in ("get_ttl_definition", "build_sql", "validate_syntax", "validate_semantics"):
-        assert key in nodes, f"trace 缺少步骤 {key}: {nodes}"
-    assert nodes.index("get_ttl_definition") < nodes.index("build_sql")
+    # Conversation routing and one canonical program step; no old graph or shadow.
+    for key in ("conversation_action", "program_generation", "conversation_response"):
+        assert key in nodes
+    assert (
+        nodes.index("conversation_action")
+        < nodes.index("program_generation")
+        < nodes.index("conversation_response")
+    )
+    assert "ontology_shadow" not in nodes
 
 
 def test_multi_turn_accumulates(client: TestClient, admin_token: str, monkeypatch) -> None:
-    _enable_legacy_compatibility(monkeypatch)
+    enable_canonical_program(monkeypatch)
     conv = _create_conv(client, admin_token)
     for content in ["查询6月沉默用户", "把沉默时间改成3个月"]:
         send_and_wait(client, admin_token, conv["id"], content, system_time="2026-08-14")
@@ -228,7 +246,7 @@ def test_irrelevant_question_returns_hint(
             return {}
 
     monkeypatch.setattr(orch, "get_ontology_client", lambda: _FakeClient())
-    _enable_legacy_compatibility(monkeypatch)
+    enable_canonical_program(monkeypatch)
     conv = _create_conv(client, admin_token)
     _, msg_id = send_and_wait(client, admin_token, conv["id"], "今天天气怎么样")
     asst = last_assistant_message(client, admin_token, conv["id"])

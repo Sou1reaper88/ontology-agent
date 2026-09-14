@@ -112,6 +112,42 @@ def admin_token() -> str:
 # ---------------------------------------------------------------------------
 
 
+def enable_canonical_program(monkeypatch):
+    """Simulate a compiled result for API persistence tests, not SQL quality tests."""
+    from agent.program_generation import ProgramGenerationMode, ProgramGenerationResult
+    from ontology_core.inference_models import InferredProgramDraft
+    from ontology_core.relational_compiler import HiveRelationalCompiler
+    from tests.ontology_core.test_inference_to_relational import _convert
+    from tests.ontology_core.test_inference_validation import _object
+
+    obj = _object("Customer").model_copy(update={"physical_name": "SYNTHETIC_API_D"})
+    plan = _convert(
+        InferredProgramDraft(
+            selected_object_refs=("Customer",),
+            requested_field_refs=("CustomerMobile",),
+        ),
+        obj,
+    )
+
+    def generate(query, **kwargs):
+        from agent.program_generation import derive_program_id
+
+        program = HiveRelationalCompiler().compile(
+            plan, program_id=derive_program_id(kwargs["request_id"])
+        )
+        return ProgramGenerationResult(
+            sql=program.sql,
+            program=program,
+            plan=None,
+            intent=None,
+            inferred_plan=plan,
+            mode=ProgramGenerationMode.INFERRED_PROGRAM,
+            diagnostics=(),
+        )
+
+    monkeypatch.setattr(orch, "generate_program", generate)
+
+
 def wait_message_done(client: TestClient, token: str, msg_id: int, timeout: float = 15.0) -> dict:
     """轮询消息生成状态直到 success/failed，返回状态数据。"""
     import time
