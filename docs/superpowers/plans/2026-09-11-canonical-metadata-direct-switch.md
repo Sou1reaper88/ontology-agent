@@ -584,7 +584,7 @@ The default SQL path is metadata retrieval → dynamic relation evidence → can
 
 Add one dated journal entry containing the direct-switch decision, files changed, focused/full test counts, known limitations, and the next phase: LangGraph top-level orchestration with `search_ontology`, `generate_sql_program`, and `analyze_generation`.
 
-- [ ] **Step 4: Commit and push**
+- [x] **Step 4: Commit and push**
 
 ```powershell
 git add README.md docs/project-journal/2026-09.md docs/superpowers/plans/2026-09-11-canonical-metadata-direct-switch.md
