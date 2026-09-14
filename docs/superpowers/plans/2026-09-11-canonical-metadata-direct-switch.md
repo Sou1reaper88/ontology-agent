@@ -272,7 +272,7 @@ git push origin HEAD
 - Consumes: `ValidatedInferredProgram` and `RelationEvidenceGraph` from Tasks 1–2.
 - Produces: `InferenceRelationalAdapter.convert(plan, relation_graph) -> CanonicalRelationalPlan`.
 
-- [ ] **Step 1: Write failing adapter tests**
+- [x] **Step 1: Write failing adapter tests**
 
 Cover four plans:
 
@@ -287,7 +287,7 @@ def test_rejects_disconnected_or_unsupported_relation_evidence(): ...
 
 Assert node order and types, not rendered SQL. In the family case assert `scan → union_all → intermediate materialize → join → result materialize`. In the anti case assert the requested right-side output is rejected.
 
-- [ ] **Step 2: Run tests and verify the adapter import failure**
+- [x] **Step 2: Run tests and verify the adapter import failure**
 
 ```powershell
 pytest tests/ontology_core/test_inference_to_relational.py -q
@@ -295,7 +295,7 @@ pytest tests/ontology_core/test_inference_to_relational.py -q
 
 Expected: collection failure because `InferenceRelationalAdapter` does not exist.
 
-- [ ] **Step 3: Implement one deterministic adapter**
+- [x] **Step 3: Implement one deterministic adapter**
 
 Create:
 
@@ -322,7 +322,7 @@ The adapter must:
 
 Use stable node IDs derived from ordered object refs (`scan_01`, `union_01`, `join_01`, `filter_01`, `aggregate_01`, `project_01`, `result`) rather than introducing a naming service.
 
-- [ ] **Step 4: Run adapter and existing canonical tests**
+- [x] **Step 4: Run adapter and existing canonical tests**
 
 ```powershell
 pytest tests/ontology_core/test_inference_to_relational.py tests/ontology_core/test_relational_plan.py tests/ontology_core/test_relational_compiler.py -q
@@ -333,7 +333,7 @@ Expected: all selected tests pass.
 - [ ] **Step 5: Commit and push**
 
 ```powershell
-git add ontology_core/inference_to_relational.py ontology_core/__init__.py tests/ontology_core/test_inference_to_relational.py
+git add ontology_core/inference_to_relational.py ontology_core/__init__.py ontology_core/relational_plan.py ontology_core/relational_compiler.py tests/ontology_core/test_inference_to_relational.py
 git commit -m "feat: bind metadata inference to canonical plans"
 git push origin HEAD
 ```

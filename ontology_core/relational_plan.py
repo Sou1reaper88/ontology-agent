@@ -6,8 +6,14 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import Field, model_validator
 
-from ontology_core.inference_models import CandidateObject, SemanticRef
+from ontology_core.inference_models import (
+    CandidateObject,
+    SemanticRef,
+    InferenceEvidence,
+    ValidatedInferenceTemporalDecision,
+)
 from ontology_core.models import FrozenModel
+from ontology_core.normalization import datatype_group
 from ontology_core.program_models import ProgramStepKind
 from ontology_core.semantic_models import RuleOperator
 
@@ -99,6 +105,7 @@ class JoinNode(FrozenModel):
     left_input: NodeId
     right_input: NodeId
     join_type: Literal["inner", "left", "anti"]
+    anti_strategy: Literal["left_join", "not_exists"] = "left_join"
     conditions: tuple[JoinCondition, ...] = Field(min_length=1)
     match_filters: tuple[FilterPredicate, ...] = ()
     columns: tuple[DerivedColumn, ...] = Field(min_length=1)
@@ -148,6 +155,8 @@ class CanonicalRelationalPlan(FrozenModel):
     objects: tuple[CandidateObject, ...] = Field(min_length=1)
     nodes: tuple[RelationalNode, ...] = Field(min_length=1)
     result_node_id: NodeId
+    temporal_decisions: tuple[ValidatedInferenceTemporalDecision, ...] = ()
+    inference_evidence: InferenceEvidence | None = None
 
     @model_validator(mode="after")
     def validate_relational_graph(self) -> CanonicalRelationalPlan:
@@ -219,7 +228,7 @@ class CanonicalRelationalPlan(FrozenModel):
                     raise ValueError("连接条件必须保持声明的左右输入")
                 left_type = cls._column_type(condition.left, left, "连接")
                 right_type = cls._column_type(condition.right, right, "连接")
-                if left_type != right_type:
+                if datatype_group(left_type) != datatype_group(right_type):
                     raise ValueError("连接条件两侧的数据类型必须一致")
             for predicate in node.match_filters:
                 cls._require_direct_ref(predicate.column, node.right_input, right, "匹配过滤")

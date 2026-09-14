@@ -15,6 +15,7 @@ from ontology_core.program_models import (
     LineageEdge,
     ProgramCompilationEvidence,
     ProgramStepKind,
+    TemporalCompilationEvidence,
 )
 from ontology_core.relational_plan import (
     AggregateNode,
@@ -140,7 +141,18 @@ class HiveRelationalCompiler:
             evidence=ProgramCompilationEvidence(
                 source_tables=source_tables,
                 fields=fields,
-                temporal_decisions=(),
+                temporal_decisions=tuple(
+                    TemporalCompilationEvidence(
+                        partition_property_ref=item.partition_field.ref,
+                        grain=item.grain.value,
+                        source=item.source,
+                        resolved_start=item.resolved_start,
+                        resolved_end=item.resolved_end,
+                        explanation=item.explanation,
+                    )
+                    for item in plan.temporal_decisions
+                ),
+                inference=plan.inference_evidence,
             ),
         )
         HiveProgramCompiler().validate_program(program)
@@ -236,6 +248,12 @@ class HiveRelationalCompiler:
             join_sql = "INNER JOIN" if node.join_type == "inner" else "LEFT JOIN"
             left_source = self._relation_sql(node.left_input, materialized_targets)
             right_source = self._relation_sql(node.right_input, materialized_targets)
+            if node.join_type == "anti" and node.anti_strategy == "not_exists":
+                return (
+                    f"SELECT {selections}\nFROM {left_source} AS {left_alias}\n"
+                    f"WHERE NOT EXISTS (SELECT 1 FROM {right_source} AS {right_alias} "
+                    f"WHERE {' AND '.join(conditions)})"
+                )
             query = (
                 f"SELECT {selections}\n"
                 f"FROM {left_source} AS {left_alias}\n"

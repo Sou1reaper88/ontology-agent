@@ -18,6 +18,7 @@ from ontology_core.errors import (
     UnsupportedQueryPlanError,
 )
 from ontology_core.inference_compiler import HiveInferenceCompiler
+from ontology_core.inference_to_relational import InferenceRelationalAdapter
 from ontology_core.inference_models import (
     CandidateContext,
     CandidateField,
@@ -151,6 +152,7 @@ from ontology_core.tabular_metadata import (
 from ontology_core.validator import OntologyValidator
 
 __all__ = [
+    "InferenceRelationalAdapter",
     "InferredAggregationDraft",
     "ValidatedInferredAggregation",
     "RelationEvidenceSource",
