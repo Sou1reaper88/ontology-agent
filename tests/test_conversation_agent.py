@@ -34,6 +34,18 @@ def test_question_answers_without_sql_tool(monkeypatch):
     assert output['trace'][-1]['node'] == 'conversation_response'
 
 
+def test_model_interpreted_cte_constraint_reaches_generation_tool(monkeypatch):
+    message = call('按提示词生成，不使用CTE')
+    message['tool_calls'][0]['function']['arguments'] = json.dumps({
+        'requirement': '按提示词生成', 'allow_cte': False})
+    provider(monkeypatch, [message, {'role': 'assistant', 'content': '已生成。'}])
+    observed = []
+    monkeypatch.setattr(agent, 'generate_sql_program', lambda *a, **kw:
+        observed.append(kw) or {'success': True, 'sql': 'synthetic', 'trace': []})
+    agent.run_conversation_agent('生成', assembled_context='禁止CTE')
+    assert observed[0]['allow_cte'] is False
+
+
 def test_current_question_is_separate_from_pending_history(monkeypatch):
     requests = provider(monkeypatch, [{'role': 'assistant', 'content': '上一轮调用失败，不代表需要重新生成。'}])
     agent.run_conversation_agent('为什么不回答了', assembled_context='历史未完成取数请求')

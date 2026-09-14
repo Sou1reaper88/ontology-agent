@@ -1,4 +1,4 @@
-"""Conversation-first host: SQL compilation is a bounded, non-executing tool."""
+"""Conversation-first host: SQL authoring is a bounded, non-executing tool."""
 
 import json
 import logging
@@ -16,6 +16,7 @@ SYSTEM = (
     "解释原因、讨论口径、解释已有SQL或建议如何修改本体时直接回答，不调用生成工具。"
     "需要生成/修改取数脚本，或用户正在补充一个待完成的取数需求时，才调用generate_sql_program。"
     "结合上下文整理完整需求与已确认的修正，不丢失原始限制，不把旧口径覆盖用户最新纠正。"
+    "识别本轮生效提示词及用户对SQL写法的限制：禁止CTE时调用工具必须传allow_cte=false；不要仅在生成后道歉。"
     "当前用户消息优先决定是否调用工具：历史有未完成需求不等于本轮要求继续生成。"
     "用户询问未回答、失败原因或已有结果时，先解释已有证据，不为解决历史待办擅自生成SQL。"
     "局部纠正只作用于用户指出的字段或条件，其他口径和明确账期原样保留；不要把一字段的NULL规则扩大到其他字段。"
@@ -36,12 +37,13 @@ SYSTEM = (
 TOOL = {
     "type": "function", "function": {
         "name": "generate_sql_program",
-        "description": "仅在当前用户要求生成/修改脚本或补充取数需求时，调用本体规划、校验与SQL编译；历史待办不等于当前授权，原因解释不调用；仅生成，不执行。",
+        "description": "仅在当前用户要求生成/修改脚本或补充取数需求时，让模型检索本体、编写SQL并静态校验；历史待办不等于当前授权，原因解释不调用；仅生成，不执行。",
         "parameters": {"type": "object", "properties": {
             "requirement": {"type": "string", "minLength": 1,
                             "description": "结合对话和最新补充整理的完整取数需求，保留已确认口径"},
             "summary": {"type": "string", "maxLength": 500,
-                        "description": "面向用户的简短处理说明：目标与工具调用目的，不是内部推理原文"}},
+                        "description": "面向用户的简短处理说明：目标与工具调用目的，不是内部推理原文"},
+            "allow_cte": {"type": "boolean", "description": "依据当前生效提示词及用户限制判断；禁用CTE时必须false"}},
             "required": ["requirement"], "additionalProperties": False},
     },
 }
@@ -125,7 +127,7 @@ def run_conversation_agent(user_query, *, assembled_context=None, history=None,
             function = call["function"]
             arguments = json.loads(function["arguments"])
             if (function["name"] != "generate_sql_program" or not isinstance(arguments, dict)
-                    or "requirement" not in arguments or set(arguments) - {"requirement", "summary"}):
+                    or "requirement" not in arguments or set(arguments) - {"requirement", "summary", "allow_cte"}):
                 raise ValueError("unsupported tool")
             requirement = arguments["requirement"]
             if not isinstance(requirement, str) or not requirement.strip():
@@ -134,9 +136,14 @@ def run_conversation_agent(user_query, *, assembled_context=None, history=None,
             public_summary = arguments.get("summary", "结合本轮输入与历史口径，调用SQL生成工具；仅生成，不执行。")
             if not isinstance(public_summary, str) or len(public_summary) > 500:
                 raise ValueError("invalid public summary")
+            if "allow_cte" in arguments:
+                if not isinstance(arguments["allow_cte"], bool):
+                    raise ValueError("invalid CTE constraint")
+                generation_kwargs["allow_cte"] = arguments["allow_cte"]
             step = {"node": "conversation_action", "label": "理解需求与选择工具",
                     "status": "success", "duration_ms": int((time.monotonic() - started) * 1000),
-                    "summary": public_summary, "payload": {"tool": "generate_sql_program", "requirement": requirement}}
+                    "summary": public_summary, "payload": {"tool": "generate_sql_program", "requirement": requirement,
+                        "allow_cte": arguments.get("allow_cte", True)}}
             trace.append(step)
             if on_step:
                 try:

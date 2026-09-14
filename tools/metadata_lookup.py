@@ -45,6 +45,17 @@ SEARCH_TOOL = {
     },
 }
 
+VALIDATE_TOOL = {
+    "type": "function", "function": {
+        "name": "validate_sql_program",
+        "description": "静态检查Hive脚本的表字段、分区、临时表DDL、依赖及CTE限制；不执行SQL，不证明业务口径正确。",
+        "parameters": {"type": "object", "properties": {
+            "sql": {"type": "string", "minLength": 1, "maxLength": 200000},
+            "allow_cte": {"type": "boolean", "description": "用户禁止CTE时必须为false"}},
+            "required": ["sql", "allow_cte"], "additionalProperties": False},
+    },
+}
+
 
 def generate_with_field_lookup(
     client,
@@ -54,6 +65,8 @@ def generate_with_field_lookup(
     *,
     json_output: bool = False,
     reasoning_effort: str | None = None,
+    validate_sql=None,
+    on_tool=None,
 ) -> str:
     if not client.api_key or client.api_key == "your-api-key-here":
         raise ValueError("模型凭据未配置")
@@ -68,7 +81,7 @@ def generate_with_field_lookup(
         payload = {
             "model": client.model,
             "messages": messages,
-            "tools": [TOOL, SEARCH_TOOL] if callable(search) else [TOOL],
+            "tools": ([TOOL, SEARCH_TOOL] if callable(search) else [TOOL]) + ([VALIDATE_TOOL] if callable(validate_sql) else []),
             "tool_choice": "auto" if turn < tool_rounds else "none",
             "temperature": client.temperature,
         }
@@ -113,7 +126,12 @@ def generate_with_field_lookup(
                 raise MetadataLookupResponseError("arguments_invalid") from error
             if not isinstance(arguments, dict):
                 raise MetadataLookupResponseError("arguments_invalid")
-            if function["name"] == "search_metadata" and callable(search):
+            if function["name"] == "validate_sql_program" and callable(validate_sql):
+                if (set(arguments) != {"sql", "allow_cte"} or not isinstance(arguments["sql"], str)
+                        or not 0 < len(arguments["sql"]) <= 200000 or not isinstance(arguments["allow_cte"], bool)):
+                    raise MetadataLookupResponseError("arguments_invalid")
+                result = validate_sql(**arguments)
+            elif function["name"] == "search_metadata" and callable(search):
                 if set(arguments) != {"query"}:
                     raise MetadataLookupResponseError("contract_invalid")
                 try:
@@ -127,6 +145,9 @@ def generate_with_field_lookup(
                 result = lookup(refs)
             else:
                 raise MetadataLookupResponseError("contract_invalid")
+            if on_tool:
+                on_tool({"tool": function["name"],
+                         "valid": result.get("valid") if isinstance(result, dict) else None})
             messages.append(
                 {
                     "role": "tool",

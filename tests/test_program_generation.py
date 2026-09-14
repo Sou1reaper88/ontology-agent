@@ -28,8 +28,8 @@ class _Inference:
         return self.outcome
 
 
-def test_canonical_pipeline_is_default():
-    assert Settings(_env_file=None).sql_pipeline == "canonical"
+def test_llm_author_pipeline_is_default():
+    assert Settings(_env_file=None).sql_pipeline == "llm"
 
 
 def test_program_id_is_stable_and_does_not_expose_request_id():

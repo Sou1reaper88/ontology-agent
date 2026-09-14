@@ -9,6 +9,29 @@ from tools.llm_client import LLMClient
 from tools.metadata_lookup import generate_with_field_lookup
 
 
+def test_sql_validation_tool_runs_without_executing_sql(monkeypatch):
+    responses = [{'role': 'assistant', 'content': None, 'tool_calls': [{
+        'id': 'check', 'type': 'function', 'function': {'name': 'validate_sql_program',
+        'arguments': json.dumps({'sql': 'synthetic', 'allow_cte': False})}}]},
+        {'role': 'assistant', 'content': '{"sql":"synthetic"}'}]
+    seen = []
+    def post(url, **kwargs):
+        import httpx
+        seen.append(kwargs['json'])
+        return httpx.Response(200, request=httpx.Request('POST', url), json={
+            'choices': [{'finish_reason': 'stop', 'message': responses.pop(0)}]})
+    monkeypatch.setattr('httpx.post', post)
+    client = SimpleNamespace(api_key='synthetic', model='test', base_url='https://example.invalid',
+                             temperature=0, timeout=1, max_tokens=None)
+    checked = []
+    events = []
+    result = generate_with_field_lookup(client, 'synthetic', 'synthetic', lambda refs: [],
+        validate_sql=lambda **kw: checked.append(kw) or {'valid': True}, on_tool=events.append)
+    assert checked == [{'sql': 'synthetic', 'allow_cte': False}]
+    assert result == '{"sql":"synthetic"}'
+    assert events[0]['tool'] == 'validate_sql_program'
+
+
 def test_lookup_rounds_request_json_output_and_preserve_provider_context(monkeypatch):
     field = CandidateField(
         ref="UserId",

@@ -74,6 +74,7 @@ export function MessageTimeline({
           const sqlPresentation = getSqlPresentation(message, isEditing);
           const isInferredProgram =
             message.program?.mode === "inferred_program";
+          const isAuthoredProgram = message.program?.mode === "authored_program";
           const inferenceEvidence = message.program?.inference_evidence;
 
           return (
@@ -140,7 +141,7 @@ export function MessageTimeline({
                             : "GENERATED PROGRAM"}
                         </span>
                         <strong>
-                          {isInferredProgram ? "候选取数程序" : "取数程序"}
+                          {isInferredProgram ? "候选取数程序" : isAuthoredProgram ? "模型编写的取数程序" : "取数程序"}
                         </strong>
                         <p>
                           {isInferredProgram
@@ -157,7 +158,7 @@ export function MessageTimeline({
                       </div>
                     </header>
                   ) : null}
-                  {isInferredProgram && inferenceEvidence ? (
+                  {(isInferredProgram || isAuthoredProgram) && inferenceEvidence ? (
                     <section className="inference-evidence" aria-label="候选推断依据">
                       <div>
                         <strong>为什么这样生成</strong>

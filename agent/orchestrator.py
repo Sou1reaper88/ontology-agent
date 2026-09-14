@@ -1063,7 +1063,7 @@ def _program_payload(result: ProgramGenerationResult) -> dict[str, Any]:
     if program is not None:
         steps = [item.model_dump(mode="json") for item in program.statements]
         temporal = [item.model_dump(mode="json") for item in program.evidence.temporal_decisions]
-    package = None
+    package = result.package
     if plan is not None:
         package = {
             "package_id": plan.package_id,
@@ -1119,7 +1119,7 @@ def _program_step(
         summary = result.diagnostics[0].message if result.diagnostics else "未生成取数程序"
     return {
         "node": "program_generation",
-        "label": "本体程序规划与编译",
+        "label": "模型编写SQL与静态校验" if result.mode.value == "authored_program" else "SQL生成与校验",
         "status": status,
         "duration_ms": duration_ms,
         "summary": summary,
@@ -1137,8 +1137,9 @@ def run_agent(
     assembled_context: str | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     request_id: str | None = None,
+    allow_cte: bool = True,
 ) -> dict[str, Any]:
-    """默认只走统一关系计划；旧图仅由服务器配置手动选择。"""
+    """默认由模型编写SQL；旧图仅由服务器配置手动选择。"""
     if settings.sql_pipeline == "legacy":
         return _run_legacy_agent(
             user_query,
@@ -1156,6 +1157,8 @@ def run_agent(
         "request_id": request_id or _default_request_id(user_query, system_time, ontology_id),
         "system_time": _program_system_time(system_time),
     }
+    if not allow_cte:
+        generation_kwargs["allow_cte"] = False
     context = assembled_context or _conversation_context_text(
         {
             "history": history or [],
@@ -1167,6 +1170,13 @@ def run_agent(
     if context:
         generation_kwargs["conversation_context"] = context
     result = generate_program(user_query, **generation_kwargs)
+    trace = list(result.tool_steps)
+    if on_step:
+        for tool_step in trace:
+            try:
+                on_step(tool_step)
+            except Exception:
+                logger.warning("SQL工具记录回调异常")
     step = _program_step(
         result,
         duration_ms=int((time.time() - started_at) * 1000),
@@ -1191,7 +1201,7 @@ def run_agent(
             "clarification": result.clarification,
             "diagnostics": diagnostics,
             "missing_information": list(result.missing_information),
-            "trace": [step],
+            "trace": [*trace, step],
         }
 
     payload = _program_payload(result)
@@ -1211,7 +1221,7 @@ def run_agent(
                 f"- 物化步骤：{len(payload['program_steps'])}\n\n"
                 "脚本已生成，请在下方取数程序区域查看和复制。"
             ),
-            "trace": [step],
+            "trace": [*trace, step],
         }
     )
     return output

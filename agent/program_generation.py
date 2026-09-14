@@ -1,4 +1,4 @@
-"""Generate one canonical metadata-bound SQL program; never retry via old planners."""
+"""Generate one SQL program; production uses model authoring, not plan rendering."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from typing import Protocol
 
 from agent.metadata_inference import (
     MetadataInferenceOutcome,
-    MetadataInferenceService,
 )
 from agent.ontology_shadow import get_ontology_runtime
 from ontology_core.relational_plan import CanonicalRelationalPlan
@@ -28,6 +27,7 @@ _PROGRAM_NAMESPACE = b"ontology-agent:program:v1\0"
 
 
 class ProgramGenerationMode(StrEnum):
+    AUTHORED_PROGRAM = "authored_program"
     PROGRAM = "program"
     REPAIRED_PROGRAM = "repaired_program"
     INFERRED_PROGRAM = "inferred_program"
@@ -49,6 +49,8 @@ class ProgramGenerationResult:
     inferred_plan: CanonicalRelationalPlan | None = None
     relation_graph: RelationEvidenceGraph | None = None
     missing_information: tuple[str, ...] = ()
+    package: dict[str, str] | None = None
+    tool_steps: tuple[dict, ...] = ()
 
 
 class MetadataInference(Protocol):
@@ -109,13 +111,9 @@ class ProgramGenerationService:
 
 
 @lru_cache(maxsize=1)
-def get_program_generation_service() -> ProgramGenerationService:
-    return ProgramGenerationService(
-        inference_service=MetadataInferenceService(
-            client=get_llm_client(),
-            runtime=get_ontology_runtime(),
-        )
-    )
+def get_program_generation_service():
+    from agent.sql_authoring import SqlAuthoringService
+    return SqlAuthoringService(client=get_llm_client(), runtime=get_ontology_runtime())
 
 
 def generate_program(
@@ -124,10 +122,12 @@ def generate_program(
     request_id: str,
     system_time: datetime,
     conversation_context: str | None = None,
+    allow_cte: bool = True,
 ) -> ProgramGenerationResult:
     return get_program_generation_service().generate(
         query,
         request_id=request_id,
         system_time=system_time,
         conversation_context=conversation_context,
+        allow_cte=allow_cte,
     )

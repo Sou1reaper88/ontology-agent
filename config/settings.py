@@ -120,7 +120,8 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "ontology-agent"
-    sql_pipeline: Literal["canonical", "legacy"] = "canonical"
+    # canonical remains a configuration alias, not a second production renderer.
+    sql_pipeline: Literal["llm", "canonical", "legacy"] = "llm"
     env: str = "dev"
     debug: bool = False
     secret_key: str = "change-me-in-production"
