@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from ontology_core.inference_models import (
     CandidateContext,
     CandidateField,
@@ -11,6 +13,7 @@ from ontology_core.inference_models import (
     InferredFilterDraft,
     InferredJoinDraft,
     InferredProgramDraft,
+    InferredAggregationDraft,
 )
 from ontology_core.inference_validation import MetadataInferenceValidator
 from ontology_core.models import PackageInfo
@@ -332,3 +335,53 @@ def test_family_is_one_logical_source_and_expands_only_declared_members() -> Non
     assert result.plan.families == (family,)
     assert result.plan.joins == ()
 
+
+def test_grouped_aggregation_binds_real_fields():
+    result = _validate(
+        InferredProgramDraft(
+            selected_object_refs=("Customer",),
+            requested_field_refs=("CustomerStatus",),
+            group_by_field_refs=("CustomerStatus",),
+            aggregations=(
+                InferredAggregationDraft(
+                    name="user_count",
+                    function="count",
+                    source_field_ref="CustomerCustomerId",
+                    distinct=True,
+                ),
+            ),
+        ),
+        _object("Customer"),
+    )
+    assert result.plan is not None
+    assert result.plan.group_by_fields[0].ref == "CustomerStatus"
+    assert result.plan.aggregations[0].source_field.ref == "CustomerCustomerId"
+
+
+@pytest.mark.parametrize(
+    "group,source,function,code",
+    [
+        ("Unknown", "CustomerCustomerId", "count", "invalid_group_reference"),
+        ("CustomerStatus", "OfferCustomerId", "count", "invalid_aggregation_reference"),
+        ("CustomerStatus", "CustomerCustomerId", "sum", "incompatible_aggregation_type"),
+    ],
+)
+def test_invalid_aggregation_is_not_silently_dropped(group, source, function, code):
+    result = _validate(
+        InferredProgramDraft(
+            selected_object_refs=("Customer",),
+            requested_field_refs=("CustomerStatus",),
+            group_by_field_refs=(group,),
+            aggregations=(
+                InferredAggregationDraft(
+                    name="total",
+                    function=function,
+                    source_field_ref=source,
+                ),
+            ),
+        ),
+        _object("Customer"),
+        _object("Offer"),
+    )
+    assert result.plan is None
+    assert result.diagnostics[0].code == code

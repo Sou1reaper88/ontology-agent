@@ -124,6 +124,21 @@ class InferredFilterDraft(FrozenModel):
         return self
 
 
+class InferredAggregationDraft(FrozenModel):
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+    function: Literal["count", "sum", "avg", "min", "max"]
+    source_field_ref: SemanticRef | None = None
+    distinct: bool = False
+
+    @model_validator(mode="after")
+    def require_source(self) -> InferredAggregationDraft:
+        if self.function != "count" and self.source_field_ref is None:
+            raise ValueError("数值聚合必须引用字段")
+        if self.distinct and self.source_field_ref is None:
+            raise ValueError("DISTINCT 聚合必须引用字段")
+        return self
+
+
 class InferredProgramDraft(FrozenModel):
     blocking_issues: tuple[str, ...] = ()
     selected_object_refs: tuple[SemanticRef, ...] = Field(min_length=1)
@@ -131,6 +146,8 @@ class InferredProgramDraft(FrozenModel):
     requested_field_refs: tuple[SemanticRef, ...] = Field(min_length=1)
     joins: tuple[InferredJoinDraft, ...] = ()
     filters: tuple[InferredFilterDraft, ...] = ()
+    group_by_field_refs: tuple[SemanticRef, ...] = ()
+    aggregations: tuple[InferredAggregationDraft, ...] = ()
     time_expression: str | None = None
     unresolved_items: tuple[str, ...] = ()
     ontology_suggestions: tuple[str, ...] = ()
@@ -141,9 +158,13 @@ class InferredProgramDraft(FrozenModel):
             self.selected_object_refs,
             self.selected_family_refs,
             self.requested_field_refs,
+            self.group_by_field_refs,
+            tuple(item.name for item in self.aggregations),
         )
         if any(len(set(items)) != len(items) for items in collections):
             raise ValueError("候选计划引用必须唯一")
+        if self.group_by_field_refs and not self.aggregations:
+            raise ValueError("分组必须声明聚合运算")
         return self
 
 
@@ -184,6 +205,13 @@ class InferenceEvidence(FrozenModel):
     ontology_suggestions: tuple[str, ...] = ()
 
 
+class ValidatedInferredAggregation(FrozenModel):
+    name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+    function: Literal["count", "sum", "avg", "min", "max"]
+    source_field: CandidateField | None = None
+    distinct: bool = False
+
+
 class ValidatedInferredProgram(FrozenModel):
     package_id: str = Field(min_length=1)
     package_version: str = Field(min_length=1)
@@ -195,5 +223,7 @@ class ValidatedInferredProgram(FrozenModel):
     requested_fields: tuple[CandidateField, ...] = Field(min_length=1)
     joins: tuple[ValidatedInferredJoin, ...] = ()
     filters: tuple[ValidatedInferredFilter, ...] = ()
+    group_by_fields: tuple[CandidateField, ...] = ()
+    aggregations: tuple[ValidatedInferredAggregation, ...] = ()
     temporal_decisions: tuple[ValidatedInferenceTemporalDecision, ...] = ()
     evidence: InferenceEvidence

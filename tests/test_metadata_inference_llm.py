@@ -88,6 +88,8 @@ def test_inference_request_contains_bounded_candidates_context_and_schema() -> N
     assert "time_expression" in system_prompt
     assert "分区字段不得写入 filters" in system_prompt
     assert "自然时间表达" in system_prompt
+    assert "group_by_field_refs" in system_prompt
+    assert "aggregations" in system_prompt
     payload = json.loads(user_query)
     assert payload["request"] == "查询客户手机号码"
     assert payload["conversation_context"] == "用户已确认客户指个人客户"

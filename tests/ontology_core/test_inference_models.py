@@ -14,6 +14,7 @@ from ontology_core.inference_models import (
     InferredFilterDraft,
     InferredJoinDraft,
     InferredProgramDraft,
+    InferredAggregationDraft,
 )
 
 
@@ -209,3 +210,32 @@ def test_join_relation_source_defaults_to_model_and_accepts_user() -> None:
     )
     assert InferredJoinDraft(**payload).relation_source == "model"
     assert InferredJoinDraft(**payload, relation_source="user").relation_source == "user"
+
+
+def test_inferred_grouped_count_round_trips():
+    draft = InferredProgramDraft(
+        selected_object_refs=("Customer",),
+        requested_field_refs=("Customer.Mobile",),
+        group_by_field_refs=("Customer.Mobile",),
+        aggregations=(
+            InferredAggregationDraft(
+                name="user_count",
+                function="count",
+                source_field_ref="Customer.Id",
+                distinct=True,
+            ),
+        ),
+    )
+    assert InferredProgramDraft.model_validate_json(draft.model_dump_json()) == draft
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        dict(name="amount", function="sum"),
+        dict(name="users", function="count", distinct=True),
+    ],
+)
+def test_aggregation_requires_source_when_needed(payload):
+    with pytest.raises(ValidationError, match="聚合"):
+        InferredAggregationDraft(**payload)

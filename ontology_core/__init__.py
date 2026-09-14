@@ -29,6 +29,8 @@ from ontology_core.inference_models import (
     InferredFilterDraft,
     InferredJoinDraft,
     InferredProgramDraft,
+    InferredAggregationDraft,
+    ValidatedInferredAggregation,
     ValidatedInferenceTemporalDecision,
     ValidatedInferredFilter,
     ValidatedInferredJoin,
@@ -149,6 +151,8 @@ from ontology_core.tabular_metadata import (
 from ontology_core.validator import OntologyValidator
 
 __all__ = [
+    "InferredAggregationDraft",
+    "ValidatedInferredAggregation",
     "RelationEvidenceSource",
     "RelationEvidenceEdge",
     "RelationEvidenceGraph",

@@ -19,6 +19,7 @@ from ontology_core.inference_models import (
     ValidatedInferredFilter,
     ValidatedInferredJoin,
     ValidatedInferredProgram,
+    ValidatedInferredAggregation,
 )
 from ontology_core.metadata_candidates import MetadataCandidateCatalog
 from ontology_core.models import FrozenModel
@@ -44,15 +45,11 @@ def _failure(code: str, message: str, missing: str) -> InferenceValidationResult
 
 
 def _field_words(field: CandidateField) -> set[str]:
-    text = normalize_text(
-        " ".join((field.physical_name, field.label, field.description or ""))
-    )
+    text = normalize_text(" ".join((field.physical_name, field.label, field.description or "")))
     words = set(_TOKEN.findall(text))
     for word in tuple(words):
         if "\u3400" <= word[:1] <= "\u9fff":
-            words.update(
-                word[index : index + 2] for index in range(max(0, len(word) - 1))
-            )
+            words.update(word[index : index + 2] for index in range(max(0, len(word) - 1)))
     return {item for item in words if len(item) >= 2}
 
 
@@ -98,7 +95,8 @@ class MetadataInferenceValidator:
     ) -> InferenceValidationResult:
         if draft.blocking_issues:
             return _failure(
-                "incomplete_inferred_semantics", "候选计划存在未实现的核心业务语义",
+                "incomplete_inferred_semantics",
+                "候选计划存在未实现的核心业务语义",
                 "；".join(draft.blocking_issues),
             )
         snapshot = catalog.snapshot
@@ -148,9 +146,7 @@ class MetadataInferenceValidator:
                     "请重新召回当前活动版本中的完整表族",
                 )
             expanded_refs.update(family.member_refs)
-        selected_objects = tuple(
-            objects_by_ref[ref] for ref in sorted(expanded_refs)
-        )
+        selected_objects = tuple(objects_by_ref[ref] for ref in sorted(expanded_refs))
         source_refs = {item.data_source_ref for item in selected_objects}
         if len(source_refs) != 1:
             return _failure(
@@ -188,9 +184,7 @@ class MetadataInferenceValidator:
             requested_fields.append(field)
 
         member_family = {
-            member: family.ref
-            for family in selected_families
-            for member in family.member_refs
+            member: family.ref for family in selected_families for member in family.member_refs
         }
 
         def logical_node(object_ref: str) -> str:
@@ -198,11 +192,7 @@ class MetadataInferenceValidator:
 
         logical_nodes = {
             *(family.ref for family in selected_families),
-            *(
-                ref
-                for ref in draft.selected_object_refs
-                if ref not in member_family
-            ),
+            *(ref for ref in draft.selected_object_refs if ref not in member_family),
         }
         validated_joins: list[ValidatedInferredJoin] = []
         edges: set[frozenset[str]] = set()
@@ -243,9 +233,7 @@ class MetadataInferenceValidator:
             if left_node != right_node:
                 edges.add(frozenset((left_node, right_node)))
             confidence = (
-                Confidence.MEDIUM
-                if join.confidence == Confidence.HIGH
-                else join.confidence
+                Confidence.MEDIUM if join.confidence == Confidence.HIGH else join.confidence
             )
             validated_joins.append(
                 ValidatedInferredJoin(
@@ -261,7 +249,9 @@ class MetadataInferenceValidator:
             )
         semantic_error = join_semantics_error(validated_joins, requested_fields, member_family)
         if semantic_error:
-            return _failure("unsupported_join_semantics", semantic_error, "请调整关联方向或排除集合")
+            return _failure(
+                "unsupported_join_semantics", semantic_error, "请调整关联方向或排除集合"
+            )
         if len(logical_nodes) > 1 and not self._connected(logical_nodes, edges):
             return _failure(
                 "missing_candidate_join",
@@ -299,6 +289,50 @@ class MetadataInferenceValidator:
                     confidence=filter_.confidence,
                     evidence=filter_.evidence,
                 )
+            )
+
+        group_by_fields: list[CandidateField] = []
+        for ref in draft.group_by_field_refs:
+            field = fields_by_ref.get(ref)
+            if field is None or field.object_ref not in expanded_refs:
+                return _failure(
+                    "invalid_group_reference", "候选分组字段不属于已选对象", "请确认分组字段所属表"
+                )
+            group_by_fields.append(field)
+        aggregations: list[ValidatedInferredAggregation] = []
+        for aggregation in draft.aggregations:
+            field = fields_by_ref.get(aggregation.source_field_ref)
+            if aggregation.source_field_ref is not None and (
+                field is None or field.object_ref not in expanded_refs
+            ):
+                return _failure(
+                    "invalid_aggregation_reference",
+                    "候选聚合字段不属于已选对象",
+                    "请确认聚合字段所属表",
+                )
+            if (
+                aggregation.function in {"sum", "avg"}
+                and field is not None
+                and _datatype_group(field.datatype_uri) != "numeric"
+            ):
+                return _failure(
+                    "incompatible_aggregation_type",
+                    "求和与平均聚合需要数值字段",
+                    "请提供数值字段或明确转换口径",
+                )
+            aggregations.append(
+                ValidatedInferredAggregation(
+                    name=aggregation.name,
+                    function=aggregation.function,
+                    source_field=field,
+                    distinct=aggregation.distinct,
+                )
+            )
+        if aggregations and not set(draft.requested_field_refs).issubset(draft.group_by_field_refs):
+            return _failure(
+                "invalid_aggregate_projection",
+                "聚合输出包含未分组的明细字段",
+                "请确认分组粒度与输出字段",
             )
 
         temporal_decisions: list[ValidatedInferenceTemporalDecision] = []
@@ -346,9 +380,7 @@ class MetadataInferenceValidator:
                     partition_field=partition_field,
                     grain=policy.grain,
                     source=(
-                        "default"
-                        if parsed.partition.source.value == "ontology_default"
-                        else "user"
+                        "default" if parsed.partition.source.value == "ontology_default" else "user"
                     ),
                     resolved_start=parsed.partition.start,
                     resolved_end=parsed.partition.end,
@@ -360,11 +392,7 @@ class MetadataInferenceValidator:
             *(item.confidence for item in validated_joins),
             *(item.confidence for item in validated_filters),
         )
-        overall = (
-            Confidence.LOW
-            if Confidence.LOW in inferred_confidences
-            else Confidence.MEDIUM
-        )
+        overall = Confidence.LOW if Confidence.LOW in inferred_confidences else Confidence.MEDIUM
         automatic_unresolved = tuple(
             f"关系 {item.left_object_ref} → {item.right_object_ref} 尚未写入本体"
             for item in validated_joins
@@ -392,6 +420,8 @@ class MetadataInferenceValidator:
                 requested_fields=tuple(requested_fields),
                 joins=tuple(validated_joins),
                 filters=tuple(validated_filters),
+                group_by_fields=tuple(group_by_fields),
+                aggregations=tuple(aggregations),
                 temporal_decisions=tuple(temporal_decisions),
                 evidence=InferenceEvidence(
                     overall_confidence=overall,

@@ -124,6 +124,8 @@ class LLMClient:
             "time_expression必须使用需求中出现的自然时间表达，例如“2026年6月”或“2026-06-01至2026-06-30”；"
             "不得填写202606、P_DAY或P_MON等物理分区值，也不得把生失效日期比较条件作为时间范围。"
             "核心需求无法由本Schema完整表达时必须写入blocking_issues，禁止近似替代；"
+            "分组字段写入group_by_field_refs，计数、求和、平均、最值写入aggregations；"
+            "聚合时requested_field_refs只能包含分组字段，不得将明细字段与聚合结果混用。"
             "unresolved_items仅存不影响核心运算的待确认假设，不得把核心缺失藏在此处。"
         )
         payload: dict[str, Any] = {

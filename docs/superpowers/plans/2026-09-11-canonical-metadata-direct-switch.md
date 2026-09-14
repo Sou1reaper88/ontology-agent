@@ -184,7 +184,7 @@ git push origin HEAD
 - Consumes: semantic field refs already present in `CandidateContext`.
 - Produces: `InferredAggregationDraft`, `ValidatedInferredAggregation`, `group_by_field_refs`, and `aggregations` on validated inference output.
 
-- [ ] **Step 1: Write failing aggregation contract tests**
+- [x] **Step 1: Write failing aggregation contract tests**
 
 Add tests for a grouped distinct count and for rejection of a missing source on `sum`:
 
@@ -203,7 +203,7 @@ with pytest.raises(ValidationError, match="数值聚合"):
 
 Add validator coverage proving group fields and aggregation sources must belong to selected objects and `sum`/`avg` require numeric datatype groups.
 
-- [ ] **Step 2: Run tests and verify schema failures**
+- [x] **Step 2: Run tests and verify schema failures**
 
 ```powershell
 pytest tests/ontology_core/test_inference_models.py tests/ontology_core/test_inference_validation.py tests/test_metadata_inference_llm.py -q
@@ -211,7 +211,7 @@ pytest tests/ontology_core/test_inference_models.py tests/ontology_core/test_inf
 
 Expected: failures because the aggregation contracts are absent.
 
-- [ ] **Step 3: Add the minimal aggregation fields**
+- [x] **Step 3: Add the minimal aggregation fields**
 
 Implement:
 
@@ -243,7 +243,7 @@ Update `MetadataInferenceValidator.validate(...)` to bind fields, reject unknown
 
 Export both aggregation contracts from `ontology_core/__init__.py`.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 ```powershell
 pytest tests/ontology_core/test_inference_models.py tests/ontology_core/test_inference_validation.py tests/test_metadata_inference_llm.py -q
@@ -251,7 +251,7 @@ pytest tests/ontology_core/test_inference_models.py tests/ontology_core/test_inf
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```powershell
 git add ontology_core/inference_models.py ontology_core/inference_validation.py ontology_core/__init__.py tools/llm_client.py tests/ontology_core/test_inference_models.py tests/ontology_core/test_inference_validation.py tests/test_metadata_inference_llm.py
