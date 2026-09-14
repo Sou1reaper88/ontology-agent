@@ -74,7 +74,9 @@ export function MessageTimeline({
           const sqlPresentation = getSqlPresentation(message, isEditing);
           const isInferredProgram =
             message.program?.mode === "inferred_program";
-          const isAuthoredProgram = message.program?.mode === "authored_program";
+          const isAuthoredProgram = message.program?.mode.startsWith("authored_") ?? false;
+          const isAuthoredQuery = message.program?.mode === "authored_query";
+          const isAuthoredDraft = message.program?.mode === "authored_draft";
           const inferenceEvidence = message.program?.inference_evidence;
 
           return (
@@ -141,7 +143,7 @@ export function MessageTimeline({
                             : "GENERATED PROGRAM"}
                         </span>
                         <strong>
-                          {isInferredProgram ? "候选取数程序" : isAuthoredProgram ? "模型编写的取数程序" : "取数程序"}
+                          {isAuthoredDraft ? "SQL 草稿 · 校验未通过" : isAuthoredQuery ? "模型编写的查询" : isInferredProgram ? "候选取数程序" : isAuthoredProgram ? "模型编写的取数程序" : "取数程序"}
                         </strong>
                         <p>
                           {isInferredProgram
@@ -151,7 +153,7 @@ export function MessageTimeline({
                       </div>
                       <div className="program-sql-meta">
                         <span>{message.program?.platform.toUpperCase()}</span>
-                        <span>{message.program?.steps.length ?? 0} 个物化步骤</span>
+                        <span>{isAuthoredDraft ? "不可执行" : isAuthoredQuery ? "只读查询 · 仅生成" : `${message.program?.steps.length ?? 0} 个物化步骤`}</span>
                         {inferenceEvidence ? (
                           <span>置信度 {inferenceEvidence.overall_confidence}</span>
                         ) : null}

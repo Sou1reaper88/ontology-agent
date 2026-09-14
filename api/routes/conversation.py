@@ -127,7 +127,8 @@ def _extract_program(trace: list[dict] | None) -> ProgramSummary | None:
             item.get("payload")
             for item in reversed(trace or [])
             if item.get("node") == "program_generation"
-            and item.get("status") == "success"
+            and (item.get("status") == "success"
+                 or (item.get("payload") or {}).get("generation_mode") == "authored_draft")
         ),
         None,
     )
@@ -438,7 +439,7 @@ def _generate_async(
             request_id=f"conversation:{conv_id}:message:{msg_id}",
         )
 
-        sql = output.get("sql") if output.get("success") else None
+        sql = output.get("sql") if (output.get("success") or output.get("generation_mode") == "authored_draft") else None
         program = _extract_program(output.get("trace"))
         query_id: int | None = None
         if sql and program is None:

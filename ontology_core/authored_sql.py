@@ -54,15 +54,16 @@ def _bounds(node, alias, partition):
     return set()
 
 
-def validate_authored_program(sql, *, program_id, catalog, request="", allow_cte=True, assumptions=()):
-    if not isinstance(sql, str) or len(sql) > 200000:
+def validate_authored_sql(sql, *, program_id, catalog, request="", allow_cte=True, assumptions=()):
+    """Check queries and safe CTAS scripts, retaining the exact authored text."""
+    if not isinstance(sql, str) or not sql.strip() or len(sql) > 200000:
         raise ValueError("脚本为空或超过校验大小限制")
     try:
         parsed = sqlglot.parse(sql, read="hive")
     except ParseError as error:
         raise ValueError("Hive脚本无法解析") from error
-    if not parsed or len(parsed) % 2 or any(p is None for p in parsed):
-        raise ValueError("每步必须是DROP/CREATE配对，禁止末尾清理")
+    if not parsed or any(p is None for p in parsed):
+        raise ValueError("脚本包含空语句")
     if not allow_cte and any(p.find(exp.CTE) for p in parsed):
         raise ValueError("当前提示词禁止CTE，请改用物理中间表或子查询")
     raw, start = [], 0
@@ -81,18 +82,33 @@ def validate_authored_program(sql, *, program_id, catalog, request="", allow_cte
         if sum(o.physical_name.casefold() == obj.physical_name.casefold() for o in catalog.objects) == 1:
             known[obj.physical_name.casefold()] = obj
     schemas, statements, sources, external = {}, [], set(), set()
-    for index in range(0, len(parsed), 2):
-        drop, create = parsed[index:index + 2]
-        if not isinstance(drop, exp.Drop) or not isinstance(create, exp.Create):
-            raise ValueError("只允许临时表DROP TABLE IF EXISTS / CREATE TABLE AS SELECT")
-        target = _name(create.this)
-        if not re.fullmatch(rf"temp_oa_{re.escape(program_id)}_[a-z0-9_]+", target):
-            raise ValueError("DDL目标只能是当前请求命名空间内的临时表")
-        if _name(drop.this) != target or not drop.args.get("exists") or drop.args.get("kind") != "TABLE" or create.args.get("kind") != "TABLE" or not isinstance(create.expression, exp.Query):
-            raise ValueError("DROP/CREATE目标或CTAS语句不符合约束")
-        if drop.args.get("cascade") or create.args.get("replace") or create.args.get("properties"):
-            raise ValueError("不允许额外DDL属性或覆盖操作")
-        query = create.expression.copy()
+    consumed = set()
+    for index, statement in enumerate(parsed):
+        if index in consumed:
+            continue
+        target = None
+        if isinstance(statement, exp.Query):
+            query = statement.copy()
+        else:
+            drop = statement
+            create = parsed[index + 1] if index + 1 < len(parsed) else None
+            if not isinstance(drop, exp.Drop) or not isinstance(create, exp.Create):
+                raise ValueError("只允许只读查询或临时表DROP/CREATE配对，禁止末尾清理及其他写操作")
+            target = _name(create.this)
+            if not re.fullmatch(rf"temp_oa_{re.escape(program_id)}_[a-z0-9_]+", target):
+                raise ValueError("DDL目标只能是当前请求命名空间内的临时表")
+            if any(o.physical_name.casefold() == target for o in catalog.objects):
+                raise ValueError("已发布本体源表不能作为DDL目标")
+            if target in schemas:
+                raise ValueError("同一步骤表不可重复覆盖")
+            if _name(drop.this) != target or not drop.args.get("exists") or drop.args.get("kind") != "TABLE" or create.args.get("kind") != "TABLE" or not isinstance(create.expression, exp.Query):
+                raise ValueError("DROP/CREATE目标或CTAS语句不符合约束")
+            if drop.args.get("cascade") or create.args.get("replace") or create.args.get("properties"):
+                raise ValueError("不允许额外DDL属性或覆盖操作")
+            consumed.add(index + 1)
+            query = create.expression.copy()
+        if query.find(exp.Into):
+            raise ValueError("只读查询不得包含SELECT INTO")
         normalized_schema, source_objects = {}, {}
         # ponytail: normalize identifiers only on the validation copy; never rewrite the delivered script.
         for scope in traverse_scope(query):
@@ -144,16 +160,27 @@ def validate_authored_program(sql, *, program_id, catalog, request="", allow_cte
                         bounds |= _bounds(join.args.get("on"), alias, partition)
                 if bounds != {"lower", "upper"}:
                     raise ValueError(f"来源表{obj.physical_name}缺少有限{partition}分区范围（WHERE或适用JOIN ON）")
-        schemas[target] = {name: "STRING" for name in checked.named_selects}
-        statements.append(CompiledStatement(step_id=f"step_{index // 2 + 1:02d}", target_table=target,
-                                             drop_sql=raw[index], create_sql=raw[index + 1]))
+        if target:
+            schemas[target] = {name: "STRING" for name in checked.named_selects}
+            statements.append(CompiledStatement(step_id=f"step_{len(statements) + 1:02d}", target_table=target,
+                                                 drop_sql=raw[index], create_sql=raw[index + 1]))
     reasons = tuple(assumptions) or ("模型依据需求与已发布元数据直接编写SQL；静态校验不证明业务口径正确",)
     unresolved = tuple(f"外部表{name}的字段未经本体验证" for name in sorted(external))
+    inference = InferenceEvidence(overall_confidence="medium", reasons=reasons, unresolved_items=unresolved)
     program = CompiledProgram(program_id=program_id, dialect="hive", sql=sql, statements=tuple(statements),
                               intermediate_tables=tuple(s.target_table for s in statements[:-1]),
                               result_table=statements[-1].target_table,
                               evidence=ProgramCompilationEvidence(source_tables=tuple(sorted(sources)),
-                                  inference=InferenceEvidence(overall_confidence="medium", reasons=reasons,
-                                                              unresolved_items=unresolved)))
-    HiveProgramCompiler().validate_program(program)  # Reuse safety checks, never .compile().
+                                  inference=inference)) if statements else None
+    return {"sql": sql, "program": program, "statement_count": len(parsed),
+            "inference_evidence": inference.model_dump(mode="json")}
+
+
+def validate_authored_program(sql, **kwargs):
+    """Compatibility for the older pair-only service; no rendering or execution."""
+    result = validate_authored_sql(sql, **kwargs)
+    program = result["program"]
+    if program is None or result["statement_count"] != len(program.statements) * 2:
+        raise ValueError("每步必须是DROP/CREATE配对，禁止末尾清理")
+    HiveProgramCompiler().validate_program(program)
     return program

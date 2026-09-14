@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
-from tests.conftest import enable_canonical_program
 import json
 from types import SimpleNamespace
 import httpx
@@ -15,6 +14,21 @@ import agent.conversation_agent as conversation_agent
 
 import api.routes.conversation as conv_route
 from tests.conftest import last_assistant_message, send_and_wait
+
+
+def enable_canonical_program(monkeypatch):
+    """Inject synthetic metadata only; conversation authoring is the real host."""
+    from agent.conversation_tools import ConversationTools
+    from ontology_core.metadata_candidates import MetadataCandidateCatalog
+    from ontology_core.inference_models import CandidateField, CandidateObject
+    from ontology_core.semantic_models import SemanticCatalog
+    fields = tuple(CandidateField(ref='Test' + name, object_ref='Test', label=name,
+        physical_name=name, datatype_uri='string') for name in ('ID', 'P_DAY'))
+    obj = CandidateObject(ref='Test', label='synthetic', data_source_ref='Hive',
+                          physical_name='SYNTHETIC_API_D', fields=fields)
+    snapshot = SimpleNamespace(info=SimpleNamespace(package_id='synthetic', version='1', sha256='a' * 64),
+                               catalog=SemanticCatalog())
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: MetadataCandidateCatalog(snapshot, (obj,), ()))
 
 
 @pytest.fixture(autouse=True)
@@ -30,8 +44,13 @@ def _conversation_provider(monkeypatch):
 
     def post(url, **kwargs):
         payload = kwargs["json"]
-        if payload["tool_choice"] == "none":
-            message = {"role": "assistant", "content": "本轮工具结果已返回，请查看脚本与诊断。"}
+        if payload["messages"][-1]["role"] == "tool":
+            # Namespace comes from the host, not a test-only generation service.
+            reference = json.loads(payload['messages'][1]['content'].split('\n', 1)[1])
+            target = reference['temporary_table_prefix'] + 'result_table'
+            message = {"role": "assistant", "content": json.dumps({
+                "reply": "本轮工具事实已读取，脚本仅生成。", "allow_cte": True, "assumptions": [],
+                "sql": f"DROP TABLE IF EXISTS {target};\nCREATE TABLE {target} AS SELECT ID FROM SYNTHETIC_API_D WHERE P_DAY='20260812';"})}
         else:
             query = payload["messages"][-1]["content"]
             if "天气" in query:
@@ -45,8 +64,8 @@ def _conversation_provider(monkeypatch):
                             "id": "test1",
                             "type": "function",
                             "function": {
-                                "name": "generate_sql_program",
-                                "arguments": json.dumps({"requirement": query}),
+                                "name": "get_business_context",
+                                "arguments": "{}",
                             },
                         }
                     ],
@@ -95,7 +114,7 @@ def test_send_message_generates_sql(
     assert asst["id"] == msg_id
     assert asst["sql"] and "SYNTHETIC_API_D" in asst["sql"]
     assert asst["query_id"] is None
-    assert asst["program"]["mode"] == "inferred_program"
+    assert asst["program"]["mode"] == "authored_program"
     assert asst["program"]["platform"] == "hive"
     assert asst["program"]["steps"][0]["target_table"].startswith("temp_oa_")
     assert "DROP TABLE" not in asst["content"]
@@ -351,6 +370,27 @@ def test_program_metadata_survives_message_reload_without_query_action(
     assert reloaded["program"]["program_id"] == "a1b2c3d4e5f6"
     assert reloaded["program"]["steps"][0]["step_id"] == "result"
     assert reloaded["program"]["inference_evidence"]["overall_confidence"] == "medium"
+
+
+@pytest.mark.parametrize('sql,mode,status', [
+    ('SELECT 1', 'authored_query', 'success'),
+    ('DELETE FROM users', 'authored_draft', 'failed')])
+def test_authored_query_and_draft_persist_without_execution(client, admin_token, monkeypatch, sql, mode, status):
+    from tests.conftest import wait_message_done
+    def post(url, **kwargs):
+        return httpx.Response(200, request=httpx.Request('POST', url), json={
+            'choices': [{'message': {'role': 'assistant', 'content': json.dumps({
+                'reply': '合成回答', 'sql': sql, 'allow_cte': True, 'assumptions': []})}}]})
+    monkeypatch.setattr(conversation_agent.httpx, 'post', post)
+    conv = _create_conv(client, admin_token)
+    sent = client.post(f"/conversations/{conv['id']}/messages", json={'content': '合成需求'}, headers=_headers(admin_token))
+    result = wait_message_done(client, admin_token, sent.json()['message_id'])
+    assert result['status'] == status
+    message = last_assistant_message(client, admin_token, conv['id'])
+    assert message['sql'] == sql and message['query_id'] is None
+    assert message['program']['mode'] == mode
+    if status == 'failed':
+        assert message['program']['diagnostics'] and '草稿' in message['content']
 
 
 def test_context_update(client: TestClient, admin_token: str) -> None:
