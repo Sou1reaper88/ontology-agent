@@ -15,7 +15,7 @@ from ontology_core.inference_models import (
 from ontology_core.models import FrozenModel
 from ontology_core.normalization import datatype_group
 from ontology_core.program_models import ProgramStepKind
-from ontology_core.semantic_models import RuleOperator
+from ontology_core.semantic_models import RuleOperator, predicate_leaves, validate_predicate_shape
 
 _NODE_ID = r"^[a-z][a-z0-9_]{0,63}$"
 _COLUMN_NAME = r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"
@@ -66,12 +66,16 @@ class JoinCondition(FrozenModel):
 
 
 class FilterPredicate(FrozenModel):
-    column: LogicalColumnRef
+    column: LogicalColumnRef | None = None
     operator: RuleOperator
     values: tuple[str, ...] = ()
+    children: tuple[FilterPredicate, ...] = ()
 
     @model_validator(mode="after")
     def validate_values(self) -> FilterPredicate:
+        validate_predicate_shape(self.operator, self.children, self.column is not None, self.values)
+        if self.children:
+            return self
         if self.operator == RuleOperator.IS_NULL:
             if self.values:
                 raise ValueError("空值判断不能携带比较值")
@@ -231,7 +235,8 @@ class CanonicalRelationalPlan(FrozenModel):
                 if datatype_group(left_type) != datatype_group(right_type):
                     raise ValueError("连接条件两侧的数据类型必须一致")
             for predicate in node.match_filters:
-                cls._require_direct_ref(predicate.column, node.right_input, right, "匹配过滤")
+                for leaf in predicate_leaves(predicate):
+                    cls._require_direct_ref(leaf.column, node.right_input, right, "匹配过滤")
             output = {}
             allowed = {node.left_input: left, node.right_input: right}
             for column in node.columns:
@@ -244,7 +249,8 @@ class CanonicalRelationalPlan(FrozenModel):
         if isinstance(node, FilterNode):
             input_schema = cls._upstream(node.input, schemas)
             for predicate in node.predicates:
-                cls._require_direct_ref(predicate.column, node.input, input_schema, "过滤")
+                for leaf in predicate_leaves(predicate):
+                    cls._require_direct_ref(leaf.column, node.input, input_schema, "过滤")
             return dict(input_schema)
 
         if isinstance(node, ProjectNode):

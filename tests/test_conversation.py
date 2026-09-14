@@ -33,7 +33,7 @@ def _conversation_provider(monkeypatch):
         if payload["tool_choice"] == "none":
             message = {"role": "assistant", "content": "本轮工具结果已返回，请查看脚本与诊断。"}
         else:
-            query = json.loads(payload["messages"][1]["content"])["input"]
+            query = payload["messages"][-1]["content"]
             if "天气" in query:
                 message = {"role": "assistant", "content": "我无法获取实时天气。"}
             else:

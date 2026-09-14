@@ -19,7 +19,6 @@ from ontology_core.semantic_models import PhysicalMapping, SemanticElement
 
 _WORD = re.compile(r"[a-z0-9_]+")
 _CJK = re.compile(r"[\u3400-\u9fff]+")
-_BROAD_SCOPE_MARKERS = ("全省", "所有地市", "全部地市", "全量地市", "各地市")
 
 
 def _explicit_name(name: str, request: str) -> bool:
@@ -355,8 +354,9 @@ class MetadataCandidateCatalog:
         ]
         selected = explicit + related[:max(0, object_limit - len(explicit))]
 
-        is_broad = any(marker in normalize_text(request) for marker in _BROAD_SCOPE_MARKERS)
-        if is_broad:
+        # A visible family must be selectable in full. The ranking limit is
+        # soft for its members; the model can still choose only one city table.
+        if selected:
             selected_refs = {item.ref for item in selected}
             matching_families = tuple(
                 family
@@ -366,8 +366,7 @@ class MetadataCandidateCatalog:
             expanded_refs = {
                 member for family in matching_families for member in family.member_refs
             }
-            by_ref = {item.ref: item for item in ranked}
-            selected = [by_ref[ref] for ref in sorted(selected_refs | expanded_refs)]
+            selected.extend(item for item in ranked if item.ref in expanded_refs - selected_refs)
 
         selected_refs = {item.ref for item in selected}
         families = tuple(

@@ -176,7 +176,10 @@ class MetadataInferenceService:
             )
             return MetadataInferenceOutcome(
                 status="failed",
-                diagnostics=(diagnostic,),
+                diagnostics=tuple(ProgramDiagnostic(
+                    code=diagnostic.code, location=item["location"],
+                    message=f"{diagnostic.message}：{item['location']} ({item['type']})",
+                ) for item in error.details) if error.details else (diagnostic,),
                 relation_graph=initial_graph,
             )
         enriched = lookup.enriched()

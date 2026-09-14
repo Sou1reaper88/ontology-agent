@@ -26,7 +26,7 @@ from ontology_core.models import FrozenModel
 from ontology_core.normalization import datatype_group as _datatype_group, normalize_text
 from ontology_core.program_models import ProgramDiagnostic
 from ontology_core.relation_evidence import RelationEvidenceGraph, RelationEvidenceSource
-from ontology_core.semantic_models import RuleOperator
+from ontology_core.semantic_models import RuleOperator, predicate_leaves
 from ontology_core.temporal import TemporalTarget, parse_temporal_intents
 
 _TOKEN = re.compile(r"[a-z0-9]+|[\u3400-\u9fff]{2,}")
@@ -38,10 +38,10 @@ class InferenceValidationResult(FrozenModel):
     missing_information: tuple[str, ...] = Field(default=())
 
 
-def _failure(code: str, message: str, missing: str) -> InferenceValidationResult:
+def _failure(code: str, message: str, missing: str = "", *, candidates: tuple[str, ...] = ()) -> InferenceValidationResult:
     return InferenceValidationResult(
-        diagnostics=(ProgramDiagnostic(code=code, message=message),),
-        missing_information=(missing,),
+        diagnostics=(ProgramDiagnostic(code=code, message=message, candidates=candidates),),
+        missing_information=(missing,) if missing else (),
     )
 
 
@@ -151,8 +151,8 @@ class MetadataInferenceValidator:
             if missing_members:
                 return _failure(
                     "incomplete_candidate_family",
-                    "候选表族成员不完整",
-                    "请重新召回当前活动版本中的完整表族",
+                    "本次召回的候选表族成员不完整，并非确认本体未发布；缺失引用见 candidates",
+                    candidates=tuple(sorted(missing_members)),
                 )
             expanded_refs.update(family.member_refs)
         selected_objects = tuple(objects_by_ref[ref] for ref in sorted(expanded_refs))
@@ -278,7 +278,8 @@ class MetadataInferenceValidator:
             )
 
         validated_filters: list[ValidatedInferredFilter] = []
-        for filter_ in draft.filters:
+        filter_leaves = tuple(leaf for item in draft.filters for leaf in predicate_leaves(item))
+        for filter_ in filter_leaves:
             field = fields_by_ref.get(filter_.field_ref)
             if field is None or field.object_ref not in expanded_refs:
                 return _failure(
@@ -308,6 +309,22 @@ class MetadataInferenceValidator:
                     evidence=filter_.evidence,
                 )
             )
+
+        bound_leaves = {id(raw): bound for raw, bound in zip(filter_leaves, validated_filters, strict=True)}
+
+        def bind_filter(item):
+            if not item.children:
+                return bound_leaves[id(item)]
+            return ValidatedInferredFilter(
+                scope=item.scope, operator=item.operator, confidence=item.confidence,
+                evidence=item.evidence, children=tuple(bind_filter(child) for child in item.children),
+            )
+
+        bound_filters = tuple(bind_filter(item) for item in draft.filters)
+        for item in bound_filters:
+            refs = {leaf.field.object_ref for leaf in predicate_leaves(item)}
+            if len(refs) > 1 and item.scope == "match":
+                return _failure("ambiguous_boolean_scope", "跨对象布尔条件不能拆分为独立匹配过滤", "请明确该组合条件是否在关联后 WHERE 求值")
 
         group_by_fields: list[CandidateField] = []
         for ref in draft.group_by_field_refs:
@@ -380,12 +397,17 @@ class MetadataInferenceValidator:
             )
             try:
                 parsed = parse_temporal_intents(
-                    draft.time_expression or request,
+                    request,
                     system_date=system_time.date(),
                     grain=policy.grain,
                     default_strategy=policy.default_strategy,
                     partition_target=target,
                 )
+                if parsed.partition.source.value == "ontology_default" and draft.time_expression:
+                    parsed = parse_temporal_intents(
+                        draft.time_expression, system_date=system_time.date(), grain=policy.grain,
+                        default_strategy=policy.default_strategy, partition_target=target,
+                    )
             except TemporalIntentError:
                 return _failure(
                     "unsafe_candidate_time",
@@ -443,7 +465,7 @@ class MetadataInferenceValidator:
                 families=selected_families,
                 requested_fields=tuple(requested_fields),
                 joins=tuple(validated_joins),
-                filters=tuple(validated_filters),
+                filters=bound_filters,
                 group_by_fields=tuple(group_by_fields),
                 aggregations=tuple(aggregations),
                 temporal_decisions=tuple(temporal_decisions),

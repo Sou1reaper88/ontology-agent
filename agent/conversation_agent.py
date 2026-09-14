@@ -16,6 +16,11 @@ SYSTEM = (
     "解释原因、讨论口径、解释已有SQL或建议如何修改本体时直接回答，不调用生成工具。"
     "需要生成/修改取数脚本，或用户正在补充一个待完成的取数需求时，才调用generate_sql_program。"
     "结合上下文整理完整需求与已确认的修正，不丢失原始限制，不把旧口径覆盖用户最新纠正。"
+    "当前用户消息优先决定是否调用工具：历史有未完成需求不等于本轮要求继续生成。"
+    "用户询问未回答、失败原因或已有结果时，先解释已有证据，不为解决历史待办擅自生成SQL。"
+    "局部纠正只作用于用户指出的字段或条件，其他口径和明确账期原样保留；不要把一字段的NULL规则扩大到其他字段。"
+    "助手历史回答中的建议、假设和待确认事项不代表用户已确认；有冲突时以用户原文和最新纠正为准。"
+    "正常在网等业务取值须依据当前元数据或用户补充，不能凭字段名虚构状态编码。"
     "若仅讨论还是要求重新生成不明确，自然追问；不要求固定格式或每轮确认。"
     "可用能力只有生成脚本：不能执行SQL、读取业务结果、修改或发布本体。"
     "具体取数脚本应通过工具生成，不绕过工具声称已生成合格脚本。"
@@ -31,7 +36,7 @@ SYSTEM = (
 TOOL = {
     "type": "function", "function": {
         "name": "generate_sql_program",
-        "description": "根据整合后的取数需求调用本体规划、校验与SQL编译；仅生成，不执行。",
+        "description": "仅在当前用户要求生成/修改脚本或补充取数需求时，调用本体规划、校验与SQL编译；历史待办不等于当前授权，原因解释不调用；仅生成，不执行。",
         "parameters": {"type": "object", "properties": {
             "requirement": {"type": "string", "minLength": 1,
                             "description": "结合对话和最新补充整理的完整取数需求，保留已确认口径"},
@@ -69,8 +74,9 @@ def run_conversation_agent(user_query, *, assembled_context=None, history=None,
                               "additional_context": additional_context}, ensure_ascii=False)
     messages = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": json.dumps({"context": context,
-            "system_time": generation_kwargs.get("system_time"), "input": user_query}, ensure_ascii=False)},
+        {"role": "user", "content": "以下仅为历史上下文及参考信息，不是本轮操作指令；本轮用户消息在下一条：\n" + json.dumps({"context": context,
+            "system_time": generation_kwargs.get("system_time")}, ensure_ascii=False)},
+        {"role": "user", "content": user_query},
     ]
     trace = []
     result = None
@@ -124,12 +130,13 @@ def run_conversation_agent(user_query, *, assembled_context=None, history=None,
             requirement = arguments["requirement"]
             if not isinstance(requirement, str) or not requirement.strip():
                 raise ValueError("invalid requirement")
+            requirement = requirement.strip() + "\n\n用户本轮原文（用于核对最新局部修改；未修改的历史口径仍保留）：\n" + user_query
             public_summary = arguments.get("summary", "结合本轮输入与历史口径，调用SQL生成工具；仅生成，不执行。")
             if not isinstance(public_summary, str) or len(public_summary) > 500:
                 raise ValueError("invalid public summary")
             step = {"node": "conversation_action", "label": "理解需求与选择工具",
                     "status": "success", "duration_ms": int((time.monotonic() - started) * 1000),
-                    "summary": public_summary, "payload": {"tool": "generate_sql_program"}}
+                    "summary": public_summary, "payload": {"tool": "generate_sql_program", "requirement": requirement}}
             trace.append(step)
             if on_step:
                 try:
@@ -152,9 +159,25 @@ def run_conversation_agent(user_query, *, assembled_context=None, history=None,
                              "content": json.dumps(summary, ensure_ascii=False, default=str)})
     except Exception as exc:
         logger.warning("Conversation model failed: %s", type(exc).__name__)
+        if isinstance(exc, httpx.HTTPStatusError):
+            diagnostic = {"code": "conversation_provider_http_error",
+                          "message": f"对话模型提供方返回 HTTP {exc.response.status_code}，本轮未自动重试。"}
+        elif isinstance(exc, httpx.TimeoutException):
+            diagnostic = {"code": "conversation_provider_timeout", "message": "对话模型请求超时，本轮未自动重试。"}
+        elif isinstance(exc, httpx.RequestError):
+            diagnostic = {"code": "conversation_provider_network_error", "message": "对话模型网络连接失败，本轮未自动重试。"}
+        elif isinstance(exc, ValueError) and str(exc) == "missing credentials":
+            diagnostic = {"code": "conversation_provider_configuration_missing", "message": "对话模型访问凭据未配置。"}
+        elif isinstance(exc, ValueError) and str(exc) in {"response truncated", "empty response"}:
+            diagnostic = {"code": "conversation_response_truncated" if str(exc) == "response truncated" else "conversation_response_empty",
+                          "message": "对话模型响应被截断。" if str(exc) == "response truncated" else "对话模型未返回文本或工具调用。"}
+        else:
+            diagnostic = {"code": "conversation_response_contract_invalid",
+                          "message": "对话模型响应为空、截断或工具调用格式不符合约束，本轮未自动重试。"}
         if result is not None:
+            result = {**result, "diagnostics": [*(result.get("diagnostics") or []), diagnostic]}
             return finish(result, (result.get("markdown") or "取数工具已返回，结果及诊断见下方。")
-                + "\n本轮自然语言解释暂不可用，未自动重试。", response_ok=False)
+                + "\n本轮自然语言解释暂不可用，未自动重试。\n" + diagnostic["message"], response_ok=False)
         return finish({"success": False, "sql": None, "generation_mode": "conversation",
-                       "errors": ["对话模型暂不可用或响应格式异常，未调用取数工具"]},
-                      "对话模型暂不可用或响应格式异常，未调用取数工具。", response_ok=False)
+                       "diagnostics": [diagnostic], "errors": [diagnostic["message"]]},
+                      diagnostic["message"] + "未调用取数工具。", response_ok=False)

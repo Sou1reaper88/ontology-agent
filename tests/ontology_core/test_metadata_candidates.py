@@ -132,8 +132,8 @@ def test_explicit_tables_prioritize_without_excluding_related_tables() -> None:
     catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
     context = catalog.retrieve("D_BBZX_DR_GSM_HU_D 手机号码", object_limit=2)
     assert context.objects[0].ref == "GsmHu"
-    assert len(context.objects) == 2
-    assert len({obj.ref for obj in context.objects}) == 2
+    assert len(context.objects) == 3
+    assert len({obj.ref for obj in context.objects}) == 3
 
 
 def test_explicit_tables_are_preserved_when_over_budget() -> None:
@@ -141,14 +141,14 @@ def test_explicit_tables_are_preserved_when_over_budget() -> None:
     context = catalog.retrieve(
         "D_BBZX_DR_GSM_HU_D D_BBZX_DR_GSM_HZ_D 手机号码", object_limit=1
     )
-    assert {obj.ref for obj in context.objects} == {"GsmHu", "GsmHz"}
+    assert {obj.ref for obj in context.objects} == {"GsmHu", "GsmHz", "GsmLs"}
 
 
 def test_catalog_uses_only_published_mappings_and_metadata() -> None:
     catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
     context = catalog.retrieve("查询湖州用户的手机号码", object_limit=1)
 
-    assert [item.ref for item in context.objects] == ["GsmHu"]
+    assert context.objects[0].ref == "GsmHu"
     assert context.objects[0].description == "湖州 GSM 日级用户明细"
     assert context.objects[0].physical_name == "D_BBZX_DR_GSM_HU_D"
     assert context.objects[0].fields[0].label == "手机号码"
@@ -194,11 +194,13 @@ def test_province_request_expands_all_published_family_members_without_invention
     assert context.families[0].member_refs == ("GsmHu", "GsmHz", "GsmLs")
 
 
-def test_specific_city_request_does_not_expand_the_whole_family() -> None:
+def test_specific_city_anchor_can_choose_one_object_with_complete_family_candidates() -> None:
     catalog = MetadataCandidateCatalog.from_snapshot(_snapshot())
     context = catalog.retrieve("查询湖州 GSM 用户", object_limit=1)
 
-    assert [item.ref for item in context.objects] == ["GsmHu"]
+    assert next(item for item in context.objects if item.ref == "GsmHu").retrieval_score > 0
+    assert context.families
+    assert set(context.families[0].member_refs).issubset({item.ref for item in context.objects})
 
 
 def test_irrelevant_request_returns_an_empty_candidate_context() -> None:
@@ -224,7 +226,7 @@ def test_explicit_field_keeps_details_even_when_budget_is_zero() -> None:
     context = catalog.retrieve(
         "D_BBZX_DR_GSM_HU_D 的 MOBILE_NO", object_limit=1, field_limit_per_object=0
     )
-    assert [o.ref for o in context.objects] == ["GsmHu"]
+    assert context.objects[0].ref == "GsmHu"
     field = next(f for f in context.objects[0].fields if f.physical_name == "MOBILE_NO")
     assert field.description == "用户的移动电话号码"
 

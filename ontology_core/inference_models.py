@@ -16,6 +16,7 @@ from ontology_core.semantic_models import (
     RuleOperator,
     TemporalDefaultStrategy,
     TemporalGrain,
+    validate_predicate_shape,
 )
 
 _SEMANTIC_REF = r"^[A-Za-z][A-Za-z0-9._:-]*$"
@@ -108,14 +109,20 @@ class InferredJoinDraft(FrozenModel):
 
 class InferredFilterDraft(FrozenModel):
     scope: Literal["match", "where"] = "match"
-    field_ref: SemanticRef
+    field_ref: SemanticRef | None = None
     operator: RuleOperator
     values: tuple[str, ...] = ()
+    children: tuple[InferredFilterDraft, ...] = ()
     confidence: Confidence
     evidence: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def require_values_when_operator_needs_them(self) -> InferredFilterDraft:
+        validate_predicate_shape(self.operator, self.children, self.field_ref is not None, self.values)
+        if self.children:
+            if any(child.scope != self.scope for child in self.children):
+                raise ValueError("布尔条件的子条件必须保持同一 ON/WHERE 范围")
+            return self
         unary = {RuleOperator.IS_NULL}
         if self.operator not in unary and not self.values:
             raise ValueError("候选过滤条件缺少值")
@@ -181,11 +188,19 @@ class ValidatedInferredJoin(FrozenModel):
 
 class ValidatedInferredFilter(FrozenModel):
     scope: Literal["match", "where"] = "match"
-    field: CandidateField
+    field: CandidateField | None = None
     operator: RuleOperator
     values: tuple[str, ...] = ()
+    children: tuple[ValidatedInferredFilter, ...] = ()
     confidence: Confidence
     evidence: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_shape(self):
+        validate_predicate_shape(self.operator, self.children, self.field is not None, self.values)
+        if any(child.scope != self.scope for child in self.children):
+            raise ValueError("布尔条件范围不能混用")
+        return self
 
 
 class ValidatedInferenceTemporalDecision(FrozenModel):

@@ -34,6 +34,36 @@ def test_question_answers_without_sql_tool(monkeypatch):
     assert output['trace'][-1]['node'] == 'conversation_response'
 
 
+def test_current_question_is_separate_from_pending_history(monkeypatch):
+    requests = provider(monkeypatch, [{'role': 'assistant', 'content': '上一轮调用失败，不代表需要重新生成。'}])
+    agent.run_conversation_agent('为什么不回答了', assembled_context='历史未完成取数请求')
+    assert requests[0]['messages'][-1] == {'role': 'user', 'content': '为什么不回答了'}
+    assert '历史未完成取数请求' in requests[0]['messages'][-2]['content']
+
+
+def test_http_failure_is_specific_and_safe(monkeypatch):
+    provider(monkeypatch, [])
+    def fail(url, **kwargs):
+        raise httpx.HTTPStatusError('SECRET_SENTINEL', request=httpx.Request('POST', url),
+                                    response=httpx.Response(402, request=httpx.Request('POST', url)))
+    monkeypatch.setattr(agent.httpx, 'post', fail)
+    output = agent.run_conversation_agent('为什么失败')
+    assert not output['success']
+    assert output['diagnostics'][0]['code'] == 'conversation_provider_http_error'
+    assert '402' in output['markdown'] and 'SECRET_SENTINEL' not in json.dumps(output)
+
+
+def test_latest_raw_correction_reaches_generator_and_trace(monkeypatch):
+    provider(monkeypatch, [call('保留原流量条件，只修改通话条件'), {'role': 'assistant', 'content': '已生成。'}])
+    observed = []
+    monkeypatch.setattr(agent, 'generate_sql_program', lambda query, **kwargs:
+        observed.append(query) or {'success': True, 'sql': 'SELECT 1', 'trace': []})
+    correction = "只把 CALL_COUNTS 改为 IS NULL OR = '0'"
+    output = agent.run_conversation_agent(correction)
+    assert correction in observed[0]
+    assert output['trace'][0]['payload']['requirement'] == observed[0]
+
+
 def test_tool_result_is_explained_and_original_sql_preserved(monkeypatch):
     requests = provider(monkeypatch, [call('状态为1的用户'), {'role': 'assistant', 'content': '已按补充口径生成。'}])
     observed = []

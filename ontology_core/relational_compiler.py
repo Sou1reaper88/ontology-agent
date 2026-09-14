@@ -242,7 +242,7 @@ class HiveRelationalCompiler:
                 for condition in node.conditions
             ]
             conditions.extend(
-                self._predicate_sql(predicate, schemas[predicate.column.node_id])
+                self._predicate_sql(predicate, schemas[node.right_input])
                 for predicate in node.match_filters
             )
             join_sql = "INNER JOIN" if node.join_type == "inner" else "LEFT JOIN"
@@ -329,6 +329,12 @@ class HiveRelationalCompiler:
 
     @staticmethod
     def _predicate_sql(predicate: FilterPredicate, schema: dict[str, str]) -> str:
+        if predicate.children:
+            parts = [HiveRelationalCompiler._predicate_sql(child, schema) for child in predicate.children]
+            if predicate.operator == RuleOperator.NOT:
+                return f"NOT ({parts[0]})"
+            connector = " AND " if predicate.operator == RuleOperator.ALL_OF else " OR "
+            return "(" + connector.join(parts) + ")"
         field = _column_sql(predicate.column)
         datatype = schema[predicate.column.column]
         values = tuple(

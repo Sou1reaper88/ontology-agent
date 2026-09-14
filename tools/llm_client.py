@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from agent.context_engineering import ContextMessage
 from config.settings import settings
 from monitoring.metrics import LLM_CALL_DURATION
-from ontology_core.inference_models import CandidateContext, InferredProgramDraft
+from ontology_core.inference_models import CandidateContext, InferredProgramDraft, InferredFilterDraft, InferredJoinDraft, InferredAggregationDraft
 from ontology_core.relation_evidence import RelationEvidenceGraph
 from ontology_core.program_models import (
     DraftSqlProgramPlan,
@@ -31,9 +31,10 @@ PLACEHOLDER_KEY = "your-api-key-here"
 class StructuredPlanningError(RuntimeError):
     """Safe error raised when the provider does not return the required contract."""
 
-    def __init__(self, message: str, *, category: str = "provider") -> None:
+    def __init__(self, message: str, *, category: str = "provider", details: tuple[dict, ...] = ()) -> None:
         super().__init__(message)
         self.category = category
+        self.details = details
 
 
 class LLMClient:
@@ -132,6 +133,11 @@ class LLMClient:
             "分组字段写入group_by_field_refs，计数、求和、平均、最值写入aggregations；"
             "聚合时requested_field_refs只能包含分组字段，不得将明细字段与聚合结果混用。"
             "unresolved_items仅存不影响核心运算的待确认假设，不得把核心缺失藏在此处。"
+            "布尔条件使用filters内递归children：all_of为AND、any_of为OR（至少两个子条件），not恰好一个子条件。"
+            "布尔组不携带field_ref或values；比较叶节点引用真实field_ref。每组和全部子条件scope一致。"
+            "NULL或零必须表达为any_of(is_null,eq)，不能拆成AND。只修改用户明确指出的字段，不扩大到其他字段。"
+            "跨对象组合过滤必须明确scope=where，完整保留为关联后条件，不拆散或推到右表ON。"
+            "需求附带用户本轮原文时，以原文核对最新修改范围；历史助手的建议不是已确认口径，未修改的条件保持不变。"
         )
         payload: dict[str, Any] = {
             "request": request,
@@ -219,6 +225,13 @@ class LLMClient:
             raise StructuredPlanningError(
                 "元数据候选计划字段约束不满足",
                 category="schema_validation",
+                details=tuple({
+                    "location": ".".join(str(part) if isinstance(part, int) or part in {
+                        name for model in (InferredProgramDraft, InferredFilterDraft, InferredJoinDraft, InferredAggregationDraft)
+                        for name in model.model_fields
+                    } else "unknown_field" for part in item["loc"]) or "$",
+                    "type": item["type"],
+                } for item in error.errors(include_input=False, include_context=False, include_url=False)[:8]),
             ) from error
         except (ValueError, TypeError) as error:
             raise StructuredPlanningError(

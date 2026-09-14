@@ -53,7 +53,6 @@ class _RawClient(LLMClient):
         self.response = response
         self.model = "deepseek-v4-flash"
         self.calls: list[tuple[str, str, bool, str | None]] = []
-
     def _generate(
         self,
         system_prompt: str,
@@ -64,6 +63,15 @@ class _RawClient(LLMClient):
     ) -> str:
         self.calls.append((system_prompt, user_query, json_output, reasoning_effort))
         return self.response
+
+
+def test_schema_failure_preserves_safe_locations_not_input_values():
+    client = _RawClient('{"selected_object_refs":["Customer"],"requested_field_refs":["CustomerMobile"],"filters":[{"field_ref":"CustomerMobile","operator":"SECRET_SENTINEL","confidence":"medium","evidence":["synthetic"]}]}')
+    with pytest.raises(StructuredPlanningError) as captured:
+        client.infer_metadata_program(request="查询客户", candidates=_candidates())
+    assert captured.value.category == "schema_validation"
+    assert captured.value.details[0]["location"] == "filters.0.operator"
+    assert "SECRET_SENTINEL" not in json.dumps(captured.value.details)
 
 
 def _valid_response() -> str:

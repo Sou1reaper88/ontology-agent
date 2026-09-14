@@ -145,6 +145,15 @@ def test_single_table_plan_uses_published_t_minus_2_policy() -> None:
     assert decision.source == "default"
 
 
+def test_explicit_request_time_wins_over_model_default_expression():
+    result = _validate(InferredProgramDraft(selected_object_refs=("Customer",),
+        requested_field_refs=("CustomerMobile",), time_expression="上月"),
+        _object("Customer"), request="查询2026年6月客户手机号码")
+    assert result.plan is not None, result.diagnostics
+    decision = result.plan.temporal_decisions[0]
+    assert (decision.resolved_start, decision.resolved_end, decision.source) == ("20260601", "20260630", "user")
+
+
 def test_candidate_time_expression_resolves_each_partition_grain() -> None:
     customer = _object("Customer")
     result = _validate(

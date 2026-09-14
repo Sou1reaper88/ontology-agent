@@ -28,6 +28,23 @@ class TemporalGrain(StrEnum):
     MONTH = "month"
 
 
+def validate_predicate_shape(operator, children, has_operand, values):
+    if operator in {RuleOperator.ALL_OF, RuleOperator.ANY_OF, RuleOperator.NOT}:
+        expected = 1 if operator == RuleOperator.NOT else 2
+        if has_operand or values or len(children) < expected or (operator == RuleOperator.NOT and len(children) != 1):
+            raise ValueError("布尔条件必须只携带合法数量的子条件：NOT 一个，AND/OR 至少两个")
+    elif not has_operand or children:
+        raise ValueError("比较条件必须引用字段且不能携带子条件")
+
+
+def predicate_leaves(predicate):
+    if predicate.children:
+        for child in predicate.children:
+            yield from predicate_leaves(child)
+    else:
+        yield predicate
+
+
 class TemporalDefaultStrategy(StrEnum):
     T_MINUS_2 = "t_minus_2"
     PREVIOUS_COMPLETE_MONTH = "previous_complete_month"

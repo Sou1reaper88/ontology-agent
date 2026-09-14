@@ -354,6 +354,14 @@ def parse_temporal_intents(
             property_intents.append(_business_intent(token, target))
 
     distinct = {(item.start, item.end) for item in partition_tokens}
+    ranges = {(start, end) for start, end in distinct if start != end}
+    if len(ranges) == 1:
+        start, end = next(iter(ranges))
+        # An explicit interval may repeat its endpoints in a requirement.
+        # Only exact endpoints are redundant; other dates still conflict.
+        if {(start, start), (end, end)} <= distinct <= {(start, end), (start, start), (end, end)}:
+            partition_tokens = [item for item in partition_tokens if (item.start, item.end) == (start, end)]
+            distinct = {(start, end)}
     if len(distinct) > 1:
         raise _error("需求中出现多个冲突账期，请确认最终账期", "conflicting_partition_time")
     if partition_tokens:

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from ontology_core.errors import OntologyCompileError
 from ontology_core.inference_models import ValidatedInferredProgram
 from ontology_core.program_models import ProgramStepKind
+from ontology_core.semantic_models import predicate_leaves
 from ontology_core.relation_evidence import RelationEvidenceGraph
 from ontology_core.relational_plan import (
     AggregateColumn,
@@ -62,7 +63,7 @@ class InferenceRelationalAdapter:
                 *plan.group_by_fields,
                 *(join.left_field for join in plan.joins),
                 *(join.right_field for join in plan.joins),
-                *(item.field for item in plan.filters),
+                *(leaf.field for item in plan.filters for leaf in predicate_leaves(item)),
                 *(item.partition_field for item in plan.temporal_decisions),
                 *(item.source_field for item in plan.aggregations if item.source_field is not None),
             )
@@ -113,6 +114,15 @@ class InferenceRelationalAdapter:
                 values=values,
             )
 
+        def boolean_predicate(node_id, item):
+            if item.children:
+                return FilterPredicate(operator=item.operator,
+                    children=tuple(boolean_predicate(node_id, child) for child in item.children))
+            return predicate(node_id, item.field, item.operator, item.values)
+
+        def filter_sources(item):
+            return {key(leaf.field.object_ref) for leaf in predicate_leaves(item)}
+
         def temporal(node_id, decision):
             values = (
                 (decision.resolved_start,)
@@ -134,8 +144,8 @@ class InferenceRelationalAdapter:
             nodes.append(ScanNode(node_id=scan_id, object_ref=obj.ref, columns=columns))
             predicates = []
             for item in plan.filters:
-                if item.field.object_ref == obj.ref and key(obj.ref) not in directed_rights:
-                    predicates.append(predicate(scan_id, item.field, item.operator, item.values))
+                if filter_sources(item) == {key(obj.ref)} and key(obj.ref) not in directed_rights:
+                    predicates.append(boolean_predicate(scan_id, item))
             for item in plan.temporal_decisions:
                 if item.object_ref == obj.ref and (
                     key(obj.ref) not in directed_rights or obj.ref in family_by_member
@@ -231,12 +241,12 @@ class InferenceRelationalAdapter:
             match_filters = []
             if join.join_type != "inner":
                 for item in plan.filters:
-                    if key(item.field.object_ref) == new_source and item.scope == "match":
+                    if filter_sources(item) == {new_source} and item.scope == "match":
                         match_filters.append(
-                            predicate(right_input, item.field, item.operator, item.values)
+                            boolean_predicate(right_input, item)
                         )
                     if (
-                        key(item.field.object_ref) == new_source
+                        new_source in filter_sources(item)
                         and item.scope == "where"
                         and new_source in anti_rights
                     ):
@@ -289,9 +299,9 @@ class InferenceRelationalAdapter:
         if unused:
             raise OntologyCompileError("关系图存在未编译关联条件")
         post_filters = [
-            predicate(current, item.field, item.operator, item.values)
+            boolean_predicate(current, item)
             for item in plan.filters
-            if key(item.field.object_ref) in directed_rights and item.scope == "where"
+            if item.scope == "where" and (filter_sources(item) & directed_rights or len(filter_sources(item)) > 1)
         ]
         if post_filters:
             filter_count += 1

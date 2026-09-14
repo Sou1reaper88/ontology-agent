@@ -42,6 +42,13 @@ def test_parse_system_date_is_strict() -> None:
         parse_system_date("2026/08/24")
 
 
+def test_month_and_only_one_endpoint_remain_ambiguous():
+    with pytest.raises(TemporalIntentError, match="冲突账期"):
+        parse_temporal_intents("查询2026年6月，账期20260630", system_date=SYSTEM_DATE,
+            grain=TemporalGrain.DAY, default_strategy=TemporalDefaultStrategy.T_MINUS_2,
+            partition_target=_partition_target())
+
+
 @pytest.mark.parametrize("query", ["查询账期20260820", "P_DAY=20260820"])
 def test_compact_day_overrides_default(query: str) -> None:
     parsed = parse_temporal_intents(
