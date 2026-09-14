@@ -86,6 +86,12 @@ from ontology_core.relational_compiler import (
     RelationalCompiler,
     RelationalCompilerRegistry,
 )
+from ontology_core.relation_evidence import (
+    RelationEvidenceSource,
+    RelationEvidenceEdge,
+    RelationEvidenceGraph,
+    build_relation_evidence_graph,
+)
 from ontology_core.relational_plan import (
     AggregateColumn,
     AggregateNode,
@@ -143,6 +149,10 @@ from ontology_core.tabular_metadata import (
 from ontology_core.validator import OntologyValidator
 
 __all__ = [
+    "RelationEvidenceSource",
+    "RelationEvidenceEdge",
+    "RelationEvidenceGraph",
+    "build_relation_evidence_graph",
     "AggregationSpec",
     "AmbiguousIdentifierError",
     "AmbiguousQueryConceptError",

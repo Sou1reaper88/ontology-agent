@@ -35,7 +35,7 @@
 - Consumes: `CandidateContext`, `InferredJoinDraft`, `MetadataCandidateCatalog`.
 - Produces: `RelationEvidenceSource`, `RelationEvidenceEdge`, `RelationEvidenceGraph`, and `build_relation_evidence_graph(...)`.
 
-- [ ] **Step 1: Write failing relationship-evidence tests**
+- [x] **Step 1: Write failing relationship-evidence tests**
 
 Cover these behaviors in `tests/ontology_core/test_relation_evidence.py`:
 
@@ -72,7 +72,7 @@ assert InferredJoinDraft(**payload).relation_source == "model"
 assert InferredJoinDraft(**payload, relation_source="user").relation_source == "user"
 ```
 
-- [ ] **Step 2: Run the tests and verify the missing API failure**
+- [x] **Step 2: Run the tests and verify the missing API failure**
 
 Run:
 
@@ -82,7 +82,7 @@ pytest tests/ontology_core/test_relation_evidence.py tests/ontology_core/test_in
 
 Expected: collection or import failure because `ontology_core.relation_evidence` and `relation_source` do not exist.
 
-- [ ] **Step 3: Implement the minimal immutable graph**
+- [x] **Step 3: Implement the minimal immutable graph**
 
 Add to `ontology_core/inference_models.py`:
 
@@ -149,7 +149,7 @@ The implementation must map ontology concept/property URIs to candidate short-na
 
 Export the four public names from `ontology_core/__init__.py`.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -159,7 +159,7 @@ pytest tests/ontology_core/test_relation_evidence.py tests/ontology_core/test_in
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```powershell
 git add ontology_core/relation_evidence.py ontology_core/inference_models.py ontology_core/__init__.py tests/ontology_core/test_relation_evidence.py tests/ontology_core/test_inference_models.py

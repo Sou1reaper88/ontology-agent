@@ -22,28 +22,12 @@ from ontology_core.inference_models import (
 )
 from ontology_core.metadata_candidates import MetadataCandidateCatalog
 from ontology_core.models import FrozenModel
-from ontology_core.normalization import normalize_text
+from ontology_core.normalization import datatype_group as _datatype_group, normalize_text
 from ontology_core.program_models import ProgramDiagnostic
 from ontology_core.semantic_models import RuleOperator
 from ontology_core.temporal import TemporalTarget, parse_temporal_intents
 
 _TOKEN = re.compile(r"[a-z0-9]+|[\u3400-\u9fff]{2,}")
-_NUMERIC_TYPES = {
-    "byte",
-    "decimal",
-    "double",
-    "float",
-    "int",
-    "integer",
-    "long",
-    "negativeinteger",
-    "nonnegativeinteger",
-    "nonpositiveinteger",
-    "positiveinteger",
-    "short",
-}
-_STRING_TYPES = {"normalizedstring", "string", "token"}
-_DATE_TYPES = {"date", "datetime", "gyearmonth", "time"}
 
 
 class InferenceValidationResult(FrozenModel):
@@ -57,19 +41,6 @@ def _failure(code: str, message: str, missing: str) -> InferenceValidationResult
         diagnostics=(ProgramDiagnostic(code=code, message=message),),
         missing_information=(missing,),
     )
-
-
-def _datatype_group(uri: str) -> str:
-    name = uri.rsplit("#", maxsplit=1)[-1].casefold()
-    if name in _NUMERIC_TYPES:
-        return "numeric"
-    if name in _STRING_TYPES:
-        return "string"
-    if name in _DATE_TYPES:
-        return "date"
-    if name == "boolean":
-        return "boolean"
-    return uri.casefold()
 
 
 def _field_words(field: CandidateField) -> set[str]:

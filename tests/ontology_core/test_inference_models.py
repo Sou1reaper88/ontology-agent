@@ -196,3 +196,16 @@ def test_inference_evidence_requires_user_visible_basis() -> None:
     assert evidence.overall_confidence is Confidence.MEDIUM
     with pytest.raises(ValidationError):
         InferenceEvidence(overall_confidence="low", reasons=())
+
+
+def test_join_relation_source_defaults_to_model_and_accepts_user() -> None:
+    payload = dict(
+        left_object_ref="Customer",
+        left_field_ref="Customer.Id",
+        right_object_ref="Offer",
+        right_field_ref="Offer.CustomerId",
+        confidence="medium",
+        evidence=("需求指定客户编号关联",),
+    )
+    assert InferredJoinDraft(**payload).relation_source == "model"
+    assert InferredJoinDraft(**payload, relation_source="user").relation_source == "user"

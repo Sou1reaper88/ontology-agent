@@ -95,6 +95,7 @@ class CandidateContext(FrozenModel):
 
 
 class InferredJoinDraft(FrozenModel):
+    relation_source: Literal["user", "model"] = "model"
     join_type: Literal["inner", "left", "anti"] = "inner"
     anti_strategy: Literal["left_join", "not_exists"] = "left_join"
     left_object_ref: SemanticRef
