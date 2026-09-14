@@ -5,6 +5,7 @@ import {
 } from "@ant-design/icons";
 import { Button, Checkbox, Empty, Popconfirm, Skeleton } from "antd";
 import type { ConversationItem } from "./types";
+import { FeedbackIdentifier } from "./FeedbackIdentifier";
 import "./chat-components.css";
 
 interface Props {
@@ -157,6 +158,7 @@ export function ConversationSidebar({
                           {updated ? <time>{updated}</time> : null}
                         </span>
                       </button>
+                      <FeedbackIdentifier conversationId={conversation.id} />
                       <Popconfirm
                         title="删除该对话？"
                         onConfirm={() => onRemove(conversation.id)}

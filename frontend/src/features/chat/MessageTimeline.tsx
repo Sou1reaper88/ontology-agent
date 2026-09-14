@@ -11,10 +11,12 @@ import {
   getSqlPresentation,
 } from "./messagePresentation";
 import { TraceSteps } from "./TraceSteps";
+import { FeedbackIdentifier } from "./FeedbackIdentifier";
 import type { ChatMessage, EditingSql } from "./types";
 import "./chat-components.css";
 
 interface Props {
+  conversationId: number | null;
   messages: ChatMessage[];
   loading: boolean;
   listRef: RefObject<HTMLDivElement>;
@@ -30,6 +32,7 @@ interface Props {
 }
 
 export function MessageTimeline({
+  conversationId,
   messages,
   loading,
   listRef,
@@ -57,6 +60,7 @@ export function MessageTimeline({
               <article key={message.id} className="user-message">
                 <span className="message-role-label">你的需求</span>
                 <p>{message.content}</p>
+                <FeedbackIdentifier conversationId={conversationId} messageId={message.id} />
               </article>
             );
           }
@@ -233,6 +237,7 @@ export function MessageTimeline({
               ) : null}
 
               <div className="assistant-actions">
+                <FeedbackIdentifier conversationId={conversationId} messageId={message.id} />
                 {message.query_id && sqlPresentation.allowExecute ? (
                   <Button
                     size="small"

@@ -22,6 +22,7 @@ import {
 import client from "../api/client";
 import { ConversationSidebar } from "../features/chat/ConversationSidebar";
 import { MessageTimeline } from "../features/chat/MessageTimeline";
+import { FeedbackIdentifier } from "../features/chat/FeedbackIdentifier";
 import { OntologyEvidencePanel } from "../features/chat/OntologyEvidencePanel";
 import { selectedEvidenceMessage } from "../features/chat/evidenceSelection";
 import type {
@@ -477,6 +478,7 @@ export default function Chat() {
               <div>
                 <span>智能取数工作台</span>
                 <h1>{activeTitle}</h1>
+                <FeedbackIdentifier conversationId={activeId} />
                 {selectedPromptId ? <small>下一轮将应用所选提示词，发送后自动取消</small> : null}
               </div>
             </div>
@@ -514,6 +516,7 @@ export default function Chat() {
           ) : (
             <>
               <MessageTimeline
+                conversationId={activeId}
                 messages={messages}
                 loading={loadingMessages}
                 listRef={listRef}
