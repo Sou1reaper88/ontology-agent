@@ -12,6 +12,8 @@ from ontology_core.inference_models import (
 )
 from tools.llm_client import LLMClient, StructuredPlanningError
 from tools.metadata_lookup import MetadataLookupResponseError
+from tests.ontology_core.test_relation_evidence import _catalog
+from ontology_core.relation_evidence import build_relation_evidence_graph
 
 
 def _candidates() -> CandidateContext:
@@ -109,6 +111,20 @@ def test_inference_request_omits_absent_conversation_context() -> None:
     assert client.calls[0][2] is True
 
 
+def test_inference_sends_confirmed_relationship_evidence_to_model() -> None:
+    candidates, catalog = _catalog(confirmed=True)
+    graph = build_relation_evidence_graph(candidates, catalog)
+    client = _RawClient(_valid_response())
+    client.infer_metadata_program(
+        request="查询客户",
+        candidates=candidates,
+        relation_evidence=graph,
+    )
+    payload = json.loads(client.calls[0][1])
+    assert payload["relation_evidence"] == graph.model_dump(mode="json")
+    assert "关系图允许为空" in client.calls[0][0]
+
+
 def test_inference_rejects_model_sql_field_without_exposing_output() -> None:
     client = _RawClient(
         json.dumps(
@@ -182,4 +198,3 @@ def test_inference_preserves_safe_lookup_response_category(monkeypatch) -> None:
         )
 
     assert caught.value.category == "tool_response_empty_response"
-

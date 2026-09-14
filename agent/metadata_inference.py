@@ -8,11 +8,13 @@ from datetime import datetime
 from typing import Literal, Protocol
 
 from ontology_core.errors import OntologyCompileError, PackageNotFoundError
-from ontology_core.inference_compiler import HiveInferenceCompiler
+from ontology_core.inference_to_relational import InferenceRelationalAdapter
+from ontology_core.relational_compiler import RelationalCompilerRegistry
+from ontology_core.relational_plan import CanonicalRelationalPlan
+from ontology_core.relation_evidence import RelationEvidenceGraph, build_relation_evidence_graph
 from ontology_core.inference_models import (
     CandidateContext,
     InferredProgramDraft,
-    ValidatedInferredProgram,
 )
 from ontology_core.inference_validation import (
     InferenceValidationResult,
@@ -31,6 +33,7 @@ class InferenceClient(Protocol):
         *,
         request: str,
         candidates: CandidateContext,
+        relation_evidence: RelationEvidenceGraph,
         conversation_context: str | None = None,
         lookup_fields: Callable[[list[str]], list[dict]] | None = None,
     ) -> InferredProgramDraft: ...
@@ -49,23 +52,16 @@ class InferenceValidator(Protocol):
         catalog: MetadataCandidateCatalog,
         system_time: datetime,
         request: str,
+        relation_graph: RelationEvidenceGraph,
     ) -> InferenceValidationResult: ...
-
-
-class InferenceCompiler(Protocol):
-    def compile(
-        self,
-        plan: ValidatedInferredProgram,
-        *,
-        program_id: str,
-    ) -> CompiledProgram: ...
 
 
 @dataclass(frozen=True)
 class MetadataInferenceOutcome:
     status: Literal["ready", "no_candidates", "failed", "unavailable"]
     program: CompiledProgram | None = None
-    plan: ValidatedInferredProgram | None = None
+    plan: CanonicalRelationalPlan | None = None
+    relation_graph: RelationEvidenceGraph | None = None
     diagnostics: tuple[ProgramDiagnostic, ...] = ()
     missing_information: tuple[str, ...] = ()
 
@@ -77,14 +73,15 @@ class MetadataInferenceService:
         client: InferenceClient,
         runtime: SnapshotRuntime,
         validator: InferenceValidator | None = None,
-        compiler: InferenceCompiler | None = None,
-        catalog_factory: Callable[[OntologySnapshot], MetadataCandidateCatalog]
-        | None = None,
+        registry: RelationalCompilerRegistry | None = None,
+        adapter: InferenceRelationalAdapter | None = None,
+        catalog_factory: Callable[[OntologySnapshot], MetadataCandidateCatalog] | None = None,
     ) -> None:
         self._client = client
         self._runtime = runtime
         self._validator = validator or MetadataInferenceValidator()
-        self._compiler = compiler or HiveInferenceCompiler()
+        self._registry = registry or RelationalCompilerRegistry.default()
+        self._adapter = adapter or InferenceRelationalAdapter()
         self._catalog_factory = catalog_factory or MetadataCandidateCatalog.from_snapshot
 
     def infer(
@@ -122,10 +119,12 @@ class MetadataInferenceService:
                 missing_information=("请补充需求涉及的表名、表描述和字段描述",),
             )
         lookup = FieldDetailLookup(catalog, candidates)
+        initial_graph = build_relation_evidence_graph(candidates, catalog)
         try:
             kwargs = {
                 "request": request,
                 "candidates": candidates,
+                "relation_evidence": initial_graph,
                 "lookup_fields": lookup,
             }
             if conversation_context:
@@ -178,11 +177,29 @@ class MetadataInferenceService:
             return MetadataInferenceOutcome(
                 status="failed",
                 diagnostics=(diagnostic,),
-                missing_information=("请重试或补充更明确的表字段与业务口径",),
+                relation_graph=initial_graph,
+            )
+        enriched = lookup.enriched()
+        try:
+            complete_graph = build_relation_evidence_graph(
+                enriched, catalog, proposed_joins=draft.joins
+            )
+        except ValueError:
+            return MetadataInferenceOutcome(
+                status="failed",
+                relation_graph=initial_graph,
+                diagnostics=(
+                    ProgramDiagnostic(
+                        code="invalid_relation_evidence",
+                        message="候选关联字段不存在、归属错误、跨数据源或类型不兼容",
+                    ),
+                ),
+                missing_information=("请检查候选表字段和关联键",),
             )
         validation = self._validator.validate(
             draft,
-            candidates=lookup.enriched(),
+            candidates=enriched,
+            relation_graph=complete_graph,
             catalog=catalog,
             system_time=system_time,
             request=request,
@@ -192,6 +209,21 @@ class MetadataInferenceService:
                 status="failed",
                 diagnostics=validation.diagnostics,
                 missing_information=validation.missing_information,
+                relation_graph=complete_graph,
+            )
+        try:
+            canonical = self._adapter.convert(validation.plan, complete_graph)
+        except OntologyCompileError:
+            return MetadataInferenceOutcome(
+                status="failed",
+                relation_graph=complete_graph,
+                diagnostics=(
+                    ProgramDiagnostic(
+                        code="inferred_plan_binding_failed",
+                        message="候选语义无法绑定为合法统一关系计划",
+                    ),
+                ),
+                missing_information=("请检查关联方向、过滤范围和输出粒度",),
             )
         try:
             live_snapshot = self._runtime.snapshot()
@@ -200,7 +232,9 @@ class MetadataInferenceService:
         if live_snapshot.info.sha256 != snapshot.info.sha256:
             return self._snapshot_unavailable()
         try:
-            program = self._compiler.compile(validation.plan, program_id=program_id)
+            program = self._registry.get(canonical.dialect).compile(
+                canonical, program_id=program_id
+            )
         except OntologyCompileError:
             return MetadataInferenceOutcome(
                 status="failed",
@@ -211,11 +245,13 @@ class MetadataInferenceService:
                     ),
                 ),
                 missing_information=("请检查字段类型、关联键和时间策略",),
+                relation_graph=complete_graph,
             )
         return MetadataInferenceOutcome(
             status="ready",
             program=program,
-            plan=validation.plan,
+            plan=canonical,
+            relation_graph=complete_graph,
             diagnostics=validation.diagnostics,
         )
 

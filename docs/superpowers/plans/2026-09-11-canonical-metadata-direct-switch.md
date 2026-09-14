@@ -353,7 +353,7 @@ git push origin HEAD
 - Consumes: `build_relation_evidence_graph`, `InferenceRelationalAdapter`, `RelationalCompilerRegistry`.
 - Produces: `MetadataInferenceOutcome.plan: CanonicalRelationalPlan | None`, `MetadataInferenceOutcome.relation_graph: RelationEvidenceGraph | None`, matching fields on `ProgramGenerationResult`, and canonical `CompiledProgram`.
 
-- [ ] **Step 1: Write failing orchestration tests**
+- [x] **Step 1: Write failing orchestration tests**
 
 Update the inference-service fakes and assert this order:
 
@@ -373,7 +373,7 @@ assert calls == [
 
 Add tests that confirmed relationships are sent to the LLM, model-proposed relationships can compile without ontology relations, and provider failures remain `inferred_plan_provider_unavailable` rather than plan errors.
 
-- [ ] **Step 2: Run tests and verify they fail on the old compiler path**
+- [x] **Step 2: Run tests and verify they fail on the old compiler path**
 
 ```powershell
 pytest tests/test_metadata_inference.py tests/test_metadata_inference_llm.py -q
@@ -381,7 +381,7 @@ pytest tests/test_metadata_inference.py tests/test_metadata_inference_llm.py -q
 
 Expected: assertions fail because the service still invokes `HiveInferenceCompiler` directly.
 
-- [ ] **Step 3: Replace only the inference compile seam**
+- [x] **Step 3: Replace only the inference compile seam**
 
 Change `MetadataInferenceService` defaults to:
 
@@ -429,7 +429,7 @@ relation_graph: RelationEvidenceGraph | None = None
 
 to both result models. Extend the inference client protocol and `LLMClient.infer_metadata_program(...)` with `relation_evidence: RelationEvidenceGraph`; serialize it beside the candidate context. Keep snapshot-hash verification immediately before compilation. Do not catch provider/network failures as validation or compilation failures. Return the complete relation graph for the later LangGraph state and diagnostic tool; do not persist a second copy elsewhere.
 
-- [ ] **Step 4: Run focused inference tests**
+- [x] **Step 4: Run focused inference tests**
 
 ```powershell
 pytest tests/test_metadata_inference.py tests/test_metadata_inference_llm.py tests/ontology_core/test_inference_to_relational.py -q

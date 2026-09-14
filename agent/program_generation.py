@@ -21,7 +21,8 @@ from agent.metadata_inference import (
 from agent.ontology_shadow import get_ontology_runtime
 from agent.program_planner import AdaptiveProgramPlanner, ProgramPlanningOutcome
 from ontology_core.errors import OntologyCompileError, PackageNotFoundError
-from ontology_core.inference_models import ValidatedInferredProgram
+from ontology_core.relational_plan import CanonicalRelationalPlan
+from ontology_core.relation_evidence import RelationEvidenceGraph
 from ontology_core.program_compiler import (
     HiveProgramCompiler,
     ProgramCompilerRegistry,
@@ -62,7 +63,8 @@ class ProgramGenerationResult:
     mode: ProgramGenerationMode
     diagnostics: tuple[ProgramDiagnostic, ...]
     clarification: str | None = None
-    inferred_plan: ValidatedInferredProgram | None = None
+    inferred_plan: CanonicalRelationalPlan | None = None
+    relation_graph: RelationEvidenceGraph | None = None
     missing_information: tuple[str, ...] = ()
 
 
@@ -178,9 +180,7 @@ class ProgramGenerationService:
             )
         if outcome.status == "clarification_required":
             clarification = (
-                outcome.diagnostics[0].message
-                if outcome.diagnostics
-                else "业务语义需要进一步确认"
+                outcome.diagnostics[0].message if outcome.diagnostics else "业务语义需要进一步确认"
             )
             return ProgramGenerationResult(
                 sql=None,
@@ -194,9 +194,7 @@ class ProgramGenerationService:
                 ),
                 clarification=clarification,
                 missing_information=(
-                    metadata_result.missing_information
-                    if metadata_result is not None
-                    else ()
+                    metadata_result.missing_information if metadata_result is not None else ()
                 ),
             )
         if outcome.plan is None:
@@ -211,9 +209,7 @@ class ProgramGenerationService:
                 legacy_sql_factory,
                 allow_legacy_compatibility=allow_legacy_compatibility,
                 missing_information=(
-                    metadata_result.missing_information
-                    if metadata_result is not None
-                    else ()
+                    metadata_result.missing_information if metadata_result is not None else ()
                 ),
             )
         plan = outcome.plan
@@ -263,9 +259,7 @@ class ProgramGenerationService:
                 legacy_sql_factory,
                 allow_legacy_compatibility=allow_legacy_compatibility,
                 missing_information=(
-                    metadata_result.missing_information
-                    if metadata_result is not None
-                    else ()
+                    metadata_result.missing_information if metadata_result is not None else ()
                 ),
             )
         mode = (
@@ -360,11 +354,10 @@ class ProgramGenerationService:
                 mode=ProgramGenerationMode.INFERRED_PROGRAM,
                 diagnostics=diagnostics,
                 inferred_plan=outcome.plan,
+                relation_graph=outcome.relation_graph,
             )
         mode = (
-            ProgramGenerationMode.UNAVAILABLE
-            if outcome.status == "unavailable"
-            else failure_mode
+            ProgramGenerationMode.UNAVAILABLE if outcome.status == "unavailable" else failure_mode
         )
         return ProgramGenerationResult(
             sql=None,
@@ -374,6 +367,7 @@ class ProgramGenerationService:
             mode=mode,
             diagnostics=diagnostics,
             missing_information=outcome.missing_information,
+            relation_graph=outcome.relation_graph,
         )
 
     @staticmethod

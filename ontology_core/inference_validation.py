@@ -25,6 +25,7 @@ from ontology_core.metadata_candidates import MetadataCandidateCatalog
 from ontology_core.models import FrozenModel
 from ontology_core.normalization import datatype_group as _datatype_group, normalize_text
 from ontology_core.program_models import ProgramDiagnostic
+from ontology_core.relation_evidence import RelationEvidenceGraph, RelationEvidenceSource
 from ontology_core.semantic_models import RuleOperator
 from ontology_core.temporal import TemporalTarget, parse_temporal_intents
 
@@ -92,6 +93,7 @@ class MetadataInferenceValidator:
         catalog: MetadataCandidateCatalog,
         system_time: datetime,
         request: str,
+        relation_graph: RelationEvidenceGraph | None = None,
     ) -> InferenceValidationResult:
         if draft.blocking_issues:
             return _failure(
@@ -116,6 +118,13 @@ class MetadataInferenceValidator:
             )
 
         objects_by_ref = {item.ref: item for item in candidates.objects}
+        if relation_graph is not None and (
+            relation_graph.package_sha256 != candidates.package_sha256
+            or not set(draft.selected_object_refs).issubset(relation_graph.object_refs)
+        ):
+            return _failure(
+                "candidate_snapshot_changed", "关系证据与候选快照不一致", "请重新生成候选计划"
+            )
         fields_by_ref = {
             field.ref: field for object_ in candidates.objects for field in object_.fields
         }
@@ -222,7 +231,12 @@ class MetadataInferenceValidator:
                     "候选关联字段类型不兼容",
                     "请提供类型兼容的关联键或明确转换口径",
                 )
-            if not _join_has_metadata_basis(left, right):
+            edge = (
+                relation_graph.matching(left.ref, right.ref) if relation_graph is not None else None
+            )
+            if (relation_graph is not None and edge is None) or (
+                relation_graph is None and not _join_has_metadata_basis(left, right)
+            ):
                 return _failure(
                     "unsupported_join_evidence",
                     "字段元数据不足以支持候选关联",
@@ -233,7 +247,11 @@ class MetadataInferenceValidator:
             if left_node != right_node:
                 edges.add(frozenset((left_node, right_node)))
             confidence = (
-                Confidence.MEDIUM if join.confidence == Confidence.HIGH else join.confidence
+                edge.confidence
+                if edge is not None
+                else Confidence.MEDIUM
+                if join.confidence == Confidence.HIGH
+                else join.confidence
             )
             validated_joins.append(
                 ValidatedInferredJoin(
@@ -244,7 +262,7 @@ class MetadataInferenceValidator:
                     right_object_ref=join.right_object_ref,
                     right_field=right,
                     confidence=confidence,
-                    evidence=join.evidence,
+                    evidence=edge.evidence if edge is not None else join.evidence,
                 )
             )
         semantic_error = join_semantics_error(validated_joins, requested_fields, member_family)
@@ -396,12 +414,18 @@ class MetadataInferenceValidator:
         automatic_unresolved = tuple(
             f"关系 {item.left_object_ref} → {item.right_object_ref} 尚未写入本体"
             for item in validated_joins
+            if relation_graph is None
+            or relation_graph.matching(item.left_field.ref, item.right_field.ref).source
+            != RelationEvidenceSource.ONTOLOGY
         )
         automatic_suggestions = tuple(
             "补充关系："
             f"{item.left_object_ref}.{item.left_field.ref} = "
             f"{item.right_object_ref}.{item.right_field.ref}"
             for item in validated_joins
+            if relation_graph is None
+            or relation_graph.matching(item.left_field.ref, item.right_field.ref).source
+            != RelationEvidenceSource.ONTOLOGY
         )
         reasons = (
             f"已从活动本体版本选择 {len(selected_objects)} 个真实对象",

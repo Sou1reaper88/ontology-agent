@@ -18,6 +18,7 @@ from agent.context_engineering import ContextMessage
 from config.settings import settings
 from monitoring.metrics import LLM_CALL_DURATION
 from ontology_core.inference_models import CandidateContext, InferredProgramDraft
+from ontology_core.relation_evidence import RelationEvidenceGraph
 from ontology_core.program_models import (
     DraftSqlProgramPlan,
     ProgramDiagnostic,
@@ -96,6 +97,7 @@ class LLMClient:
         *,
         request: str,
         candidates: CandidateContext,
+        relation_evidence: RelationEvidenceGraph | None = None,
         conversation_context: str | None = None,
         lookup_fields: Callable[[list[str]], list[dict]] | None = None,
     ) -> InferredProgramDraft:
@@ -108,6 +110,9 @@ class LLMClient:
             "只能引用候选目录中已有的对象 ref、字段 ref 和表族 ref。"
             "物理表名和字段名只用于理解，不能填入引用字段。"
             "关系、过滤口径和表族选择都属于候选推断，必须提供可核验依据和"
+            "关系图允许为空或不完整，不是关联白名单；优先采用已确认本体关系，"
+            "缺失时结合真实表字段描述、类型、业务粒度或用户补充推断关联，"
+            "用relation_source区分user与model，不能声称推断已获本体确认。"
             "high、medium 或 low 置信度。过滤值优先逐字取自用户需求。"
             "无法确认的内容写入 unresolved_items，并给出 ontology_suggestions；"
             "不得为了生成结果而虚构目录外对象、字段、城市分表或关联键。"
@@ -133,6 +138,8 @@ class LLMClient:
             "candidates": candidates.model_dump(mode="json"),
             "schema": InferredProgramDraft.model_json_schema(),
         }
+        if relation_evidence is not None:
+            payload["relation_evidence"] = relation_evidence.model_dump(mode="json")
         if conversation_context:
             payload["conversation_context"] = conversation_context
         if lookup_fields is not None:
@@ -154,11 +161,15 @@ class LLMClient:
                 obj.pop("retrieval_score", None)
                 obj.pop("matched_terms", None)
                 obj["field_index_columns"] = ["ref", "physical_name", "label"]
-                obj["field_index"] = [[f["ref"], f["physical_name"], f["label"]]
-                                      for f in obj["fields"]]
+                obj["field_index"] = [
+                    [f["ref"], f["physical_name"], f["label"]] for f in obj["fields"]
+                ]
                 omitted = {"retrieval_score", "matched_terms", "details_loaded"}
-                obj["fields"] = [{k: v for k, v in f.items() if k not in omitted}
-                                 for f in obj["fields"] if f["details_loaded"]]
+                obj["fields"] = [
+                    {k: v for k, v in f.items() if k not in omitted}
+                    for f in obj["fields"]
+                    if f["details_loaded"]
+                ]
         user_query = json.dumps(
             payload,
             ensure_ascii=False,
@@ -330,9 +341,7 @@ class LLMClient:
         reasoning_effort: str | None = None,
     ) -> str:
         if not self.api_key or self.api_key == PLACEHOLDER_KEY:
-            raise RuntimeError(
-                "LLM API Key 未配置，请在 .env 设置 LLM__API_KEY"
-            )
+            raise RuntimeError("LLM API Key 未配置，请在 .env 设置 LLM__API_KEY")
         url = f"{self.base_url.rstrip('/')}/chat/completions"
         payload: dict[str, Any] = {
             "model": self.model,
@@ -349,9 +358,7 @@ class LLMClient:
         if json_output:
             payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        resp = httpx.post(
-            url, json=payload, headers=headers, timeout=self.timeout
-        )
+        resp = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
         choice = data["choices"][0]
