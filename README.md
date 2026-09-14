@@ -2,11 +2,17 @@
 
 企业级本体驱动 HiveSQL 编译器取数智能体。
 
-基于本体元数据（TTL）+ 用户外部表信息 + 系统时间，严格遵循技术规范生成 HiveSQL，并支持执行取数。具备权限管理、审计日志、多用户并发、表级数据隔离等企业级特性。
+基于已发布 RDF 本体元数据、用户需求和系统时间生成 HiveSQL 建表脚本。智能取数链路只生成脚本，不执行脚本；保留权限管理、审计日志与多用户会话能力。
 
 ## 架构
 
-详见 [设计文档](docs/designs/2026-08-05-ontology-agent-design.md)。
+默认 SQL 链路为：元数据检索 → 动态关系证据 → 大模型候选语义 → 统一关系计划 → 确定性 Hive 编译。关系证据图允许为空或不完整；大模型可结合真实表字段元数据与用户补充推断关系，并保留置信度和依据，不自动写回本体。
+
+统一计划表达扫描、过滤、并集、连接、投影、聚合及物化。INNER JOIN 可以重排；LEFT/ANTI 保留方向，右侧匹配条件与账期保留在 ON / NOT EXISTS 范围。并集来源先物化，结果只输出一份脚本，不生成末尾清理语句，也不运行影子 SQL。
+
+`config/settings.yaml` 的 `sql_pipeline` 默认为 `canonical`。只有管理员将其改成 `legacy` 并重启后端，才会整次请求使用旧图；新链路失败不会自动回退。旧图保留历史行为，不代表统一链路的语义或安全保证。
+
+本阶段实施记录见 [统一链路切换计划](docs/superpowers/plans/2026-09-11-canonical-metadata-direct-switch.md)。顶层自然对话与工具编排迁移到 LangGraph，以及评测中心的多步骤比较升级，属于后续阶段。
 
 ## 文档
 
@@ -135,7 +141,8 @@ Invoke-WebRequest http://127.0.0.1:8001/ready | Select-Object -ExpandProperty Co
 ```
 ontology-agent/
 ├── api/        FastAPI 路由
-├── agent/      LangGraph 编排
+├── agent/      自然对话工具编排 + SQL 生成服务（旧图使用 LangGraph）
+├── ontology_core/ RDF 本体、元数据证据、语义校验与统一关系编译
 ├── tools/      工具适配层(本体平台API + 商业LLM)
 ├── executor/   Celery + Hive 执行器
 ├── auth/       认证 + 权限
@@ -159,7 +166,7 @@ pytest
 
 ## 本体包开发
 
-本体包编辑流程见 [Protégé 本体编辑指南](docs/ontology-authoring.md)。本里程碑中的 `OntologyResolver` 是只读的 Python 边界；现有 Agent 仍走 legacy path，尚未切换到该 Resolver。
+本体包编辑流程见 [Protégé 本体编辑指南](docs/ontology-authoring.md)。前台本体管理支持元数据草稿编辑、校验和不可变版本发布；智能取数从活动版本检索真实对象与字段，并通过只读 Python 校验及统一关系编译边界生成脚本。
 
 ```powershell
 python -m ontology_core init D:\path\to\private-package --package-id private.package --base-uri https://example.invalid/private/

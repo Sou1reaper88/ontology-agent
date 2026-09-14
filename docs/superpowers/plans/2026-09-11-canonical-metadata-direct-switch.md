@@ -558,7 +558,7 @@ git push origin HEAD
 - Consumes: the production canonical path from Tasks 1–5.
 - Produces: one documented generation architecture and a recorded verification result.
 
-- [ ] **Step 1: Run the focused regression suite**
+- [x] **Step 1: Run the focused regression suite**
 
 ```powershell
 pytest tests/ontology_core/test_relation_evidence.py tests/ontology_core/test_inference_models.py tests/ontology_core/test_inference_validation.py tests/ontology_core/test_inference_to_relational.py tests/ontology_core/test_relational_plan.py tests/ontology_core/test_relational_compiler.py tests/test_metadata_inference.py tests/test_metadata_inference_llm.py tests/test_program_generation.py tests/test_orchestrator.py tests/evaluation/test_runner.py -q
@@ -566,7 +566,7 @@ pytest tests/ontology_core/test_relation_evidence.py tests/ontology_core/test_in
 
 Expected: all selected tests pass.
 
-- [ ] **Step 2: Run one complete Python regression**
+- [x] **Step 2: Run one complete Python regression**
 
 ```powershell
 pytest -q
@@ -574,7 +574,7 @@ pytest -q
 
 Expected: no failures. Record the exact pass/skip counts; do not claim success from an earlier run.
 
-- [ ] **Step 3: Update only stale architecture documentation**
+- [x] **Step 3: Update only stale architecture documentation**
 
 Update `README.md` to say:
 
@@ -587,7 +587,7 @@ Add one dated journal entry containing the direct-switch decision, files changed
 - [ ] **Step 4: Commit and push**
 
 ```powershell
-git add README.md docs/project-journal/2026-09.md
+git add README.md docs/project-journal/2026-09.md docs/superpowers/plans/2026-09-11-canonical-metadata-direct-switch.md
 git commit -m "docs: record canonical pipeline switch"
 git push origin HEAD
 ```
