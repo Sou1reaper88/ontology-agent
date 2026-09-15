@@ -72,7 +72,7 @@ def test_metadata_inference_uses_low_reasoning_effort() -> None:
 
     class CapturingClient(LLMClient):
         def __init__(self) -> None:
-            self.model = "deepseek-v4-flash"
+            self.model = "deepseek-flash"
 
         def _generate(
             self,

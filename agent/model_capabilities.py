@@ -23,10 +23,10 @@ _SAFE_DEFAULTS = ModelTokenLimits(
 )
 
 _MODEL_DEFAULTS = {
-    "deepseek-v4-flash": ModelTokenLimits(
+    "deepseek-flash": ModelTokenLimits(
         context_window_tokens=1_000_000,
         max_input_tokens=1_000_000,
-        max_output_tokens=384_000,
+        max_output_tokens=393_216,
     ),
 }
 

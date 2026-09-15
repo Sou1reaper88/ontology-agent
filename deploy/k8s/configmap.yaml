@@ -14,7 +14,7 @@ data:
   HIVE__HOST: "hive-server"
   HIVE__PORT: "10000"
   LLM__BASE_URL: "https://api.deepseek.com"
-  LLM__MODEL: "deepseek-v4-flash"
+  LLM__MODEL: "deepseek-flash"
   LLM__TEMPERATURE: "0.0"
   LLM__MAX_TOKENS: "4096"
   ONTOLOGY__BASE_URL: "http://10.78.188.159:9080"

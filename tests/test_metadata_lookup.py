@@ -97,7 +97,7 @@ def test_lookup_rounds_request_json_output_and_preserve_provider_context(monkeyp
     client = LLMClient()
     client.api_key = "synthetic-key"
     client.base_url = "https://example.invalid"
-    client.model = "deepseek-v4-flash"
+    client.model = "deepseek-flash"
     client.temperature = 0.25
     client.max_tokens = 321
     seen = []

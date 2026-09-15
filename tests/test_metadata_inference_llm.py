@@ -51,7 +51,7 @@ def _candidates() -> CandidateContext:
 class _RawClient(LLMClient):
     def __init__(self, response: str) -> None:
         self.response = response
-        self.model = "deepseek-v4-flash"
+        self.model = "deepseek-flash"
         self.calls: list[tuple[str, str, bool, str | None]] = []
     def _generate(
         self,

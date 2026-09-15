@@ -317,7 +317,7 @@ class LLMClient:
 
     def _metadata_reasoning_effort(self) -> str | None:
         """Keep structured planning concise without sending DeepSeek-only options elsewhere."""
-        if self.model.casefold().startswith("deepseek-v4-"):
+        if self.model.casefold() == "deepseek-flash":
             return "low"
         return None
 
