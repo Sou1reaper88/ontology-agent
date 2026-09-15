@@ -22,6 +22,15 @@ def test_current_question_is_separate_from_pending_history(monkeypatch):
     assert requests[0]['messages'][-1] == {'role': 'user', 'content': '为什么不回答了'}
 
 
+def test_system_prompt_prioritizes_semantics_without_fixed_template(monkeypatch):
+    requests = provider(monkeypatch, [final()])
+    agent.run_conversation_agent('自然语言取数需求')
+    prompt = requests[0]['messages'][0]['content']
+    assert '不依赖固定栏目名称或需求模板' in prompt
+    assert '背景只用于理解目的，不得扩展查询周期、输出表或指标' in prompt
+    assert '不影响核心输出的信息不得放入unresolved_items' in prompt
+
+
 def test_http_failure_is_specific_and_safe(monkeypatch):
     requests = provider(monkeypatch, [])
     def fail(url, **kwargs):
