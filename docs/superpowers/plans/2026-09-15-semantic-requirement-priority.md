@@ -29,7 +29,7 @@
 - Consumes: `run_conversation_agent(user_query, ...)` and its first OpenAI-compatible system message.
 - Produces: the same public function and response schema, with stronger model instructions only.
 
-- [ ] **Step 1: Write the failing contract test**
+- [x] **Step 1: Write the failing contract test**
 
 ```python
 def test_system_prompt_prioritizes_semantics_without_fixed_template(monkeypatch):
@@ -41,13 +41,13 @@ def test_system_prompt_prioritizes_semantics_without_fixed_template(monkeypatch)
     assert '不影响核心输出的信息不得放入unresolved_items' in prompt
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `.venv\Scripts\python.exe -m pytest tests/test_conversation_agent.py::test_system_prompt_prioritizes_semantics_without_fixed_template -q`
 
 Expected: one assertion failure because the semantic-priority contract is absent from `SYSTEM`.
 
-- [ ] **Step 3: Add the minimum system-prompt instructions**
+- [x] **Step 3: Add the minimum system-prompt instructions**
 
 Insert into `SYSTEM` immediately after the current-turn/history rules:
 
@@ -59,20 +59,24 @@ Insert into `SYSTEM` immediately after the current-turn/history rules:
 "只有会实质改变结果的直接冲突，或缺少导致请求输出无法计算的核心事实，才写入unresolved_items并阻止正式交付。"
 ```
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `.venv\Scripts\python.exe -m pytest tests/test_conversation_agent.py tests/test_conversation_capabilities.py -q`
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Record the generalized engineering lesson**
+- [x] **Step 5: Record the generalized engineering lesson**
 
 Append to `docs/project-journal/2026-09.md` that static SQL success did not prove requirement-scope correctness, and that the fix preserved model flexibility by defining semantic priority rather than parsing fixed headings. Do not include business table names, SQL, or sensitive requirement text.
 
-- [ ] **Step 6: Verify, commit, and push**
+- [x] **Step 6: Verify, commit, and push**
 
 Run: `.venv\Scripts\python.exe -m pytest tests/test_conversation_agent.py tests/test_conversation_capabilities.py -q`
 
 Expected: zero failures.
 
 Then stage only the three task files, commit with `fix: prioritize explicit requirement semantics`, and push `main`.
+
+## Execution finding
+
+The first live verification exposed a separate loop-budget defect: when the eighth model call returned a successful `validate_sql` tool call, no call remained for the final JSON response. The implementation therefore preserves the 16-tool cap and adds one ninth, final-only model call with `tool_choice="none"`. A regression test covers eight tool rounds followed by a final response.

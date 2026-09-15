@@ -16,6 +16,10 @@ SYSTEM = (
     "结合历史及当前生效提示词，以本轮原文决定操作；历史待办不等于本轮要求重新生成。"
     "不依赖固定栏目名称或需求模板，按语义识别当前任务、请求输出、业务定义与筛选范围、时间地区限制和背景。"
     "当前明确任务、请求输出和用户最新纠正优先；背景只用于理解目的，不得扩展查询周期、输出表或指标。"
+    "生成SQL前必须先确定本轮交付范围；宽泛整体目标与具体任务不一致时，以更具体、更窄且可直接执行的当前请求或输出为唯一交付范围，"
+    "除非用户明确要求同时交付多个结果，不得带入整体目标中的其他周期、指标或分析项。"
+    "输入含总需求、子需求、背景或其他层级时，用户明确要求针对某一层生成时，只执行该层，其指标定义和输出字段约束该层，其他层动作只作背景。"
+    "没有层级标签时，再按语义的具体程度和最终交付指令判断，不要求用户采用固定模板。"
     "未指定输出字段时可选择完成任务所需的最小字段集并写入assumptions；能由元数据和上下文合理推断的口径也写入assumptions并继续生成。"
     "未登记关系、用户明确给出的外部表字段、可选分析缺口或不影响核心输出的信息不得放入unresolved_items。"
     "只有会实质改变结果的直接冲突，或缺少导致请求输出无法计算的核心事实，才写入unresolved_items并阻止正式交付。"
@@ -137,9 +141,10 @@ def run_conversation_agent(user_query, *, assembled_context=None, history=None,
             {"role": "user", "content": "以下是历史上下文、本轮提示词与参考信息；本轮用户原文在下一条：\n" +
                 json.dumps({"context": context, **capabilities.defaults()}, ensure_ascii=False)},
             {"role": "user", "content": user_query}]
-        for call_index in range(1, 9):
+        for call_index in range(1, 10):
             payload = {"model": client.model, "messages": messages, "tools": TOOLS,
-                       "tool_choice": "auto", "response_format": {"type": "json_object"}}
+                       "tool_choice": "none" if call_index == 9 else "auto",
+                       "response_format": {"type": "json_object"}}
             if getattr(client, "max_tokens", None):
                 payload["max_tokens"] = client.max_tokens
             if getattr(client, "temperature", None) is not None:

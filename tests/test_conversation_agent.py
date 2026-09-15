@@ -28,6 +28,10 @@ def test_system_prompt_prioritizes_semantics_without_fixed_template(monkeypatch)
     prompt = requests[0]['messages'][0]['content']
     assert '不依赖固定栏目名称或需求模板' in prompt
     assert '背景只用于理解目的，不得扩展查询周期、输出表或指标' in prompt
+    assert '更具体、更窄且可直接执行的当前请求或输出为唯一交付范围' in prompt
+    assert '除非用户明确要求同时交付多个结果' in prompt
+    assert '用户明确要求针对某一层生成时，只执行该层' in prompt
+    assert '没有层级标签时，再按语义的具体程度和最终交付指令判断' in prompt
     assert '不影响核心输出的信息不得放入unresolved_items' in prompt
 
 
@@ -77,6 +81,17 @@ def test_tool_budget_is_bounded(monkeypatch):
     calls = {'role': 'assistant', 'tool_calls': [tool('get_business_context', {}, str(i)) for i in range(17)]}
     requests = provider(monkeypatch, [calls])
     assert not agent.run_conversation_agent('取数')['success'] and len(requests) == 1
+
+
+def test_eight_tool_rounds_leave_one_final_response_call(monkeypatch):
+    responses = [
+        {'role': 'assistant', 'tool_calls': [tool('get_business_context', {}, str(i))]}
+        for i in range(8)
+    ] + [final()]
+    requests = provider(monkeypatch, responses)
+    output = agent.run_conversation_agent('复杂取数')
+    assert output['success'] and len(requests) == 9
+    assert requests[-1]['tool_choice'] == 'none'
 
 
 def test_history_includes_diagnostics_without_full_snapshot():
