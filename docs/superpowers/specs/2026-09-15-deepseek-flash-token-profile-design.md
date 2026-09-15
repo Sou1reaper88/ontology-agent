@@ -11,9 +11,10 @@ Token，最大输出为 384K（393,216）Token。
 
 ## 方案
 
-- 在现有模型能力档案中加入 `deepseek-flash`。
-- 保留 `deepseek-v4-flash` 兼容项，不修改运行时 API 模型名。
-- 两个名称共用同一个不可变能力值，避免配置漂移。
+- 将现有模型能力档案中的 `deepseek-v4-flash` 更新为 `deepseek-flash`。
+- 不保留 `deepseek-v4-flash` 兼容项。
+- 将项目部署配置与相关测试同步改为 `deepseek-flash`。
+- 不修改当前本地运行时 API 模型名。
 - 显式配置的 `maxInputTokens`、`maxOutputTokens` 仍优先于模型默认值。
 
 不增加通用别名系统，不修改上下文压缩算法，也不处理评测中心。
@@ -23,7 +24,7 @@ Token，最大输出为 384K（393,216）Token。
 先增加回归测试并确认当前实现失败，再做最小实现，使以下行为通过：
 
 1. `deepseek-flash` 未配置上限时解析为 1,000,000 / 393,216。
-2. 旧名称 `deepseek-v4-flash` 继续得到相同结果。
+2. 旧名称 `deepseek-v4-flash` 按未知模型处理，不再享有专用档案。
 3. 未知模型继续使用安全默认值。
 4. 显式配置继续覆盖模型档案。
 
