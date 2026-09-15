@@ -1,4 +1,5 @@
 """Request-local, read-only capabilities. No model calls or SQL execution."""
+import re
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -103,9 +104,14 @@ class ConversationTools:
         objects = self._objects(args.object_refs)
         fields = [f for o in objects for f in o.fields]
         if args.field_refs:
-            selected = [f for f in fields if f.ref in args.field_refs]
-            if {f.ref for f in selected} != set(args.field_refs):
-                raise ValueError("字段引用不存在或不属于指定对象")
+            selected = []
+            for requested in args.field_refs:
+                matches = [f for f in fields if requested.casefold() in {
+                    f.ref.casefold(), f.physical_name.casefold()}]
+                if len(matches) != 1:
+                    raise ValueError(f"字段引用或物理字段名不存在或不唯一：{requested}")
+                if matches[0] not in selected:
+                    selected.append(matches[0])
             fields = selected
         return objects, fields
 
@@ -164,6 +170,10 @@ class ConversationTools:
             raise ValueError("Hive脚本无法解析") from error
         if not self.allow_cte and any(p is not None and p.find(exp.CTE) for p in parsed):
             raise ValueError("当前提示词禁止CTE")
+        placeholder = re.compile(r"^(?:<[^<>]+>|\$\{[^{}]+\}|\{\{[^{}]+\}\}|TODO|TBD)$", re.I)
+        if any(placeholder.fullmatch(item.this.strip()) for statement in parsed if statement is not None
+               for item in statement.find_all(exp.Literal) if item.is_string):
+            raise ValueError("SQL包含尚未替换的占位符，只能作为待确认草稿")
         if any(p is not None and not isinstance(p, (exp.Query, exp.Drop, exp.Create)) for p in parsed):
             raise ValueError("只允许只读查询或受限CTAS，禁止其他写操作")
         from types import SimpleNamespace

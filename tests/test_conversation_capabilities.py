@@ -136,3 +136,54 @@ def test_a_published_source_is_never_a_ddl_target():
     with pytest.raises(ValueError, match='源表'):
         validate_authored_sql(script('SELECT 1 AS ID'), program_id=PID,
                              catalog=SimpleNamespace(objects=(obj,)))
+
+
+def test_placeholder_literal_is_delivered_only_as_a_draft(monkeypatch):
+    sql = "SELECT 1 WHERE '<正常在网编码_待确认>' = '1'"
+    provider(monkeypatch, [final(sql)])
+    output = agent.run_conversation_agent('生成正常在网用户SQL')
+    assert not output['success'] and output['sql'] == sql
+    assert output['generation_mode'] == 'authored_draft'
+    assert any('占位符' in item for item in output['errors'])
+
+
+def test_unresolved_items_are_structured_and_block_sql_delivery(monkeypatch):
+    provider(monkeypatch, [final('SELECT 1', assumptions=['根据现有字段判断'],
+        unresolved_items=['正常在网编码未确认'])])
+    output = agent.run_conversation_agent('生成')
+    assert not output['success'] and output['generation_mode'] == 'authored_draft'
+    assert output['missing_information'] == ['正常在网编码未确认']
+    generation = next(step for step in output['trace'] if step['node'] == 'program_generation')
+    assert generation['payload']['inference_evidence']['unresolved_items'] == ['正常在网编码未确认']
+
+
+def test_unresolved_natural_answer_remains_a_clarification(monkeypatch):
+    provider(monkeypatch, [final(None, unresolved_items=['需要手机用户编码'])])
+    output = agent.run_conversation_agent('正常在网手机用户')
+    assert output['success'] and output['sql'] is None
+    assert output['missing_information'] == ['需要手机用户编码']
+
+
+def test_field_lookup_accepts_physical_names_case_insensitively(monkeypatch):
+    from agent.conversation_tools import ConversationTools
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: catalog())
+    capabilities = ConversationTools(program_id=PID, request='合成需求')
+    result, _ = capabilities.execute('read_fields', {
+        'object_refs': ['dm.TEST_M'], 'field_refs': ['value', 'p_mon']})
+    assert [field['physical_name'] for field in result['fields']] == ['VALUE', 'P_MON']
+
+
+def test_trace_records_model_latency_and_sanitized_tool_evidence(monkeypatch):
+    from agent.conversation_tools import ConversationTools
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: catalog())
+    provider(monkeypatch, [
+        {'role': 'assistant', 'tool_calls': [tool('search_tables', {
+            'query': 'synthetic', 'limit': 3, 'summary': '检索合成表'})]}, final()])
+    output = agent.run_conversation_agent('查表')
+    model_calls = [step for step in output['trace'] if step['node'] == 'model_call']
+    assert len(model_calls) == 2
+    assert all(step['payload']['request_duration_ms'] >= 0 for step in model_calls)
+    action = next(step for step in output['trace'] if step['node'] == 'conversation_action')
+    assert action['payload']['arguments'] == {'query': 'synthetic', 'limit': 3}
+    assert action['payload']['result']['match_count'] == 1
+    assert 'sql' not in json.dumps(action['payload']).casefold()

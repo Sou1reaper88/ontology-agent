@@ -33,6 +33,9 @@ def test_http_failure_is_specific_and_safe(monkeypatch):
     assert len(requests) == 1 and not output['success']
     assert output['diagnostics'][0]['code'] == 'conversation_provider_http_error'
     assert '402' in output['markdown'] and 'SECRET' not in json.dumps(output)
+    model_call = next(step for step in output['trace'] if step['node'] == 'model_call')
+    assert model_call['status'] == 'error'
+    assert model_call['payload']['request_duration_ms'] >= 0
 
 
 def test_unknown_and_removed_tools_never_execute(monkeypatch):
@@ -49,6 +52,16 @@ def test_invalid_tool_arguments_return_to_model(monkeypatch):
     assert output['success'] and len(requests) == 2
     assert '工具参数格式' in requests[1]['messages'][-1]['content']
     assert 'SECRET' not in json.dumps(output)
+
+
+def test_invalid_known_arguments_cannot_break_trace_recording(monkeypatch):
+    requests = provider(monkeypatch, [
+        {'role': 'assistant', 'tool_calls': [tool('validate_sql', {'sql': 123, 'allow_cte': False})]},
+        final()])
+    output = agent.run_conversation_agent('校验')
+    assert output['success'] and len(requests) == 2
+    action = next(step for step in output['trace'] if step['node'] == 'conversation_action')
+    assert action['payload']['arguments']['sql_chars'] == 0
 
 
 def test_tool_budget_is_bounded(monkeypatch):
