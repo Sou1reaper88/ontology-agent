@@ -24,13 +24,15 @@
 **Files:**
 - Modify: `tests/test_conversation_capabilities.py`
 - Modify: `agent/conversation_agent.py`
+- Modify: `agent/conversation_tools.py`
+- Modify: `tests/test_conversation.py`
 - Modify: `docs/project-journal/2026-09.md`
 
 **Interfaces:**
 - Consumes: `Answer`, `ConversationTools.validate()`, and returned `CompiledProgram | None`.
 - Produces: `Answer.delivery_mode: Literal["table", "query"]` with default `"table"`; unchanged public `run_conversation_agent()` result schema.
 
-- [ ] **Step 1: Write failing delivery-contract tests**
+- [x] **Step 1: Write failing delivery-contract tests**
 
 Add tests proving:
 
@@ -71,13 +73,13 @@ def test_query_delivery_rejects_a_materialized_program(monkeypatch):
     assert '仅查询' in output['errors'][0]
 ```
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `.venv\Scripts\python.exe -m pytest tests/test_conversation_capabilities.py -q`
 
 Expected: new tests fail because `Answer` does not accept `delivery_mode` and bare queries remain valid by default.
 
-- [ ] **Step 3: Implement the minimum contract**
+- [x] **Step 3: Implement the minimum contract**
 
 In `agent/conversation_agent.py`:
 
@@ -105,24 +107,28 @@ elif program is not None:
 
 The existing parser already rejects unpaired DDL, unsafe targets, trailing cleanup, and source-table overwrite.
 
-- [ ] **Step 4: Update existing synthetic responses intentionally**
+- [x] **Step 4: Update existing synthetic responses intentionally**
 
 Set `delivery_mode='query'` only in existing tests whose purpose is to verify an allowed read-only query. Leave omitted mode in the new default-materialization test so the default itself remains covered.
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run: `.venv\Scripts\python.exe -m pytest tests/test_conversation_agent.py tests/test_conversation_capabilities.py tests/test_conversation.py -q`
 
 Expected: zero failures.
 
-- [ ] **Step 6: Record the engineering decision**
+- [x] **Step 6: Record the engineering decision**
 
 Append a generalized entry to `docs/project-journal/2026-09.md`: prompt-only delivery preferences are not guarantees, so the model declares intent while Python checks shape; no business SQL or sensitive metadata is recorded.
 
-- [ ] **Step 7: Restart and perform one authorized live verification**
+- [x] **Step 7: Restart and perform one authorized live verification**
 
 Restart only the backend on port 8001. Re-run one previously accepted formal request through `/conversations`, then verify the returned SQL contains a paired result-table `DROP/CREATE`, has no trailing cleanup, and was not executed.
 
-- [ ] **Step 8: Verify, commit, and push**
+- [x] **Step 8: Verify, commit, and push**
 
-Run the focused tests again, run `git diff --check`, confirm `/ready` reports database and ontology `ok`, stage only the four task files, commit with `fix: default formal requests to result tables`, and push `main`.
+Run the focused tests again, run `git diff --check`, confirm `/ready` reports database and ontology `ok`, stage only the task files, commit with `fix: default formal requests to result tables`, and push `main`.
+
+## Execution finding
+
+The first live run produced a correctly paired CTAS program but used a descriptive final suffix. The prompt knew only `temporary_table_prefix`, so the model had to guess the full target. `ConversationTools.defaults()` now also provides the exact `result_table`; the strict final-target check remains unchanged.

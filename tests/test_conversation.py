@@ -372,15 +372,18 @@ def test_program_metadata_survives_message_reload_without_query_action(
     assert reloaded["program"]["inference_evidence"]["overall_confidence"] == "medium"
 
 
-@pytest.mark.parametrize('sql,mode,status', [
-    ('SELECT 1', 'authored_query', 'success'),
-    ('DELETE FROM users', 'authored_draft', 'failed')])
-def test_authored_query_and_draft_persist_without_execution(client, admin_token, monkeypatch, sql, mode, status):
+@pytest.mark.parametrize('sql,mode,status,delivery_mode', [
+    ('SELECT 1', 'authored_query', 'success', 'query'),
+    ('DELETE FROM users', 'authored_draft', 'failed', 'table')])
+def test_authored_query_and_draft_persist_without_execution(
+    client, admin_token, monkeypatch, sql, mode, status, delivery_mode,
+):
     from tests.conftest import wait_message_done
     def post(url, **kwargs):
         return httpx.Response(200, request=httpx.Request('POST', url), json={
-            'choices': [{'message': {'role': 'assistant', 'content': json.dumps({
-                'reply': '合成回答', 'sql': sql, 'allow_cte': True, 'assumptions': []})}}]})
+                'choices': [{'message': {'role': 'assistant', 'content': json.dumps({
+                    'reply': '合成回答', 'sql': sql, 'delivery_mode': delivery_mode,
+                    'allow_cte': True, 'assumptions': []})}}]})
     monkeypatch.setattr(conversation_agent.httpx, 'post', post)
     conv = _create_conv(client, admin_token)
     sent = client.post(f"/conversations/{conv['id']}/messages", json={'content': '合成需求'}, headers=_headers(admin_token))

@@ -6,7 +6,10 @@ import httpx
 import pytest
 
 from agent import conversation_agent as agent
+from agent.program_generation import derive_program_id
 from tests.test_sql_authoring import PID, catalog, script
+
+CONVERSATION_PID = derive_program_id('synthetic')
 
 
 def provider(monkeypatch, responses):
@@ -47,14 +50,72 @@ def test_parallel_tools_then_same_model_authors_readonly(monkeypatch):
         {'role': 'assistant', 'content': None, 'reasoning_content': 'PRIVATE', 'tool_calls': [
             tool('get_business_context', {}, 'context'),
             tool('read_fields', {'object_refs': ['Test']}, 'fields')]},
-        final("SELECT ID FROM dm.TEST_M WHERE P_MON='202607'")])
+        final("SELECT ID FROM dm.TEST_M WHERE P_MON='202607'", delivery_mode='query')])
     output = agent.run_conversation_agent('取用户', system_time='2026-08-24', request_id='synthetic')
     assert output['success'] and output['generation_mode'] == 'authored_query'
     assert not output['sql'].startswith('DROP')
     assert len(requests) == 2 and requests[1]['tool_choice'] == 'auto'
     assert [m['tool_call_id'] for m in requests[1]['messages'] if m['role'] == 'tool'] == ['context', 'fields']
     assert '20260822' in requests[1]['messages'][-2]['content']
+    assert f'temp_oa_{CONVERSATION_PID}_result_table' in requests[0]['messages'][1]['content']
     assert 'PRIVATE' not in json.dumps(output)
+
+
+def test_default_delivery_rejects_a_bare_query(monkeypatch):
+    from agent.conversation_tools import ConversationTools
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: catalog())
+    provider(monkeypatch, [final("SELECT ID FROM dm.TEST_M WHERE P_MON='202607'")])
+    output = agent.run_conversation_agent('正式取数', request_id='synthetic')
+    assert not output['success']
+    assert output['generation_mode'] == 'authored_draft'
+    assert '默认需要物化结果表' in output['errors'][0]
+
+
+def test_explicit_query_delivery_accepts_a_bare_query(monkeypatch):
+    from agent.conversation_tools import ConversationTools
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: catalog())
+    provider(monkeypatch, [final(
+        "SELECT ID FROM dm.TEST_M WHERE P_MON='202607'",
+        delivery_mode='query',
+    )])
+    output = agent.run_conversation_agent('仅查询预览', request_id='synthetic')
+    assert output['success']
+    assert output['generation_mode'] == 'authored_query'
+
+
+def test_table_delivery_requires_the_result_table(monkeypatch):
+    from agent.conversation_tools import ConversationTools
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: catalog())
+    sql = script("SELECT ID FROM dm.TEST_M WHERE P_MON='202607'",
+                 target=f'temp_oa_{CONVERSATION_PID}_work')
+    provider(monkeypatch, [final(sql, delivery_mode='table')])
+    output = agent.run_conversation_agent('正式取数', request_id='synthetic')
+    assert not output['success']
+    assert 'result_table' in output['errors'][0]
+
+
+def test_default_delivery_accepts_the_result_table_program(monkeypatch):
+    from agent.conversation_tools import ConversationTools
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: catalog())
+    sql = script("SELECT ID FROM dm.TEST_M WHERE P_MON='202607'",
+                 target=f'temp_oa_{CONVERSATION_PID}_result_table')
+    provider(monkeypatch, [final(sql)])
+    output = agent.run_conversation_agent('正式取数', request_id='synthetic')
+    assert output['success']
+    assert output['generation_mode'] == 'authored_program'
+
+
+def test_query_delivery_rejects_a_materialized_program(monkeypatch):
+    from agent.conversation_tools import ConversationTools
+    monkeypatch.setattr(ConversationTools, '_load_catalog', lambda self: catalog())
+    provider(monkeypatch, [final(
+        script("SELECT ID FROM dm.TEST_M WHERE P_MON='202607'",
+               target=f'temp_oa_{CONVERSATION_PID}_result_table'),
+        delivery_mode='query',
+    )])
+    output = agent.run_conversation_agent('仅查询预览', request_id='synthetic')
+    assert not output['success']
+    assert '仅查询' in output['errors'][0]
 
 
 def test_delivery_failure_retains_draft_without_model_retry(monkeypatch):
@@ -121,7 +182,7 @@ def test_model_voluntarily_repairs_and_keeps_all_context(monkeypatch):
     requests = provider(monkeypatch, [
         {'role': 'assistant', 'content': None, 'tool_calls': [tool('validate_sql', {
             'sql': 'WITH t AS (SELECT 1 ID) SELECT ID FROM t', 'allow_cte': False})]},
-        final(corrected, allow_cte=False)])
+        final(corrected, allow_cte=False, delivery_mode='query')])
     output = agent.run_conversation_agent('生成', assembled_context='本轮提示词：不用CTE')
     assert output['success'] and output['sql'] == corrected and len(requests) == 2
     assert '本轮提示词' in requests[1]['messages'][1]['content']

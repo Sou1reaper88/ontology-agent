@@ -65,6 +65,7 @@ class ConversationTools:
                     "P_MON": (self.now.replace(day=1) - timedelta(days=1)).strftime("%Y%m")},
                 "partition_conventions": {"_D": "P_DAY", "_M": "P_MON"},
                 "temporary_table_prefix": f"temp_oa_{self.program_id}_",
+                "result_table": f"temp_oa_{self.program_id}_result_table",
                 "explicit_requirement_dates_take_precedence": True}
 
     def _load_catalog(self):
