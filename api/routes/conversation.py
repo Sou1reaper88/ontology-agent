@@ -89,6 +89,15 @@ class ProgramSummary(BaseModel):
     missing_information: list[str] = []
 
 
+class FeedbackSummary(BaseModel):
+    id: int
+    status: str
+    note: str | None = None
+    final_sql: str | None = None
+    created_at: str
+    updated_at: str
+
+
 class MessageOut(BaseModel):
     id: int
     role: str
@@ -98,6 +107,7 @@ class MessageOut(BaseModel):
     trace: list[dict] | None = None
     ontology_shadow: dict | None = None
     program: ProgramSummary | None = None
+    feedback: FeedbackSummary | None = None
     created_at: str
 
 
@@ -252,6 +262,18 @@ def get_conversation(
             trace=m.trace,
             ontology_shadow=_extract_ontology_shadow(m.trace),
             program=_extract_program(m.trace),
+            feedback=(
+                FeedbackSummary(
+                    id=m.feedback.id,
+                    status=m.feedback.status,
+                    note=m.feedback.note,
+                    final_sql=m.feedback.final_sql,
+                    created_at=m.feedback.created_at.isoformat(),
+                    updated_at=m.feedback.updated_at.isoformat(),
+                )
+                if m.feedback
+                else None
+            ),
             created_at=m.created_at.isoformat(),
         )
         for m in conv.messages

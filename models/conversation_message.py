@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
+
+if TYPE_CHECKING:
+    from models.conversation import Conversation
+    from models.message_feedback import MessageFeedback
 
 
 class ConversationMessage(Base):
@@ -30,4 +35,10 @@ class ConversationMessage(Base):
         default=lambda: datetime.now(timezone.utc)
     )
 
-    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+    conversation: Mapped[Conversation] = relationship(back_populates="messages")
+    feedback: Mapped[MessageFeedback | None] = relationship(
+        back_populates="message",
+        uselist=False,
+        cascade="all, delete-orphan",
+        single_parent=True,
+    )
