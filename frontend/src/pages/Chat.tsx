@@ -24,6 +24,7 @@ import { ConversationSidebar } from "../features/chat/ConversationSidebar";
 import { MessageTimeline } from "../features/chat/MessageTimeline";
 import { FeedbackIdentifier } from "../features/chat/FeedbackIdentifier";
 import { OntologyEvidencePanel } from "../features/chat/OntologyEvidencePanel";
+import { conversationDeepLinkToConsume } from "../features/chat/conversationDeepLink";
 import { selectedEvidenceMessage } from "../features/chat/evidenceSelection";
 import type {
   ChatMessage,
@@ -39,6 +40,7 @@ export default function Chat() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const linkedConversationId = Number(searchParams.get("conversation"));
+  const consumedLinkedConversationId = useRef<number | null>(null);
   const screens = Grid.useBreakpoint();
   const desktopConversations = screens.lg ?? true;
   const desktopEvidence = screens.xl ?? true;
@@ -111,17 +113,18 @@ export default function Chat() {
   }, [loadConversations]);
 
   useEffect(() => {
-    if (
-      Number.isInteger(linkedConversationId) &&
-      linkedConversationId > 0 &&
-      linkedConversationId !== activeId
-    ) {
-      setIsNewDraft(false);
-      setActiveId(linkedConversationId);
-      setSelectedEvidenceId(null);
-      void loadMessages(linkedConversationId);
-    }
-  }, [activeId, linkedConversationId, loadMessages]);
+    const conversationId = conversationDeepLinkToConsume(
+      linkedConversationId,
+      consumedLinkedConversationId.current
+    );
+    if (conversationId === null) return;
+
+    consumedLinkedConversationId.current = conversationId;
+    setIsNewDraft(false);
+    setActiveId(conversationId);
+    setSelectedEvidenceId(null);
+    void loadMessages(conversationId);
+  }, [linkedConversationId, loadMessages]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: 99999, behavior: "smooth" });

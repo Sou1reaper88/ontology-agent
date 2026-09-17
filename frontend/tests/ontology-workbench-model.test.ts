@@ -4,6 +4,7 @@ import {
   workbenchStageSummary,
 } from "../src/features/ontology-package/workbenchModel";
 import { diagnosticDestination } from "../src/features/ontology-package/diagnosticRouting";
+import { isLatestRequest } from "../src/features/ontology-package/requestSequence";
 
 const overview = {
   counts: {
@@ -51,4 +52,13 @@ if (diagnosticDestination(["object-1", "field-1"], ["relation-1"]) !== "objects"
 }
 if (diagnosticDestination(["relation-1"], ["relation-1"]) !== "relations") {
   throw new Error("relation diagnostic must navigate to relations");
+}
+
+const firstRequest = 1;
+const secondRequest = 2;
+if (isLatestRequest(firstRequest, secondRequest)) {
+  throw new Error("an older feedback request must not commit state");
+}
+if (!isLatestRequest(secondRequest, secondRequest)) {
+  throw new Error("the latest feedback request must be allowed to commit state");
 }

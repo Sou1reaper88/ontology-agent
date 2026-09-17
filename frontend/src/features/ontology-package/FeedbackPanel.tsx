@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Card, Descriptions, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
 import { useNavigate } from "react-router-dom";
 import { apiErrorMessage, fetchFeedbackRecords } from "./api";
+import { isLatestRequest } from "./requestSequence";
 import type { FeedbackRecord } from "./types";
 
 type FeedbackFilter = "all" | FeedbackRecord["status"];
@@ -22,16 +23,26 @@ export default function FeedbackPanel() {
   const [records, setRecords] = useState<FeedbackRecord[]>([]);
   const [selected, setSelected] = useState<FeedbackRecord | null>(null);
   const [loading, setLoading] = useState(false);
+  const latestRequestId = useRef(0);
 
   useEffect(() => {
+    const requestId = latestRequestId.current + 1;
+    latestRequestId.current = requestId;
     const load = async () => {
       setLoading(true);
       try {
-        setRecords(await fetchFeedbackRecords(status === "all" ? undefined : status));
+        const nextRecords = await fetchFeedbackRecords(status === "all" ? undefined : status);
+        if (isLatestRequest(requestId, latestRequestId.current)) {
+          setRecords(nextRecords);
+        }
       } catch (error) {
-        message.error(apiErrorMessage(error, "反馈记录加载失败"));
+        if (isLatestRequest(requestId, latestRequestId.current)) {
+          message.error(apiErrorMessage(error, "反馈记录加载失败"));
+        }
       } finally {
-        setLoading(false);
+        if (isLatestRequest(requestId, latestRequestId.current)) {
+          setLoading(false);
+        }
       }
     };
     void load();
