@@ -12,7 +12,6 @@ import type {
   DraftDiagnostic,
   DraftObject,
   DraftRelation,
-  DraftTemporalPolicy,
 } from "./types";
 
 interface DiagnosticsPanelProps {
@@ -22,10 +21,9 @@ interface DiagnosticsPanelProps {
   dispositions: DiagnosticDisposition[];
   objects: DraftObject[];
   relations: DraftRelation[];
-  policies: DraftTemporalPolicy[];
   onChanged: () => Promise<void>;
   onConflict: () => Promise<void>;
-  onNavigate: (target: "objects" | "relations" | "temporal") => void;
+  onNavigate: (target: "objects" | "relations") => void;
 }
 
 const severityLabels = {
@@ -57,7 +55,6 @@ export default function DiagnosticsPanel({
   dispositions,
   objects,
   relations,
-  policies,
   onChanged,
   onConflict,
   onNavigate,
@@ -184,11 +181,7 @@ export default function DiagnosticsPanel({
                       onNavigate(
                         diagnosticDestination(
                           item.relatedIds,
-                          relations.map((relation) => relation.id),
-                          policies.map((policy) => ({
-                            objectId: policy.objectId,
-                            partitionFieldId: policy.partitionFieldId,
-                          }))
+                          relations.map((relation) => relation.id)
                         )
                       )
                     }

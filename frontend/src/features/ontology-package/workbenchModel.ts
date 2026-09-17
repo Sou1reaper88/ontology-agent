@@ -2,7 +2,7 @@ export type WorkbenchStage =
   | "import"
   | "objects"
   | "relations"
-  | "temporal"
+  | "feedback"
   | "diagnostics"
   | "versions";
 
@@ -13,14 +13,14 @@ export interface WorkbenchStageDefinition {
   description: string;
 }
 
-export const WORKBENCH_STAGES: readonly WorkbenchStageDefinition[] = [
+export const WORKBENCH_STAGES = [
   { key: "import", number: "01", title: "导入元数据", description: "载入对象与字段定义" },
   { key: "objects", number: "02", title: "对象与字段", description: "校准业务语义说明" },
   { key: "relations", number: "03", title: "关系", description: "确认跨对象关联路径" },
-  { key: "temporal", number: "04", title: "自动账期", description: "按表名识别分区与默认账期" },
+  { key: "feedback", number: "04", title: "反馈记录", description: "复盘已确认 SQL 与补充口径" },
   { key: "diagnostics", number: "05", title: "诊断", description: "处理质量与一致性问题" },
   { key: "versions", number: "06", title: "发布版本", description: "固化并切换活动版本" },
-];
+] as const;
 
 interface WorkbenchSummaryInput {
   counts: {
@@ -50,8 +50,8 @@ export function workbenchStageSummary(
       return `${counts.objects} 个对象 · ${counts.fields} 个字段`;
     case "relations":
       return `${counts.relations} 条已定义关系`;
-    case "temporal":
-      return `${counts.temporalPolicies} 项时间策略`;
+    case "feedback":
+      return "人工复盘 SQL 与口径";
     case "diagnostics": {
       const severityCount = (severity: string) =>
         overview.diagnostics.filter((item) => item.severity === severity).length;

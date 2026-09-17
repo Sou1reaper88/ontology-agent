@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Button,
   Drawer,
@@ -37,6 +37,8 @@ type SavedPrompt = { id: number; name: string; content: string };
 
 export default function Chat() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const linkedConversationId = Number(searchParams.get("conversation"));
   const screens = Grid.useBreakpoint();
   const desktopConversations = screens.lg ?? true;
   const desktopEvidence = screens.xl ?? true;
@@ -107,6 +109,19 @@ export default function Chat() {
   useEffect(() => {
     loadConversations();
   }, [loadConversations]);
+
+  useEffect(() => {
+    if (
+      Number.isInteger(linkedConversationId) &&
+      linkedConversationId > 0 &&
+      linkedConversationId !== activeId
+    ) {
+      setIsNewDraft(false);
+      setActiveId(linkedConversationId);
+      setSelectedEvidenceId(null);
+      void loadMessages(linkedConversationId);
+    }
+  }, [activeId, linkedConversationId, loadMessages]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: 99999, behavior: "smooth" });

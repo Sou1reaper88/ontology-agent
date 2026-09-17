@@ -22,7 +22,6 @@ const assetMetrics = [
   { key: "objects", label: "业务对象" },
   { key: "fields", label: "字段属性" },
   { key: "relations", label: "对象关系" },
-  { key: "temporalPolicies", label: "时间策略" },
 ] as const;
 
 export default function WorkbenchShell({

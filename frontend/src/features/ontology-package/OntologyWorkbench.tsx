@@ -3,11 +3,11 @@ import { Button, Empty, Spin, message } from "antd";
 import { useSearchParams } from "react-router-dom";
 import { apiErrorMessage, fetchVersions, fetchWorkspaceOverview } from "./api";
 import DiagnosticsPanel from "./DiagnosticsPanel";
+import FeedbackPanel from "./FeedbackPanel";
 import ImportPanel from "./ImportPanel";
 import ObjectDetailPanel from "./ObjectDetailPanel";
 import ObjectPanel from "./ObjectPanel";
 import RelationPanel from "./RelationPanel";
-import TemporalPanel from "./TemporalPanel";
 import VersionPanel from "./VersionPanel";
 import WorkbenchShell from "./WorkbenchShell";
 import type { VersionSummary, WorkspaceOverview } from "./types";
@@ -111,12 +111,7 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
         onConflict={handleConflict}
       />
     ),
-    temporal: (
-      <TemporalPanel
-        objects={overview.objects}
-        policies={overview.temporalPolicies}
-      />
-    ),
+    feedback: <FeedbackPanel />,
     diagnostics: (
       <DiagnosticsPanel
         workspaceId={workspaceId}
@@ -125,7 +120,6 @@ export default function OntologyWorkbench({ workspaceId }: OntologyWorkbenchProp
         dispositions={overview.dispositions}
         objects={overview.objects}
         relations={overview.relations}
-        policies={overview.temporalPolicies}
         onChanged={refreshWorkspace}
         onConflict={handleConflict}
         onNavigate={(target) => {

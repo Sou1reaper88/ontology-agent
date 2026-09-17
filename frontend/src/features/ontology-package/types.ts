@@ -72,6 +72,21 @@ export interface DiagnosticDisposition {
   resolvedAt: string;
 }
 
+export interface FeedbackRecord {
+  id: number;
+  conversationId: number;
+  messageId: number;
+  status: "correct" | "needs_revision";
+  requestText: string;
+  generatedSql: string;
+  note: string | null;
+  finalSql: string | null;
+  ontologyVersion: string | null;
+  username: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface VersionSummary {
   version: string;
   publishedAt: string;

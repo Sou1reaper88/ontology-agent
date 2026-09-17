@@ -9,6 +9,7 @@ import type {
   DraftRelation,
   DraftTemporalPolicy,
   DraftWriteResult,
+  FeedbackRecord,
   ImportPreview,
   VersionSummary,
   WorkspaceOverview,
@@ -89,6 +90,21 @@ interface ApiDiagnosticDisposition {
   note: string | null;
   actor: string;
   resolved_at: string;
+}
+
+interface ApiFeedbackRecord {
+  id: number;
+  conversation_id: number;
+  message_id: number;
+  status: FeedbackRecord["status"];
+  request_text: string | null;
+  generated_sql: string;
+  note: string | null;
+  final_sql: string | null;
+  ontology_version: string | null;
+  username: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface ApiVersionCounts {
@@ -285,6 +301,21 @@ const disposition = (value: ApiDiagnosticDisposition): DiagnosticDisposition => 
   resolvedAt: value.resolved_at,
 });
 
+const feedbackRecord = (value: ApiFeedbackRecord): FeedbackRecord => ({
+  id: value.id,
+  conversationId: value.conversation_id,
+  messageId: value.message_id,
+  status: value.status,
+  requestText: value.request_text ?? "",
+  generatedSql: value.generated_sql,
+  note: value.note,
+  finalSql: value.final_sql,
+  ontologyVersion: value.ontology_version,
+  username: value.username,
+  createdAt: value.created_at,
+  updatedAt: value.updated_at,
+});
+
 export const mapVersionSummary = (value: ApiVersionSummary): VersionSummary => ({
   version: value.version,
   publishedAt: value.published_at,
@@ -326,6 +357,15 @@ export async function fetchWorkspaceOverview(workspaceId: string): Promise<Works
     dispositions: data.dispositions.map(disposition),
     diagnostics: data.diagnostics.filter((item) => item.severity !== "warning").map(diagnostic),
   };
+}
+
+export async function fetchFeedbackRecords(
+  status?: FeedbackRecord["status"]
+): Promise<FeedbackRecord[]> {
+  const response = await client.get<ApiFeedbackRecord[]>("/feedback", {
+    params: status ? { status } : undefined,
+  });
+  return response.data.map(feedbackRecord);
 }
 
 export async function previewImport(
