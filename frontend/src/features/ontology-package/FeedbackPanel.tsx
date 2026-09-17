@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Card, Descriptions, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
 import { useNavigate } from "react-router-dom";
 import { apiErrorMessage, fetchFeedbackRecords } from "./api";
-import { isLatestRequest } from "./requestSequence";
+import { canOpenFeedbackConversation, isLatestRequest } from "./requestSequence";
 import type { FeedbackRecord } from "./types";
 
 type FeedbackFilter = "all" | FeedbackRecord["status"];
@@ -24,6 +24,7 @@ export default function FeedbackPanel() {
   const [selected, setSelected] = useState<FeedbackRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const latestRequestId = useRef(0);
+  const currentUsername = localStorage.getItem("username");
 
   useEffect(() => {
     const requestId = latestRequestId.current + 1;
@@ -128,7 +129,13 @@ export default function FeedbackPanel() {
         width={760}
         onCancel={() => setSelected(null)}
         footer={selected ? [
-          <Button key="conversation" type="primary" onClick={() => navigate(`/chat?conversation=${selected.conversationId}`)}>
+          <Button
+            key="conversation"
+            type="primary"
+            disabled={!canOpenFeedbackConversation(selected.username, currentUsername)}
+            title={selected.username === currentUsername ? undefined : "仅反馈人可查看完整会话"}
+            onClick={() => navigate(`/chat?conversation=${selected.conversationId}`)}
+          >
             查看原会话
           </Button>,
           <Button key="close" onClick={() => setSelected(null)}>

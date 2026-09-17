@@ -24,7 +24,10 @@ import { ConversationSidebar } from "../features/chat/ConversationSidebar";
 import { MessageTimeline } from "../features/chat/MessageTimeline";
 import { FeedbackIdentifier } from "../features/chat/FeedbackIdentifier";
 import { OntologyEvidencePanel } from "../features/chat/OntologyEvidencePanel";
-import { conversationDeepLinkToConsume } from "../features/chat/conversationDeepLink";
+import {
+  conversationDeepLinkToConsume,
+  isLatestConversationRequest,
+} from "../features/chat/conversationDeepLink";
 import { selectedEvidenceMessage } from "../features/chat/evidenceSelection";
 import type {
   ChatMessage,
@@ -41,6 +44,7 @@ export default function Chat() {
   const [searchParams] = useSearchParams();
   const linkedConversationId = Number(searchParams.get("conversation"));
   const consumedLinkedConversationId = useRef<number | null>(null);
+  const latestMessageRequestId = useRef(0);
   const screens = Grid.useBreakpoint();
   const desktopConversations = screens.lg ?? true;
   const desktopEvidence = screens.xl ?? true;
@@ -90,21 +94,30 @@ export default function Chat() {
   }, []);
 
   const loadMessages = useCallback(async (id: number) => {
+    const requestId = latestMessageRequestId.current + 1;
+    latestMessageRequestId.current = requestId;
     setLoadingMessages(true);
     try {
       const { data } = await client.get(`/conversations/${id}`);
-      setMessages(
-        (data.messages || []).map((item: any) => ({
-          ...item,
-          steps: item.trace || null,
-          generating: false,
-          error: null,
-        }))
-      );
+      if (isLatestConversationRequest(requestId, latestMessageRequestId.current)) {
+        setMessages(
+          (data.messages || []).map((item: any) => ({
+            ...item,
+            steps: item.trace || null,
+            generating: false,
+            error: null,
+          }))
+        );
+      }
     } catch (error: any) {
-      message.error(error.response?.data?.detail || "对话加载失败");
+      if (isLatestConversationRequest(requestId, latestMessageRequestId.current)) {
+        setMessages([]);
+        message.error(error.response?.data?.detail || "对话加载失败");
+      }
     } finally {
-      setLoadingMessages(false);
+      if (isLatestConversationRequest(requestId, latestMessageRequestId.current)) {
+        setLoadingMessages(false);
+      }
     }
   }, []);
 
@@ -140,6 +153,8 @@ export default function Chat() {
   };
 
   const newConversation = () => {
+    latestMessageRequestId.current += 1;
+    setLoadingMessages(false);
     setIsNewDraft(true);
     setActiveId(null);
     setMessages([]);

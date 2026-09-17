@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button, Input, Modal, message as toast } from "antd";
 import {
   deleteMessageFeedback,
+  feedbackRequestErrorMessage,
   feedbackValidationMessage,
   saveMessageFeedback,
 } from "./feedback";
@@ -23,7 +24,7 @@ export function MessageFeedbackControls({ message }: Props) {
   if (message.generating || !message.sql) return null;
 
   const requestError = (error: any) =>
-    error.response?.data?.detail || "反馈保存失败，请稍后重试";
+    feedbackRequestErrorMessage(error.response?.data?.detail);
 
   const saveCorrect = async () => {
     setSaving(true);
@@ -106,8 +107,14 @@ export function MessageFeedbackControls({ message }: Props) {
         okText="提交反馈"
         cancelText="取消"
         confirmLoading={saving}
+        cancelButtonProps={{ disabled: saving }}
+        closable={!saving}
+        keyboard={!saving}
+        maskClosable={!saving}
         onOk={() => void saveRevision()}
-        onCancel={() => setRevisionOpen(false)}
+        onCancel={() => {
+          if (!saving) setRevisionOpen(false);
+        }}
       >
         <label className="message-feedback-field">
           <span>问题说明或补充口径</span>

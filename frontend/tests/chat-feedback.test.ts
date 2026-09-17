@@ -1,8 +1,12 @@
 import {
   feedbackPath,
+  feedbackRequestErrorMessage,
   feedbackValidationMessage,
 } from "../src/features/chat/feedback";
-import { conversationDeepLinkToConsume } from "../src/features/chat/conversationDeepLink";
+import {
+  conversationDeepLinkToConsume,
+  isLatestConversationRequest,
+} from "../src/features/chat/conversationDeepLink";
 
 if (feedbackPath(27) !== "/feedback/messages/27") {
   throw new Error("feedback path must be message scoped");
@@ -25,4 +29,13 @@ if (conversationDeepLinkToConsume(27, 27) !== null) {
 }
 if (conversationDeepLinkToConsume(0, null) !== null) {
   throw new Error("an invalid conversation deep link must be ignored");
+}
+if (isLatestConversationRequest(1, 2)) {
+  throw new Error("an older conversation response must not commit state");
+}
+if (!isLatestConversationRequest(2, 2)) {
+  throw new Error("the latest conversation response must commit state");
+}
+if (feedbackRequestErrorMessage([{ msg: "字段无效" }]) !== "反馈保存失败，请稍后重试") {
+  throw new Error("structured API details must fall back to a renderable message");
 }

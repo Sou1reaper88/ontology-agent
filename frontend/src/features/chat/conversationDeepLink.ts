@@ -11,3 +11,10 @@ export function conversationDeepLinkToConsume(
   }
   return linkedConversationId;
 }
+
+export function isLatestConversationRequest(
+  requestId: number,
+  latestRequestId: number
+): boolean {
+  return requestId === latestRequestId;
+}

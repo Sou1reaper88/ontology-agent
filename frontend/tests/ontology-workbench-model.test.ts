@@ -4,7 +4,10 @@ import {
   workbenchStageSummary,
 } from "../src/features/ontology-package/workbenchModel";
 import { diagnosticDestination } from "../src/features/ontology-package/diagnosticRouting";
-import { isLatestRequest } from "../src/features/ontology-package/requestSequence";
+import {
+  canOpenFeedbackConversation,
+  isLatestRequest,
+} from "../src/features/ontology-package/requestSequence";
 
 const overview = {
   counts: {
@@ -61,4 +64,10 @@ if (isLatestRequest(firstRequest, secondRequest)) {
 }
 if (!isLatestRequest(secondRequest, secondRequest)) {
   throw new Error("the latest feedback request must be allowed to commit state");
+}
+if (!canOpenFeedbackConversation("admin", "admin")) {
+  throw new Error("feedback owners must be able to open their conversation");
+}
+if (canOpenFeedbackConversation("analyst", "admin")) {
+  throw new Error("maintainers must not open another user's full conversation");
 }

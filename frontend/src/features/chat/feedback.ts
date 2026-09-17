@@ -16,6 +16,11 @@ export const feedbackPath = (messageId: number) => `/feedback/messages/${message
 export const feedbackValidationMessage = (status: FeedbackStatus, note: string) =>
   status === "needs_revision" && !note.trim() ? "请填写问题说明或补充口径" : null;
 
+export const feedbackRequestErrorMessage = (detail: unknown): string =>
+  typeof detail === "string" && detail.trim()
+    ? detail
+    : "反馈保存失败，请稍后重试";
+
 export async function saveMessageFeedback(
   messageId: number,
   payload: { status: FeedbackStatus; note?: string; final_sql?: string }
