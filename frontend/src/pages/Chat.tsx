@@ -27,6 +27,7 @@ import { OntologyEvidencePanel } from "../features/chat/OntologyEvidencePanel";
 import {
   conversationDeepLinkToConsume,
   isLatestConversationRequest,
+  shouldApplyConversationUpdate,
 } from "../features/chat/conversationDeepLink";
 import { selectedEvidenceMessage } from "../features/chat/evidenceSelection";
 import type {
@@ -45,6 +46,7 @@ export default function Chat() {
   const linkedConversationId = Number(searchParams.get("conversation"));
   const consumedLinkedConversationId = useRef<number | null>(null);
   const latestMessageRequestId = useRef(0);
+  const activeConversationIdRef = useRef<number | null>(null);
   const screens = Grid.useBreakpoint();
   const desktopConversations = screens.lg ?? true;
   const desktopEvidence = screens.xl ?? true;
@@ -133,6 +135,7 @@ export default function Chat() {
     if (conversationId === null) return;
 
     consumedLinkedConversationId.current = conversationId;
+    activeConversationIdRef.current = conversationId;
     setIsNewDraft(false);
     setActiveId(conversationId);
     setSelectedEvidenceId(null);
@@ -144,6 +147,7 @@ export default function Chat() {
   }, [messages]);
 
   const openConversation = (id: number) => {
+    activeConversationIdRef.current = id;
     setIsNewDraft(false);
     setActiveId(id);
     setSelectedEvidenceId(null);
@@ -154,6 +158,7 @@ export default function Chat() {
 
   const newConversation = () => {
     latestMessageRequestId.current += 1;
+    activeConversationIdRef.current = null;
     setLoadingMessages(false);
     setIsNewDraft(true);
     setActiveId(null);
@@ -165,10 +170,18 @@ export default function Chat() {
 
   const pollMessage = (conversationId: number, messageId: number) => {
     const timer = window.setInterval(async () => {
+      if (!shouldApplyConversationUpdate(activeConversationIdRef.current, conversationId)) {
+        window.clearInterval(timer);
+        return;
+      }
       try {
         const { data } = await client.get(
           `/conversations/messages/${messageId}/status`
         );
+        if (!shouldApplyConversationUpdate(activeConversationIdRef.current, conversationId)) {
+          window.clearInterval(timer);
+          return;
+        }
         setMessages((previous) =>
           previous.map((item) =>
             item.id === messageId
@@ -186,7 +199,9 @@ export default function Chat() {
         if (data.status === "success") {
           window.clearInterval(timer);
           const detail = await client.get(`/conversations/${conversationId}`);
-          setMessages(detail.data.messages || []);
+          if (shouldApplyConversationUpdate(activeConversationIdRef.current, conversationId)) {
+            setMessages(detail.data.messages || []);
+          }
           loadConversations();
         } else if (data.status === "failed") {
           window.clearInterval(timer);
@@ -255,6 +270,7 @@ export default function Chat() {
         }
       );
       setSelectedPromptId(null);
+      activeConversationIdRef.current = conversationId;
       setActiveId(conversationId);
       setMessages((previous) => [
         ...previous,
@@ -336,6 +352,8 @@ export default function Chat() {
     try {
       await client.delete(`/conversations/${id}`);
       if (activeId === id) {
+        activeConversationIdRef.current = null;
+        latestMessageRequestId.current += 1;
         setActiveId(null);
         setMessages([]);
         setSelectedEvidenceId(null);
@@ -374,6 +392,8 @@ export default function Chat() {
 
   const afterDeleted = (ids: number[]) => {
     if (activeId != null && ids.includes(activeId)) {
+      activeConversationIdRef.current = null;
+      latestMessageRequestId.current += 1;
       setActiveId(null);
       setMessages([]);
       setSelectedEvidenceId(null);
@@ -405,6 +425,8 @@ export default function Chat() {
     try {
       const { data } = await client.post("/conversations/clear-all");
       message.success(`已清空 ${data.deleted} 个对话`);
+      activeConversationIdRef.current = null;
+      latestMessageRequestId.current += 1;
       setActiveId(null);
       setMessages([]);
       setSelectedEvidenceId(null);

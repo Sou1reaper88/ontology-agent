@@ -18,3 +18,10 @@ export function isLatestConversationRequest(
 ): boolean {
   return requestId === latestRequestId;
 }
+
+export function shouldApplyConversationUpdate(
+  activeConversationId: number | null,
+  responseConversationId: number
+): boolean {
+  return activeConversationId === responseConversationId;
+}

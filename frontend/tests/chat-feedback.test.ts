@@ -6,6 +6,7 @@ import {
 import {
   conversationDeepLinkToConsume,
   isLatestConversationRequest,
+  shouldApplyConversationUpdate,
 } from "../src/features/chat/conversationDeepLink";
 
 if (feedbackPath(27) !== "/feedback/messages/27") {
@@ -35,6 +36,12 @@ if (isLatestConversationRequest(1, 2)) {
 }
 if (!isLatestConversationRequest(2, 2)) {
   throw new Error("the latest conversation response must commit state");
+}
+if (shouldApplyConversationUpdate(28, 27)) {
+  throw new Error("an inactive conversation poll must not update the timeline");
+}
+if (!shouldApplyConversationUpdate(27, 27)) {
+  throw new Error("the active conversation poll must update the timeline");
 }
 if (feedbackRequestErrorMessage([{ msg: "字段无效" }]) !== "反馈保存失败，请稍后重试") {
   throw new Error("structured API details must fall back to a renderable message");
