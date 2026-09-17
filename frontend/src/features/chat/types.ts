@@ -1,3 +1,5 @@
+import type { MessageFeedback } from "./feedback";
+
 export interface TemporalEvidence {
   partition_field: string;
   grain: "day" | "month";
@@ -98,6 +100,7 @@ export interface ChatMessage {
   error: string | null;
   ontology_shadow: OntologyShadowResult | null;
   program: ProgramSummary | null;
+  feedback: MessageFeedback | null;
   created_at: string;
 }
 

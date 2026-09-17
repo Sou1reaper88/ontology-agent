@@ -742,6 +742,23 @@
   margin-top: 14px;
 }
 
+.message-feedback-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.message-feedback-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.message-feedback-error {
+  color: #843a33;
+}
+
 @media (max-width: 600px) {
   .message-timeline {
     padding-inline: 12px;

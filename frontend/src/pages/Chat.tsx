@@ -197,6 +197,7 @@ export default function Chat() {
         error: null,
         ontology_shadow: null,
         program: null,
+        feedback: null,
         created_at: "",
       },
     ]);
@@ -236,6 +237,7 @@ export default function Chat() {
           error: null,
           ontology_shadow: null,
           program: null,
+          feedback: null,
           created_at: "",
         },
       ]);

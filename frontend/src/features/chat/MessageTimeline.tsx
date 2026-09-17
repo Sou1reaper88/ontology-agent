@@ -12,6 +12,7 @@ import {
 } from "./messagePresentation";
 import { TraceSteps } from "./TraceSteps";
 import { FeedbackIdentifier } from "./FeedbackIdentifier";
+import { MessageFeedbackControls } from "./MessageFeedbackControls";
 import type { ChatMessage, EditingSql } from "./types";
 import "./chat-components.css";
 
@@ -241,6 +242,7 @@ export function MessageTimeline({
 
               <div className="assistant-actions">
                 <FeedbackIdentifier conversationId={conversationId} messageId={message.id} />
+                <MessageFeedbackControls message={message} />
                 {message.query_id && sqlPresentation.allowExecute ? (
                   <Button
                     size="small"
