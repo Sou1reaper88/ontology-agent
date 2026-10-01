@@ -47,6 +47,7 @@ export default function Chat() {
   const consumedLinkedConversationId = useRef<number | null>(null);
   const latestMessageRequestId = useRef(0);
   const activeConversationIdRef = useRef<number | null>(null);
+  const conversationContextVersionRef = useRef(0);
   const screens = Grid.useBreakpoint();
   const desktopConversations = screens.lg ?? true;
   const desktopEvidence = screens.xl ?? true;
@@ -135,6 +136,7 @@ export default function Chat() {
     if (conversationId === null) return;
 
     consumedLinkedConversationId.current = conversationId;
+    conversationContextVersionRef.current += 1;
     activeConversationIdRef.current = conversationId;
     setIsNewDraft(false);
     setActiveId(conversationId);
@@ -147,6 +149,7 @@ export default function Chat() {
   }, [messages]);
 
   const openConversation = (id: number) => {
+    conversationContextVersionRef.current += 1;
     activeConversationIdRef.current = id;
     setIsNewDraft(false);
     setActiveId(id);
@@ -157,6 +160,7 @@ export default function Chat() {
   };
 
   const newConversation = () => {
+    conversationContextVersionRef.current += 1;
     latestMessageRequestId.current += 1;
     activeConversationIdRef.current = null;
     setLoadingMessages(false);
@@ -228,13 +232,16 @@ export default function Chat() {
   const send = async () => {
     const content = input.trim();
     if (!content || sending) return;
+    const sendContextVersion = conversationContextVersionRef.current;
+    const optimisticMessageId = -Date.now();
+    const promptIdForSend = selectedPromptId;
 
     setSending(true);
     setInput("");
     setMessages((previous) => [
       ...previous,
       {
-        id: -Date.now(),
+        id: optimisticMessageId,
         role: "user",
         content,
         sql: null,
@@ -257,6 +264,15 @@ export default function Chat() {
           title: content.slice(0, 20),
         });
         conversationId = created.id;
+        if (
+          !isLatestConversationRequest(
+            sendContextVersion,
+            conversationContextVersionRef.current
+          )
+        ) {
+          void loadConversations();
+          return;
+        }
         setIsNewDraft(false);
       }
       if (!conversationId) throw new Error("对话未就绪");
@@ -266,10 +282,21 @@ export default function Chat() {
         {
           content,
           system_time: new Date().toISOString().slice(0, 10),
-          prompt_id: selectedPromptId,
+          prompt_id: promptIdForSend,
         }
       );
-      setSelectedPromptId(null);
+      setSelectedPromptId((current) =>
+        current === promptIdForSend ? null : current
+      );
+      if (
+        !isLatestConversationRequest(
+          sendContextVersion,
+          conversationContextVersionRef.current
+        )
+      ) {
+        void loadConversations();
+        return;
+      }
       activeConversationIdRef.current = conversationId;
       setActiveId(conversationId);
       setMessages((previous) => [
@@ -292,8 +319,17 @@ export default function Chat() {
       ]);
       pollMessage(conversationId, data.message_id);
     } catch (error: any) {
-      setMessages((previous) => previous.filter((item) => item.id > 0));
-      message.error(error.response?.data?.detail || "消息发送失败");
+      if (
+        isLatestConversationRequest(
+          sendContextVersion,
+          conversationContextVersionRef.current
+        )
+      ) {
+        setMessages((previous) =>
+          previous.filter((item) => item.id !== optimisticMessageId)
+        );
+        message.error(error.response?.data?.detail || "消息发送失败");
+      }
     } finally {
       setSending(false);
     }
@@ -352,6 +388,7 @@ export default function Chat() {
     try {
       await client.delete(`/conversations/${id}`);
       if (activeId === id) {
+        conversationContextVersionRef.current += 1;
         activeConversationIdRef.current = null;
         latestMessageRequestId.current += 1;
         setActiveId(null);
@@ -392,6 +429,7 @@ export default function Chat() {
 
   const afterDeleted = (ids: number[]) => {
     if (activeId != null && ids.includes(activeId)) {
+      conversationContextVersionRef.current += 1;
       activeConversationIdRef.current = null;
       latestMessageRequestId.current += 1;
       setActiveId(null);
@@ -425,6 +463,7 @@ export default function Chat() {
     try {
       const { data } = await client.post("/conversations/clear-all");
       message.success(`已清空 ${data.deleted} 个对话`);
+      conversationContextVersionRef.current += 1;
       activeConversationIdRef.current = null;
       latestMessageRequestId.current += 1;
       setActiveId(null);
