@@ -23,7 +23,7 @@ import {
   startEvaluation,
 } from "./api";
 import type { EvaluationRunSummary } from "./types";
-import { evaluationStatusPresentation, formatMetric, scoreLabel } from "./viewModel";
+import { evaluationEngineLabel, evaluationStatusPresentation, formatMetric, scoreLabel, showLegacyComparison } from "./viewModel";
 import "./evaluation.css";
 
 interface FormValues {
@@ -80,7 +80,7 @@ export default function EvaluationCenter() {
         render: (_: string, run: EvaluationRunSummary) => (
           <button className="evaluation-run-link" onClick={() => navigate(`/evaluation/${run.id}`)}>
             <strong>{run.name}</strong>
-            <span>{run.dialect.toUpperCase()} · 基准时间 {run.system_time}</span>
+            <span>{evaluationEngineLabel(run.summary)} · {run.dialect.toUpperCase()} · 基准时间 {run.system_time}</span>
           </button>
         ),
       },
@@ -106,9 +106,9 @@ export default function EvaluationCenter() {
           </div>
         ),
       },
-      { title: "Legacy 严格通过", width: 150, render: (_: unknown, run: EvaluationRunSummary) => metric(run, "legacy") },
-      { title: "本体严格通过", width: 150, render: (_: unknown, run: EvaluationRunSummary) => metric(run, "ontology") },
-      { title: "本体平均分", width: 120, render: (_: unknown, run: EvaluationRunSummary) => scoreLabel(run.summary?.ontology.average_score) },
+      { title: "历史 Legacy 严格通过", width: 170, render: (_: unknown, run: EvaluationRunSummary) => showLegacyComparison(run.summary) ? metric(run, "legacy") : "—" },
+      { title: "当前/本体严格通过", width: 170, render: (_: unknown, run: EvaluationRunSummary) => metric(run, "ontology") },
+      { title: "当前/本体平均分", width: 150, render: (_: unknown, run: EvaluationRunSummary) => scoreLabel(run.summary?.ontology?.average_score) },
       { title: "本体版本", width: 140, render: (_: unknown, run: EvaluationRunSummary) => run.package_version || "尚未锁定" },
     ],
     [navigate]
@@ -139,7 +139,7 @@ export default function EvaluationCenter() {
         <div>
           <span className="evaluation-eyebrow">EVALUATION CONTROL</span>
           <h1>SQL 评测中心</h1>
-          <p>用真实 SQL 建立可复现基线，定位本体、关系、口径与账期问题。</p>
+          <p>用真实 SQL 对比当前智能取数链路的输出，定位选表、字段、关系、口径与账期问题。</p>
         </div>
         <div className="evaluation-hero-note">
           <strong>静态结构评测</strong>
@@ -156,7 +156,7 @@ export default function EvaluationCenter() {
           <Alert
             type="info"
             showIcon
-            message="每条需求会调用一次现有智能体，可能产生模型额度消耗。"
+            message="每条需求会运行一次当前智能体，过程中可能产生多次模型调用与额度消耗；不会执行生成的 SQL。"
           />
           <Form<FormValues>
             form={form}
@@ -207,9 +207,9 @@ export default function EvaluationCenter() {
           <span className="evaluation-eyebrow">READ THE SIGNAL</span>
           <h2>先看生成率，再看正确率</h2>
           <ol>
-            <li><strong>本体生成率</strong><span>判断需求是否命中当前本体覆盖范围。</span></li>
+            <li><strong>SQL 交付率</strong><span>判断当前智能体能否交付通过校验的 SQL。</span></li>
             <li><strong>严格通过率</strong><span>六个关键结构维度必须全部一致。</span></li>
-            <li><strong>失败归因</strong><span>决定下一步补对象、字段、关系、账期还是编译器。</span></li>
+            <li><strong>失败归因</strong><span>定位选表、字段、关系、账期或脚本血缘问题；不确定时标记人工复核。</span></li>
           </ol>
         </Card>
       </div>

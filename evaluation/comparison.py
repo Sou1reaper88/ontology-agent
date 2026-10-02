@@ -169,7 +169,7 @@ def _unscorable(code: str) -> CandidateEvaluation:
         strict_pass=False,
         manual_review=True,
         dimensions=dimensions,
-        diagnosis_codes=(code, "manual_review_required"),
+        diagnosis_codes=tuple(dict.fromkeys((code, "manual_review_required"))),
     )
 
 
@@ -186,7 +186,12 @@ def compare_sql_structures(
     if candidate.status != "parsed" or not candidate.is_read_only:
         return _unscorable("candidate_parse_failed")
     if reference.warnings or candidate.warnings:
-        return _unscorable("manual_review_required")
+        reason = (
+            "unresolved_program_lineage"
+            if "unresolved_program_lineage" in (*reference.warnings, *candidate.warnings)
+            else "manual_review_required"
+        )
+        return _unscorable(reason)
 
     reference_predicates, reference_partition = _partitioned_predicates(
         reference, partition_fields

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from evaluation.comparison import compare_sql_structures, summarize_candidate_results
-from evaluation.sql_structure import extract_sql_structure
+from evaluation.sql_structure import extract_evaluable_structure, extract_sql_structure
 
 
 def structure(sql: str):
@@ -132,3 +132,20 @@ def test_empty_summary_uses_none_instead_of_false_zero_percent() -> None:
     assert summary.average_score is None
     assert summary.strict_pass.rate is None
     assert summary.manual_review.rate is None
+
+
+def test_unknown_program_lineage_has_actionable_manual_review_diagnosis() -> None:
+    result = compare_sql_structures(
+        structure("SELECT ID FROM USER_D"),
+        extract_evaluable_structure(
+            "CREATE TABLE temp_oa_a_base AS SELECT ID + 1 AS ID FROM USER_D; "
+            "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM temp_oa_a_base",
+            "hive",
+        ),
+    )
+
+    assert result.score is None
+    assert result.diagnosis_codes == (
+        "unresolved_program_lineage",
+        "manual_review_required",
+    )

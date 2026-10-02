@@ -14,13 +14,14 @@ export interface CandidateSummary {
 }
 
 export interface EvaluationSummary {
-  legacy: CandidateSummary;
-  ontology: CandidateSummary;
-  ontology_generation: MetricCount;
-  ontology_no_match: MetricCount;
+  engine?: "conversation-v1";
+  legacy?: CandidateSummary;
+  ontology?: CandidateSummary;
+  ontology_generation?: MetricCount;
+  ontology_no_match?: MetricCount;
   diagnoses?: {
-    legacy: Record<string, number>;
-    ontology: Record<string, number>;
+    legacy?: Record<string, number>;
+    ontology?: Record<string, number>;
   };
 }
 

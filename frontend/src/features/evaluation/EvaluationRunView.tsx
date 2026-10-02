@@ -36,10 +36,12 @@ import type {
 import {
   caseQueryParams,
   dimensionDifferenceLabel,
+  evaluationEngineLabel,
   evaluationStatusPresentation,
   formatMetric,
   primaryDiagnosisPresentation,
   scoreLabel,
+  showLegacyComparison,
 } from "./viewModel";
 
 const DIMENSIONS = [
@@ -107,8 +109,9 @@ function DimensionDetails({ comparison }: { comparison: CandidateEvaluation | nu
   );
 }
 
-function CaseDrawer({ runId, detail, onClose }: { runId: number; detail: EvaluationCaseDetail | null; onClose: () => void }) {
+function CaseDrawer({ runId, detail, onClose, showLegacy }: { runId: number; detail: EvaluationCaseDetail | null; onClose: () => void; showLegacy: boolean }) {
   const diagnosis = primaryDiagnosisPresentation(detail?.primary_diagnosis);
+  const resultLabel = showLegacy ? "本体" : "当前智能取数";
   return (
     <Drawer
       title={detail ? `案例 #${detail.case_number}` : "案例详情"}
@@ -124,23 +127,23 @@ function CaseDrawer({ runId, detail, onClose }: { runId: number; detail: Evaluat
           </section>
           <Descriptions size="small" column={{ xs: 1, md: 3 }} bordered>
             <Descriptions.Item label="需求原文" span={3}>{detail.requirement}</Descriptions.Item>
-            <Descriptions.Item label="Legacy 得分">{scoreLabel(detail.legacy_score)}</Descriptions.Item>
-            <Descriptions.Item label="本体得分">{scoreLabel(detail.ontology_score)}</Descriptions.Item>
-            <Descriptions.Item label="本体状态">{detail.ontology_status || "—"}</Descriptions.Item>
+            {showLegacy ? <Descriptions.Item label="Legacy 得分">{scoreLabel(detail.legacy_score)}</Descriptions.Item> : null}
+            <Descriptions.Item label={`${resultLabel}得分`}>{scoreLabel(detail.ontology_score)}</Descriptions.Item>
+            <Descriptions.Item label={`${resultLabel}状态`}>{detail.ontology_status || "—"}</Descriptions.Item>
           </Descriptions>
           <Tabs
             className="evaluation-sql-tabs"
             items={[
               { key: "reference", label: "真实 SQL", children: <SqlPanel title="真实 SQL" sql={detail.reference_sql} /> },
-              { key: "legacy", label: "Legacy SQL", children: <SqlPanel title="Legacy SQL" sql={detail.legacy_sql} /> },
-              { key: "ontology", label: "本体 SQL", children: <SqlPanel title="本体 SQL" sql={detail.ontology_sql} /> },
+              ...(showLegacy ? [{ key: "legacy", label: "Legacy SQL", children: <SqlPanel title="Legacy SQL" sql={detail.legacy_sql} /> }] : []),
+              { key: "ontology", label: `${resultLabel} SQL`, children: <SqlPanel title={`${resultLabel} SQL`} sql={detail.ontology_sql} /> },
             ]}
           />
           <div className="evaluation-comparison-grid">
-            <Card title="Legacy 结构差异" size="small"><DimensionDetails comparison={detail.legacy_comparison} /></Card>
-            <Card title="本体结构差异" size="small"><DimensionDetails comparison={detail.ontology_comparison} /></Card>
+            {showLegacy ? <Card title="Legacy 结构差异" size="small"><DimensionDetails comparison={detail.legacy_comparison} /></Card> : null}
+            <Card title={`${resultLabel}结构差异`} size="small"><DimensionDetails comparison={detail.ontology_comparison} /></Card>
           </div>
-          <Card title="本体依据与时间决策" size="small">
+          <Card title={`${resultLabel}依据与时间决策`} size="small">
             <pre className="evaluation-json-evidence">{JSON.stringify({ evidence: detail.ontology_evidence, temporal_decisions: detail.temporal_decisions }, null, 2)}</pre>
           </Card>
         </div>
@@ -187,11 +190,13 @@ export default function EvaluationRunView({ runId }: { runId: number }) {
   if (loading && !run) return <Spin size="large" style={{ display: "block", margin: "100px auto" }} />;
   if (!run) return <Empty description="评测任务不存在或无权访问" />;
   const status = evaluationStatusPresentation(run.status);
+  const showLegacy = showLegacyComparison(run.summary);
+  const resultLabel = showLegacy ? "本体" : "当前智能取数";
   const progress = run.total_cases ? Math.round((run.processed_cases / run.total_cases) * 100) : 0;
 
   const remove = () => Modal.confirm({
     title: "删除评测任务？",
-    content: "会同时删除需求原文、真实 SQL、Legacy SQL 和本体 SQL，且无法恢复。",
+    content: `会同时删除需求原文、真实 SQL${showLegacy ? "、Legacy SQL" : ""} 和${resultLabel} SQL，且无法恢复。`,
     okText: "确认删除",
     okButtonProps: { danger: true },
     cancelText: "取消",
@@ -203,9 +208,9 @@ export default function EvaluationRunView({ runId }: { runId: number }) {
 
   const columns = [
     { title: "案例", dataIndex: "case_number", width: 80, render: (value: number) => `#${value}` },
-    { title: "Legacy", width: 130, render: (_: unknown, item: EvaluationCaseSummary) => <span>{scoreLabel(item.legacy_score)} {item.legacy_strict_pass ? <Tag color="success">通过</Tag> : null}</span> },
-    { title: "本体状态", dataIndex: "ontology_status", width: 140, render: (value: string | null) => value || "未运行" },
-    { title: "本体", width: 130, render: (_: unknown, item: EvaluationCaseSummary) => <span>{scoreLabel(item.ontology_score)} {item.ontology_strict_pass ? <Tag color="success">通过</Tag> : null}</span> },
+    ...(showLegacy ? [{ title: "Legacy", width: 130, render: (_: unknown, item: EvaluationCaseSummary) => <span>{scoreLabel(item.legacy_score)} {item.legacy_strict_pass ? <Tag color="success">通过</Tag> : null}</span> }] : []),
+    { title: `${resultLabel}状态`, dataIndex: "ontology_status", width: 140, render: (value: string | null) => value || "未运行" },
+    { title: resultLabel, width: 130, render: (_: unknown, item: EvaluationCaseSummary) => <span>{scoreLabel(item.ontology_score)} {item.ontology_strict_pass ? <Tag color="success">通过</Tag> : null}</span> },
     { title: "主失败原因", render: (_: unknown, item: EvaluationCaseSummary) => primaryDiagnosisPresentation(item.primary_diagnosis).label },
     { title: "复核", width: 90, render: (_: unknown, item: EvaluationCaseSummary) => item.manual_review ? <Tag>人工复核</Tag> : "—" },
     { title: "耗时", dataIndex: "duration_ms", width: 90, render: (value: number | null) => value === null ? "—" : `${value} ms` },
@@ -220,17 +225,17 @@ export default function EvaluationRunView({ runId }: { runId: number }) {
       <header className="evaluation-run-hero">
         <Button className="evaluation-back" type="text" onClick={() => navigate("/evaluation")}>← 返回评测任务</Button>
         <div className="evaluation-run-title">
-          <div><span className="evaluation-eyebrow">EVALUATION RUN #{run.id}</span><h1>{run.name}</h1><p>{run.dialect.toUpperCase()} · 基准时间 {run.system_time} · 本体版本 {run.package_version || "尚未锁定"}</p></div>
+          <div><span className="evaluation-eyebrow">EVALUATION RUN #{run.id}</span><h1>{run.name}</h1><p>{evaluationEngineLabel(run.summary)} · {run.dialect.toUpperCase()} · 基准时间 {run.system_time} · 本体版本 {run.package_version || "尚未锁定"}</p></div>
           <Space><Tag data-tone={status.tone}>{status.label}</Tag><Button danger onClick={remove}>删除任务</Button></Space>
         </div>
         <div className="evaluation-run-progress"><Progress percent={progress} showInfo={false} /><span>{run.processed_cases}/{run.total_cases} 条案例</span></div>
       </header>
 
       <div className="evaluation-metric-grid">
-        <MetricCard label="本体生成率" metric={run.summary?.ontology_generation} />
-        <MetricCard label="Legacy 严格通过" metric={run.summary?.legacy.strict_pass} />
-        <MetricCard label="本体严格通过" metric={run.summary?.ontology.strict_pass} />
-        <article className="evaluation-metric-card"><span>本体平均分</span><strong>{scoreLabel(run.summary?.ontology.average_score)}</strong></article>
+        <MetricCard label={showLegacy ? "本体生成率" : "SQL 交付率"} metric={run.summary?.ontology_generation} />
+        {showLegacy ? <MetricCard label="Legacy 严格通过" metric={run.summary?.legacy?.strict_pass} /> : null}
+        <MetricCard label={`${resultLabel}严格通过`} metric={run.summary?.ontology?.strict_pass} />
+        <article className="evaluation-metric-card"><span>{resultLabel}平均分</span><strong>{scoreLabel(run.summary?.ontology?.average_score)}</strong></article>
       </div>
 
       <div className="evaluation-analysis-grid">
@@ -239,15 +244,15 @@ export default function EvaluationRunView({ runId }: { runId: number }) {
             rowKey="key"
             size="small"
             pagination={false}
-            dataSource={DIMENSIONS.map(([key, label]) => ({ key, label, legacy: run.summary?.legacy.dimensions[key], ontology: run.summary?.ontology.dimensions[key] }))}
+            dataSource={DIMENSIONS.map(([key, label]) => ({ key, label, legacy: run.summary?.legacy?.dimensions?.[key], ontology: run.summary?.ontology?.dimensions?.[key] }))}
             columns={[
               { title: "维度", dataIndex: "label" },
-              { title: "Legacy", dataIndex: "legacy", render: (value?: MetricCount) => value ? formatMetric(value.numerator, value.denominator) : "—" },
-              { title: "本体", dataIndex: "ontology", render: (value?: MetricCount) => value ? formatMetric(value.numerator, value.denominator) : "—" },
+              ...(showLegacy ? [{ title: "Legacy", dataIndex: "legacy", render: (value?: MetricCount) => value ? formatMetric(value.numerator, value.denominator) : "—" }] : []),
+              { title: resultLabel, dataIndex: "ontology", render: (value?: MetricCount) => value ? formatMetric(value.numerator, value.denominator) : "—" },
             ]}
           />
         </Card>
-        <Card title="本体失败分布" bordered={false}>
+        <Card title={`${resultLabel}失败分布`} bordered={false}>
           {diagnosisRows.length ? <div className="evaluation-diagnosis-list">{diagnosisRows.map(([code, count]) => {
             const item = primaryDiagnosisPresentation(code); const percent = run.total_cases ? Math.round((count / run.total_cases) * 100) : 0;
             return <article key={code}><div><strong>{item.label}</strong><span>{count} 条</span></div><Progress percent={percent} showInfo={false} size="small" /></article>;
@@ -259,16 +264,16 @@ export default function EvaluationRunView({ runId }: { runId: number }) {
         <div className="evaluation-case-toolbar">
           <div><span className="evaluation-eyebrow">CASE EXPLORER</span><h2>案例明细</h2></div>
           <Space wrap>
-            <Select value={filters.path} style={{ width: 120 }} onChange={(path) => setFilters((old) => ({ ...old, path, page: 1 }))} options={[{ label: "本体路径", value: "ontology" }, { label: "Legacy 路径", value: "legacy" }]} />
+            {showLegacy ? <Select value={filters.path} style={{ width: 120 }} onChange={(path) => setFilters((old) => ({ ...old, path, page: 1 }))} options={[{ label: "本体路径", value: "ontology" }, { label: "Legacy 路径", value: "legacy" }]} /> : null}
             <Select allowClear placeholder="严格通过" style={{ width: 125 }} onChange={(strictPass) => setFilters((old) => ({ ...old, strictPass, page: 1 }))} options={[{ label: "通过", value: true }, { label: "未通过", value: false }]} />
-            <Select allowClear placeholder="本体状态" style={{ width: 150 }} onChange={(ontologyStatus) => setFilters((old) => ({ ...old, ontologyStatus, page: 1 }))} options={["generated", "no_match", "ambiguous", "unsupported", "unavailable"].map((value) => ({ label: value, value }))} />
+            <Select allowClear placeholder={`${resultLabel}状态`} style={{ width: 150 }} onChange={(ontologyStatus) => setFilters((old) => ({ ...old, ontologyStatus, page: 1 }))} options={["generated", "no_match", "ambiguous", "unsupported", "unavailable"].map((value) => ({ label: value, value }))} />
             <Select allowClear placeholder="人工复核" style={{ width: 130 }} onChange={(manualReview) => setFilters((old) => ({ ...old, manualReview, page: 1 }))} options={[{ label: "需要复核", value: true }, { label: "无需复核", value: false }]} />
           </Space>
         </div>
         <Table rowKey="id" columns={columns} dataSource={cases} pagination={false} scroll={{ x: 980 }} locale={{ emptyText: "没有符合条件的案例" }} />
         <Pagination current={filters.page} pageSize={filters.pageSize} total={total} showSizeChanger onChange={(page, pageSize) => setFilters((old) => ({ ...old, page, pageSize }))} />
       </Card>
-      <CaseDrawer runId={runId} detail={detail} onClose={() => setDetail(null)} />
+      <CaseDrawer runId={runId} detail={detail} onClose={() => setDetail(null)} showLegacy={showLegacy} />
     </section>
   );
 }

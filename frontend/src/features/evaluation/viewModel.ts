@@ -15,6 +15,14 @@ export function scoreLabel(score: number | null | undefined): string {
   return score === null || score === undefined ? "不可评分" : `${score} 分`;
 }
 
+export function evaluationEngineLabel(summary: EvaluationSummary | null | undefined): string {
+  return summary?.engine === "conversation-v1" ? "当前智能取数链路" : "历史评测";
+}
+
+export function showLegacyComparison(summary: EvaluationSummary | null | undefined): boolean {
+  return summary?.engine !== "conversation-v1";
+}
+
 export function caseQueryParams(filters: EvaluationCaseFilters): Record<string, string | number | boolean> {
   const params: Record<string, string | number | boolean> = {
     path: filters.path,
@@ -45,6 +53,16 @@ export function evaluationStatusPresentation(status: string): Presentation {
 }
 
 const DIAGNOSES: Record<string, Presentation> = {
+  draft_not_deliverable: {
+    label: "SQL 草稿未通过交付校验",
+    description: "模型曾产出 SQL 草稿，但未通过最终交付校验；草稿不计作有效 SQL，需要检查案例详情。",
+    tone: "warning",
+  },
+  unresolved_program_lineage: {
+    label: "多步脚本血缘需人工复核",
+    description: "临时表与最终结果的字段来源无法可靠追踪，本案例不按零分处理。",
+    tone: "warning",
+  },
   ontology_no_match: {
     label: "对象概念未命中",
     description: "需求中的业务对象尚未被当前本体识别，优先补充对象名称、别名和描述。",
@@ -113,4 +131,4 @@ export function primaryDiagnosisPresentation(code: string | null | undefined): P
   }
   return DIAGNOSES[code] || { label: code, description: "查看案例结构差异。", tone: "neutral" };
 }
-import type { EvaluationCaseFilters } from "./types";
+import type { EvaluationCaseFilters, EvaluationSummary } from "./types";

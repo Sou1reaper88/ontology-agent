@@ -3,6 +3,8 @@ import {
   caseQueryParams,
   dimensionDifferenceLabel,
   evaluationStatusPresentation,
+  evaluationEngineLabel,
+  showLegacyComparison,
   formatMetric,
   primaryDiagnosisPresentation,
   scoreLabel,
@@ -51,4 +53,19 @@ if (
 }
 if (dimensionDifferenceLabel("missing") !== "缺失") {
   throw new Error("dimension differences must use clear Chinese labels");
+}
+if (evaluationEngineLabel({ engine: "conversation-v1" }) !== "当前智能取数链路") {
+  throw new Error("new runs must identify the current agent");
+}
+if (showLegacyComparison({ engine: "conversation-v1" })) {
+  throw new Error("new runs must not show meaningless Legacy scores");
+}
+if (!showLegacyComparison(null) || evaluationEngineLabel(null) !== "历史评测") {
+  throw new Error("historical runs must keep their prior presentation");
+}
+if (primaryDiagnosisPresentation("draft_not_deliverable").label !== "SQL 草稿未通过交付校验") {
+  throw new Error("invalid draft must be explained");
+}
+if (primaryDiagnosisPresentation("unresolved_program_lineage").label !== "多步脚本血缘需人工复核") {
+  throw new Error("uncertain lineage must be explained");
 }
