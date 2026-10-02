@@ -363,3 +363,150 @@ def extract_sql_structure(sql: str, dialect: str) -> SqlStructure:
         has_subquery=any(True for _ in statement.find_all(exp.Subquery)),
         warnings=warnings,
     )
+
+
+def extract_evaluable_structure(sql: str, dialect: str) -> SqlStructure:
+    """Compare SELECT semantics of a query or reachable CTAS steps; never run the script."""
+    try:
+        statements = [item for item in parse(sql, read=dialect) if item is not None]
+    except (ParseError, SqlglotError, TypeError, ValueError):
+        return _failed("unparsed", "sql_parse_failed")
+    if len(statements) == 1 and isinstance(statements[0], exp.Query):
+        result = extract_sql_structure(sql, dialect)
+        warnings = set(result.warnings) | _query_warnings(statements[0], dialect)
+        return result.model_copy(update={"warnings": tuple(sorted(warnings))})
+    if not statements:
+        return _failed("unsupported", "unsupported_program")
+
+    creates: dict[str, exp.Query] = {}
+    pending_drop: str | None = None
+    final_query: exp.Query | None = None
+    for index, statement in enumerate(statements):
+        if isinstance(statement, exp.Drop) and isinstance(statement.this, exp.Table):
+            if pending_drop is not None:
+                return _failed("unsupported", "unsupported_program")
+            pending_drop = _table_name(statement.this)
+            continue
+        if isinstance(statement, exp.Create) and isinstance(statement.this, exp.Table):
+            target = _table_name(statement.this)
+            query = statement.args.get("expression")
+            if (not isinstance(query, exp.Query) or not target or target in creates
+                    or (pending_drop is not None and pending_drop != target)):
+                return _failed("unsupported", "unsupported_program")
+            creates[target] = query
+            pending_drop = None
+            continue
+        if isinstance(statement, exp.Query) and index == len(statements) - 1:
+            final_query = statement
+            continue
+        return _failed("unsupported", "unsupported_program")
+    if pending_drop or not creates:
+        return _failed("unsupported", "unsupported_program")
+    final_query = final_query or next(reversed(creates.values()))
+
+    structures: list[SqlStructure] = []
+    mappings: dict[str, dict[str, str | None]] = {}
+    reached: set[str] = set()
+    active: set[str] = set()
+    warnings: set[str] = set()
+    positions = {name: index for index, name in enumerate(creates)}
+
+    def analyze(query: exp.Query, target: str | None = None) -> SqlStructure:
+        if target is not None:
+            active.add(target)
+        if not isinstance(query, exp.Select):
+            warnings.add("unresolved_program_lineage")
+        for table in query.find_all(exp.Table):
+            source = _table_name(table)
+            if source in creates and source not in reached:
+                if source in active or (target is not None and positions[source] >= positions[target]):
+                    warnings.add("unresolved_program_lineage")
+                else:
+                    analyze(creates[source], source)
+            elif source.startswith("temp_oa_") and source not in creates:
+                warnings.add("unresolved_program_lineage")
+        result = extract_sql_structure(query.sql(dialect=dialect), dialect)
+        if result.status != "parsed":
+            warnings.add("unresolved_program_lineage")
+        warnings.update(result.warnings)
+        warnings.update(_query_warnings(query, dialect))
+        aliases, tables, _ = _canonical_context(query)
+
+        def resolve(column: exp.Column) -> str | None:
+            value = _canonical_expression(column, aliases=aliases, physical_tables=tables, dialect=dialect)
+            source, _, field = value.rpartition(".")
+            if source in creates:
+                return mappings.get(source, {}).get(field)
+            return value if source else None
+
+        if target is not None:
+            outputs: dict[str, str | None] = {}
+            select = _first_select(query)
+            for item in select.expressions if select is not None else ():
+                expression = _projection_expression(item)
+                name = _identifier(item.alias_or_name)
+                outputs[name] = resolve(expression) if isinstance(expression, exp.Column) else None
+            mappings[target] = outputs
+            reached.add(target)
+            active.remove(target)
+        structures.append(result)
+        return result
+
+    final = analyze(final_query)
+    if final.status != "parsed":
+        return _failed("unsupported", "unresolved_program_lineage")
+    aliases, tables, _ = _canonical_context(final_query)
+    select = _first_select(final_query)
+    projections: list[str] = []
+    for item in select.expressions if select is not None else ():
+        expression = _projection_expression(item)
+        value = _canonical_expression(expression, aliases=aliases, physical_tables=tables, dialect=dialect)
+        source, _, field = value.rpartition(".")
+        if source in creates:
+            mapped = mappings.get(source, {}).get(field) if isinstance(expression, exp.Column) else None
+            if mapped is None:
+                warnings.add("unresolved_program_lineage")
+            else:
+                value = mapped
+        projections.append(value)
+
+    predicates: set[PredicateSignature] = set()
+    joins: set[JoinSignature] = set()
+    for structure in structures:
+        for predicate in (*structure.predicates, *structure.having):
+            source, _, field = predicate.field.rpartition(".")
+            if source in creates:
+                mapped = mappings.get(source, {}).get(field)
+                if mapped is None:
+                    warnings.add("unresolved_program_lineage")
+                    continue
+                predicate = predicate.model_copy(update={"field": mapped})
+            predicates.add(predicate)
+        for join in structure.joins:
+            if join.left in creates or join.right in creates:
+                warnings.add("unresolved_program_lineage")
+            else:
+                joins.add(join)
+    physical_tables = tuple(sorted({
+        name for structure in structures for name in structure.tables if name not in creates
+    }))
+    return final.model_copy(update={
+        "tables": physical_tables,
+        "projections": tuple(sorted(projections)),
+        "joins": tuple(sorted(joins, key=lambda item: (item.left, item.right, item.join_type))),
+        "predicates": tuple(sorted(predicates, key=lambda item: (item.field, item.operator, item.values))),
+        "warnings": tuple(sorted(warnings)),
+    })
+
+
+def _query_warnings(query: exp.Query, dialect: str) -> set[str]:
+    """Flag query constructs the current six-dimension extractor cannot safely summarize."""
+    if not isinstance(query, exp.Select) or len(list(query.find_all(exp.Select))) != 1:
+        return {"unresolved_query_shape"}
+    aliases, tables, _ = _canonical_context(query)
+    for clause in (query.args.get("where"), query.args.get("having")):
+        expression = clause.this if isinstance(clause, (exp.Where, exp.Having)) else clause
+        for item in _flatten_and(expression):
+            if _predicate(item, aliases=aliases, physical_tables=tables, dialect=dialect) is None:
+                return {"unresolved_query_shape"}
+    return set()

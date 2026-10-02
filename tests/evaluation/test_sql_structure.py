@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from evaluation.contracts import PredicateSignature
+from evaluation import sql_structure
 from evaluation.sql_structure import extract_sql_structure
 
 
@@ -88,3 +89,114 @@ def test_invalid_sql_is_unparsed_without_raw_sql_in_warning() -> None:
     assert structure.is_read_only is False
     assert structure.warnings == ("sql_parse_failed",)
     assert "confidential" not in str(structure).casefold()
+
+
+def test_ctas_program_matches_equivalent_query_without_temp_name() -> None:
+    reference = sql_structure.extract_evaluable_structure(
+        "SELECT ID FROM USER_D WHERE P_DAY='20260822'", "hive"
+    )
+    generated = sql_structure.extract_evaluable_structure(
+        "DROP TABLE IF EXISTS temp_oa_a_result_table; "
+        "CREATE TABLE temp_oa_a_result_table AS "
+        "SELECT ID FROM USER_D WHERE P_DAY='20260822'",
+        "hive",
+    )
+
+    assert generated == reference
+
+
+def test_two_step_ctas_traces_base_table_and_ignores_temp_name() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "DROP TABLE IF EXISTS temp_oa_a_base; "
+        "CREATE TABLE temp_oa_a_base AS "
+        "SELECT ID FROM USER_D WHERE P_DAY='20260822'; "
+        "DROP TABLE IF EXISTS temp_oa_a_result_table; "
+        "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM temp_oa_a_base",
+        "hive",
+    )
+
+    assert structure.status == "parsed"
+    assert structure.tables == ("user_d",)
+    assert structure.projections == ("user_d.id",)
+    assert structure.predicates == (
+        PredicateSignature(field="user_d.p_day", operator="=", values=("20260822",)),
+    )
+    assert structure.warnings == ()
+
+
+def test_unrelated_staging_table_does_not_change_final_result() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "CREATE TABLE temp_oa_a_unused AS SELECT ID FROM SECRET_D; "
+        "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM USER_D",
+        "hive",
+    )
+
+    assert structure.tables == ("user_d",)
+
+
+def test_unknown_intermediate_expression_requires_manual_review() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "CREATE TABLE temp_oa_a_base AS SELECT ID + 1 AS ID FROM USER_D; "
+        "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM temp_oa_a_base",
+        "hive",
+    )
+
+    assert structure.warnings == ("unresolved_program_lineage",)
+
+
+def test_non_ctas_write_is_not_scored() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "INSERT INTO TARGET SELECT ID FROM USER_D", "hive"
+    )
+
+    assert structure.status == "unsupported"
+    assert structure.is_read_only is False
+
+
+def test_forward_temp_dependency_cannot_receive_a_score() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "CREATE TABLE temp_oa_a_base AS SELECT ID FROM temp_oa_a_later; "
+        "CREATE TABLE temp_oa_a_later AS SELECT ID FROM USER_D; "
+        "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM temp_oa_a_base",
+        "hive",
+    )
+
+    assert "unresolved_program_lineage" in structure.warnings
+
+
+def test_cycle_in_temp_dependency_is_unscorable() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "CREATE TABLE temp_oa_a_base AS SELECT ID FROM temp_oa_a_later; "
+        "CREATE TABLE temp_oa_a_later AS SELECT ID FROM temp_oa_a_base; "
+        "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM temp_oa_a_base",
+        "hive",
+    )
+
+    assert "unresolved_program_lineage" in structure.warnings
+
+
+def test_computed_projection_using_temp_column_requires_review() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "CREATE TABLE temp_oa_a_base AS SELECT ID FROM USER_D; "
+        "CREATE TABLE temp_oa_a_result_table AS SELECT ID + 1 AS ID FROM temp_oa_a_base",
+        "hive",
+    )
+
+    assert "unresolved_program_lineage" in structure.warnings
+
+
+def test_or_predicate_is_not_silently_ignored() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "SELECT ID FROM USER_D WHERE P_DAY='20260822' OR P_DAY='20260821'",
+        "hive",
+    )
+
+    assert structure.warnings
+
+
+def test_union_is_not_scored_using_only_first_select() -> None:
+    structure = sql_structure.extract_evaluable_structure(
+        "SELECT ID FROM USER_D UNION ALL SELECT ID FROM ORDER_D", "hive"
+    )
+
+    assert structure.warnings

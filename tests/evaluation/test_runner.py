@@ -237,3 +237,66 @@ def test_running_pending_historical_task_marks_current_engine() -> None:
         run = session.get(EvaluationRun, run_id)
         assert run is not None
         assert run.summary["engine"] == "conversation-v1"
+
+
+def test_runner_scores_equivalent_multistep_ctas_without_temp_name_bias() -> None:
+    factory = session_factory()
+    run_id = add_run(factory, count=1)
+    with factory() as session:
+        run = session.get(EvaluationRun, run_id)
+        run.cases[0].reference_sql = (
+            "CREATE TABLE work_a AS SELECT ID FROM USER_D WHERE P_DAY='20260822'; "
+            "CREATE TABLE output_a AS SELECT ID FROM work_a"
+        )
+        session.commit()
+    generated = snapshot(
+        legacy_sql="",
+        ontology_sql=(
+            "DROP TABLE IF EXISTS temp_oa_a_base; "
+            "CREATE TABLE temp_oa_a_base AS SELECT ID FROM USER_D WHERE P_DAY='20260822'; "
+            "DROP TABLE IF EXISTS temp_oa_a_result_table; "
+            "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM temp_oa_a_base"
+        ),
+    )
+
+    EvaluationRunner(factory, adapter=FakeAdapter([generated])).run(run_id)
+
+    with factory() as session:
+        case = session.get(EvaluationRun, run_id).cases[0]
+        assert case.ontology_comparison["score"] == 100
+        assert case.ontology_comparison["strict_pass"] is True
+
+
+def test_runner_marks_unknown_program_lineage_for_manual_review() -> None:
+    factory = session_factory()
+    run_id = add_run(factory, count=1)
+    generated = snapshot(ontology_sql=(
+        "CREATE TABLE temp_oa_a_base AS SELECT ID + 1 AS ID FROM USER_D; "
+        "CREATE TABLE temp_oa_a_result_table AS SELECT ID FROM temp_oa_a_base"
+    ))
+
+    EvaluationRunner(factory, adapter=FakeAdapter([generated])).run(run_id)
+
+    with factory() as session:
+        case = session.get(EvaluationRun, run_id).cases[0]
+        assert case.ontology_comparison["score"] is None
+        assert case.ontology_comparison["manual_review"] is True
+        assert case.ontology_structure["warnings"] == ["unresolved_program_lineage"]
+
+
+def test_current_agent_partition_difference_uses_partition_dimension() -> None:
+    factory = session_factory()
+    run_id = add_run(factory, count=1)
+    with factory() as session:
+        run = session.get(EvaluationRun, run_id)
+        run.cases[0].reference_sql = "SELECT ID FROM USER_D WHERE P_DAY='20260822'"
+        session.commit()
+
+    EvaluationRunner(factory, adapter=FakeAdapter([
+        snapshot(legacy_sql="", ontology_sql="SELECT ID FROM USER_D WHERE P_DAY='20260821'")
+    ])).run(run_id)
+
+    with factory() as session:
+        case = session.get(EvaluationRun, run_id).cases[0]
+        assert case.ontology_comparison["dimensions"]["partition"]["status"] == "mismatched"
+        assert case.ontology_comparison["dimensions"]["predicates"]["status"] == "not_applicable"

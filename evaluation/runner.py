@@ -17,7 +17,7 @@ from evaluation.contracts import (
     SqlStructure,
 )
 from evaluation.generation import AgentEvaluationAdapter
-from evaluation.sql_structure import extract_sql_structure
+from evaluation.sql_structure import extract_evaluable_structure
 from models import EvaluationCase, EvaluationRun
 
 
@@ -132,18 +132,18 @@ class EvaluationRunner:
         case: EvaluationCase,
         generated: GenerationSnapshot,
     ) -> None:
-        reference = extract_sql_structure(case.reference_sql, run.dialect)
+        reference = extract_evaluable_structure(case.reference_sql, run.dialect)
         legacy = (
-            extract_sql_structure(generated.legacy_sql, run.dialect)
+            extract_evaluable_structure(generated.legacy_sql, run.dialect)
             if generated.legacy_sql
             else _missing_structure("legacy_not_generated")
         )
         ontology = (
-            extract_sql_structure(generated.ontology_sql, run.dialect)
+            extract_evaluable_structure(generated.ontology_sql, run.dialect)
             if generated.ontology_sql
             else _missing_structure("ontology_not_generated")
         )
-        partition_fields = {
+        partition_fields = {"p_day", "p_mon"} | {
             str(item.get("partition_field", ""))
             for item in generated.temporal_decisions
             if item.get("partition_field")
