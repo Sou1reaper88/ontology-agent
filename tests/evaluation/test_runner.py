@@ -206,3 +206,34 @@ def test_agent_adapter_reads_single_canonical_result() -> None:
     assert result.temporal_decisions == [{"source": "default"}]
     assert calls[0]["history"] == []
     assert calls[0]["conversation_context"] is None
+
+
+def test_failed_delivery_keeps_draft_but_does_not_award_a_score() -> None:
+    factory = session_factory()
+    run_id = add_run(factory, count=1)
+    adapter = FakeAdapter([
+        snapshot(ontology_sql="SELECT ID FROM T", ontology_status="draft")
+    ])
+
+    EvaluationRunner(factory, adapter=adapter).run(run_id)
+
+    with factory() as session:
+        run = session.get(EvaluationRun, run_id)
+        assert run is not None
+        case = run.cases[0]
+        assert case.ontology_sql == "SELECT ID FROM T"
+        assert case.ontology_comparison["score"] is None
+        assert case.ontology_comparison["manual_review"] is True
+        assert "draft_not_deliverable" in case.diagnosis_codes["ontology"]
+
+
+def test_running_pending_historical_task_marks_current_engine() -> None:
+    factory = session_factory()
+    run_id = add_run(factory, count=1)
+
+    EvaluationRunner(factory, adapter=FakeAdapter([snapshot()])).run(run_id)
+
+    with factory() as session:
+        run = session.get(EvaluationRun, run_id)
+        assert run is not None
+        assert run.summary["engine"] == "conversation-v1"

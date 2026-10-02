@@ -178,6 +178,7 @@ async def import_evaluation(
         dialect="hive",
         system_time=system_time,
         total_cases=len(cases),
+        summary={"engine": "conversation-v1"},
     )
     run.cases = [
         EvaluationCase(

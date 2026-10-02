@@ -26,6 +26,7 @@ class _Generator(Protocol):
 
 
 _ONTOLOGY_FAILURE_CODES = {
+    "draft": "draft_not_deliverable",
     "no_match": "ontology_no_match",
     "ambiguous": "ontology_ambiguous",
     "unsupported": "ontology_unsupported",
@@ -73,6 +74,8 @@ class EvaluationRunner:
             run = session.get(EvaluationRun, run_id)
             if run is None or run.status == "completed":
                 return
+            if (run.summary or {}).get("engine") != "conversation-v1":
+                run.summary = {**(run.summary or {}), "engine": "conversation-v1"}
             run.status = "running"
             run.started_at = run.started_at or datetime.now(UTC)
             for case in run.cases:
@@ -152,7 +155,7 @@ class EvaluationRunner:
         )
         ontology_result = compare_sql_structures(
             reference,
-            ontology,
+            ontology if generated.ontology_status == "generated" else _missing_structure("not_deliverable"),
             partition_fields=partition_fields,
         )
         ontology_primary = _ONTOLOGY_FAILURE_CODES.get(generated.ontology_status or "")
@@ -210,6 +213,7 @@ class EvaluationRunner:
             for code in ((case.diagnosis_codes or {}).get("ontology", []))
         )
         return {
+            "engine": (run.summary or {}).get("engine", "conversation-v1"),
             "legacy": summarize_candidate_results(legacy).model_dump(mode="json"),
             "ontology": summarize_candidate_results(ontology).model_dump(mode="json"),
             "ontology_generation": _metric(generated_count, len(run.cases)).model_dump(

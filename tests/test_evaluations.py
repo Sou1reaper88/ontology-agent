@@ -91,6 +91,7 @@ def test_import_creates_private_pending_run_without_storing_workbook(api_client)
 
     assert payload["status"] == "pending"
     assert payload["total_cases"] == 1
+    assert payload["summary"]["engine"] == "conversation-v1"
     with factory() as session:
         run = session.get(EvaluationRun, payload["id"])
         assert run is not None and run.user_id == 1
